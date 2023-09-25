@@ -1,0 +1,86 @@
+[package]
+name = "bluepill_blinky"
+categories = ["embedded", "no-std"]
+authors = ["arrowcircle", "Emil Fresk <emil.fresk@gmail.com>"]
+description = "Example blinky for BluePill"
+keywords = ["arm", "cortex-m"]
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+edition = "2021"
+
+[patch.crates-io]
+#microchip-eeprom-25lcxx = { git = "https://github.com/serdzz/microchip-eeprom-25x.git" }
+microchip-eeprom-25lcxx = { path = "../../../microchip-eeprom-25x" }
+stm32l1xx-hal = { path = "../../../stm32l1xx-hal.serdz" }
+
+[dependencies]
+defmt = "0.3.5"
+defmt-rtt = "0.4.0"
+embedded-hal = "0.2.7"
+embedded-storage = "0.3.0"
+embedded-time = "0.12.1"
+stm32l1xx-hal = { version = "0.1.0", default-features = false, features = [
+        "rt",
+        "stm32l151",
+] }
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rtic = "1.1.4"
+rtic-sync = "1.0.1"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+rtt-target = { version = "0.3.1", features = ["cortex-m"] }
+systick-monotonic = "1.0.1"
+time = { version = "0.3.22", default-features = false, features = ["macros"] }
+microchip-eeprom-25lcxx = { version = "0.1.0", features = ["25lc1024"] }
+shared-bus-rtic = "0.2.2"
+nb = "1.1.0"
+bitflags = "2.3.3"
+bit_field = "~0.10"
+heapless = "0.7.16"
+lcd = "0.4.1"
+emballoc = "0.1.3"
+paste = "1.0.9"
+
+[features]
+default = []
+swd = []
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "bluepill_blinky"
+test = false
+bench = false
+
+
+# cargo build/run
+[profile.dev]
+codegen-units = 1
+debug = 2
+debug-assertions = true
+incremental = false
+opt-level = 0
+overflow-checks = true
+
+# cargo build/run --release
+[profile.release]
+codegen-units = 1
+debug = false
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 'z'
+overflow-checks = false
+
+# # do not optimize proc-macro crates = faster builds from scratch
+# [profile.dev.build-override]
+# codegen-units = 8
+# debug = false
+# debug-assertions = false
+# opt-level = 0
+# overflow-checks = false
+
+# [profile.release.build-override]
+# codegen-units = 8
+# debug = false
+# debug-assertions = false
+# opt-level = 0
+# overflow-checks = false
