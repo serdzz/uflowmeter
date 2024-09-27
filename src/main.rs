@@ -192,8 +192,11 @@ mod app {
         storage.read(0, &mut data).unwrap();
         defmt::info!("serial_no: {}", u32::from_le_bytes(data));
 
-        let _tdc1000  = TDC1000::new(bus.acquire(), tdc1000_cs, tdc1000_res, tdc1000_en);
+        let mut tdc1000 = TDC1000::new(bus.acquire(), tdc1000_cs, tdc1000_res, tdc1000_en);
         // let mut data = [0u8; 16];
+        let mut cfg = Config0::default();
+        cfg.set_num_tx(31);
+        tdc1000.set_config0(cfg).ok();
         // storage.read(254, &mut data).unwrap();
         // defmt::info!("read before: {:x}", data);
 
