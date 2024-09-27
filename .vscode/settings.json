@@ -1,7 +1,12 @@
 {
-    "rust-analyzer.cargo.target": "thumbv7m-none-eabi",
     "rust-analyzer.check.allTargets": false,
     "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "rust-analyzer.rustfmt.enableRangeFormatting": true,
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
     "rust-analyzer.showUnlinkedFileNotification": false,
     "cSpell.words": [
         "afrh",

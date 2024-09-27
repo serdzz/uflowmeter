@@ -148,9 +148,9 @@ mod app {
         } = hardware::Pins::new(p.GPIOA, p.GPIOB, p.GPIOC, p.GPIOD, p.GPIOH);
 
         let _ = osc_en;
-        let _ = tdc1000_en;
-        let _ = tdc1000_cs;
-        let _ = tdc1000_res;
+        //let _ = tdc1000_en;
+        //let _ = tdc1000_cs;
+        //let _ = tdc1000_res;
         let _ = tdc7200_en;
         let _ = tdc7200_cs;
         let _ = tdc7200_int;
@@ -192,6 +192,7 @@ mod app {
         storage.read(0, &mut data).unwrap();
         defmt::info!("serial_no: {}", u32::from_le_bytes(data));
 
+        let _tdc1000  = TDC1000::new(bus.acquire(), tdc1000_cs, tdc1000_res, tdc1000_en);
         // let mut data = [0u8; 16];
         // storage.read(254, &mut data).unwrap();
         // defmt::info!("read before: {:x}", data);
