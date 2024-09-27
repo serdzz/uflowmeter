@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::*;
 use core::fmt::Write;
 use core::marker::PhantomData;

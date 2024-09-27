@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
-//#![deny(warnings)]
+#![deny(warnings)]
+#![allow(unused_imports)]
 #![no_main]
 #![no_std]
 
@@ -40,7 +41,7 @@ use time::{
 };
 use ui::*;
 
-use crate::alloc::string::ToString;
+//use crate::alloc::string::ToString;
 
 type BusType = spi::Spi<hal::stm32::SPI2, (SpiSck, SpiMiso, SpiMosi)>;
 
@@ -59,7 +60,7 @@ mod app {
         power: hardware::Power,
         rtc: Rtc<hal::rtc::Lse>,
         lcd: Lcd,
-        storage: Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>,
+        //storage: Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>,
         app: App,
         ui: Viewport,
     }
@@ -241,13 +242,13 @@ mod app {
         let mut ui_timer = p.TIM3.timer(10.hz(), &mut rcc);
         ui_timer.listen();
 
-        let mut a =
-            alloc::collections::BTreeMap::<alloc::string::String, alloc::string::String>::new();
-        a.insert("key".to_string(), "ыаывафыва".to_string());
-        let val = a.get("key");
-        if let Some(s) = val {
-            defmt::info!("{}", s.as_str());
-        }
+        // let mut a =
+        //     alloc::collections::BTreeMap::<alloc::string::String, alloc::string::String>::new();
+        // a.insert("key".to_string(), "ыаывафыва".to_string());
+        // let val = a.get("key");
+        // if let Some(s) = val {
+        //     defmt::info!("{}", s.as_str());
+        // }
 
         let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
         app_request::spawn(AppRequest::DeepSleep).ok();
@@ -258,7 +259,7 @@ mod app {
                 power,
                 rtc,
                 lcd,
-                storage,
+                //storage,
                 app: App::default(),
                 ui: Viewport::default(),
             },
@@ -320,7 +321,7 @@ mod app {
                 ui.update(app);
                 ui.render(lcd);
             });
-            if let Some(_) = event {
+            if event.is_some() {
                 if let Some(h) = ctx.local.handle.take() {
                     h.cancel().ok();
                 }
