@@ -3,7 +3,6 @@ extern crate embedded_hal;
 
 use embedded_hal::blocking::spi::{Transfer, Write};
 use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::serial::Read;
 use modular_bitfield::prelude::*;
 
 #[allow(dead_code)]

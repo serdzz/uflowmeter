@@ -3,6 +3,7 @@ use crate::app::*;
 use crate::*;
 use bit_field::*;
 use core::marker::PhantomData;
+use core::str::FromStr;
 //use core::str::FromStr;
 use heapless::String;
 
@@ -22,7 +23,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Edit<A, LEN, X, Y> {
 
     pub fn new(val: &str) -> Self {
         Self {
-            state: String::from(val),
+            state: String::from_str(val).expect("REASON"),
             editable: false,
             blink_state: false,
             invalidate: true,
@@ -61,7 +62,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
 
     fn update(&mut self, state: &str) {
         if self.state != state {
-            self.state = String::from(state);
+            self.state = String::from_str(state).expect("RESON");
             self.invalidate = true;
         }
     }

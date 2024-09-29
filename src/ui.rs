@@ -2,8 +2,6 @@ use crate::Actions;
 use crate::App;
 use crate::CharacterDisplay;
 use crate::Edit;
-//use crate::EditBox;
-//use crate::Empty;
 use crate::Label;
 use crate::UiEvent;
 use crate::Widget;

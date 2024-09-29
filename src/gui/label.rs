@@ -1,7 +1,7 @@
 use crate::*;
 use core::marker::PhantomData;
+use core::str::FromStr;
 use heapless::String;
-
 #[derive(Debug, Clone)]
 pub struct Label<A, const LEN: usize, const X: u8, const Y: u8> {
     pub state: String<LEN>,
@@ -12,7 +12,7 @@ pub struct Label<A, const LEN: usize, const X: u8, const Y: u8> {
 impl<A, const LEN: usize, const X: u8, const Y: u8> Label<A, LEN, X, Y> {
     pub fn new(val: &str) -> Self {
         Self {
-            state: String::from(val),
+            state: String::from_str(val).expect("REASON"), //String::from(val),
             invalidate: true,
             phantom: PhantomData,
         }
@@ -34,7 +34,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Label<A,
 
     fn update(&mut self, state: &str) {
         if self.state != state {
-            self.state = String::from(state);
+            self.state = String::from_str(state).expect("REASON");
             self.invalidate = true;
         }
     }

@@ -196,6 +196,8 @@ mod app {
         // let mut data = [0u8; 16];
         let mut cfg = Config0::default();
         cfg.set_num_tx(31);
+        cfg.set_tx_freq_div(FrequencyDividerForTx::Div16);
+        let _bytes = cfg.into_bytes();
         tdc1000.set_config0(cfg).ok();
         // storage.read(254, &mut data).unwrap();
         // defmt::info!("read before: {:x}", data);

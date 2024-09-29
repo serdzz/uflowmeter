@@ -1,3 +1,5 @@
+use core::str::FromStr;
+
 use crate::ui::ViewportNode;
 
 use heapless::String;
@@ -39,7 +41,7 @@ impl App {
             text: "Hello world!!",
             num: 34,
             label_title: "ASASSAS",
-            label_value: String::from("123213"),
+            label_value: String::from_str("123213").expect("RESON"),
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
             active_widget: ViewportNode::Label,
         }

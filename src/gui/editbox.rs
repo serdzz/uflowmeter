@@ -2,6 +2,7 @@
 use crate::*;
 use core::fmt::Write;
 use core::marker::PhantomData;
+use core::str::FromStr;
 use heapless::String;
 
 #[derive(Debug, Clone)]
@@ -20,7 +21,7 @@ impl<A, B: 'static + core::fmt::Display, const LEN: usize, const X: u8, const Y:
 {
     pub fn new(boxs: &'static [B]) -> Self {
         Self {
-            state: String::from(""),
+            state: String::from_str("").expect("REASON"),
             boxs,
             cursor: 0,
             editable: false,
@@ -60,7 +61,7 @@ impl<A, B: 'static + core::fmt::Display, const LEN: usize, const X: u8, const Y:
     }
 
     pub fn selected_str(&self) -> String<LEN> {
-        let mut sel_str = String::<LEN>::from("");
+        let mut sel_str = String::from_str("").expect("REASON");
         write!(sel_str, "{}", self.selected()).unwrap();
         sel_str
     }
