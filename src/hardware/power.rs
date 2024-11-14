@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::gpio_power::*;
 use crate::app::*;
 use defmt_rtt as _;
@@ -46,13 +47,14 @@ impl Power {
         true
     }
 
-    pub fn enter_sleep(&mut self, f: impl FnOnce()) {
+    pub fn enter_sleep(&mut self, _f: impl FnOnce()) {
         if !self.is_active() || self.active_mode == 0_u64.secs::<1, 1000>() {
             self.sleep = true;
-            f();
+            defmt::info!("-- Enter sleep mode --");
             defmt::info!("-- Enter sleep mode --");
             #[cfg(not(feature = "swd"))]
             {
+                f();
                 self.pwr.cr.modify(|_, w| {
                     w.fwu()
                         .set_bit()
@@ -70,8 +72,8 @@ impl Power {
                 while self.pwr.csr.read().wuf().bit_is_set() {}
                 self.scb.set_sleepdeep();
                 self.gpio_power.down();
-                rtic::export::wfi();
             }
+            rtic::export::wfi();
         }
     }
 

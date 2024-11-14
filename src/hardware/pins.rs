@@ -1,4 +1,6 @@
+use super::*;
 use crate::hal::gpio::GpioExt;
+use crate::BusType;
 use stm32l1xx_hal::gpio::gpioa::*;
 use stm32l1xx_hal::gpio::gpiob::*;
 use stm32l1xx_hal::gpio::gpioc::*;
@@ -53,6 +55,7 @@ pub type PhotoR = PC4<Analog>;
 
 pub type ExtIn = PC7<Input<PullUp>>;
 pub type ExtOut = PC8<Output<PushPull>>;
+// pub type MyStorage = Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>;
 
 pub struct Pins {
     // lcd pins

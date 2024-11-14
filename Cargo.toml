@@ -42,7 +42,9 @@ heapless = "0.8.0"
 lcd = "0.4.1"
 emballoc = "0.3.0"
 paste = "1.0.9"
+crc16 = "0.4.0"
 modular-bitfield = "0.11.2"
+compile-time = "0.2.0"
 
 [features]
 default = []
@@ -67,7 +69,7 @@ overflow-checks = true
 # cargo build/run --release
 [profile.release]
 codegen-units = 1
-debug = false
+debug = 2
 debug-assertions = false
 incremental = false
 lto = 'fat'

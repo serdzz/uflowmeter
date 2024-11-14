@@ -1,8 +1,7 @@
+use crate::ui::ViewportNode;
+use alloc::string::String;
 use core::str::FromStr;
 
-use crate::ui::ViewportNode;
-
-use heapless::String;
 use time::{
     macros::{date, time},
     PrimitiveDateTime,
@@ -30,7 +29,7 @@ pub struct App {
     pub text: &'static str,
     pub num: u8,
     pub label_title: &'static str,
-    pub label_value: String<16>,
+    pub label_value: String,
     pub datetime: PrimitiveDateTime,
     pub active_widget: ViewportNode,
 }
@@ -38,10 +37,10 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            text: "Hello world!!",
+            text: "Hello w\0rld!!",
             num: 34,
-            label_title: "ASASSAS",
-            label_value: String::from_str("123213").expect("RESON"),
+            label_title: "Uptime",
+            label_value: String::from("123456"),
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
             active_widget: ViewportNode::Label,
         }

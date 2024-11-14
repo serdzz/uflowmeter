@@ -28,7 +28,7 @@
                                 "showTimestamps": true // Include host-side timestamps for every line of data transferred from the target RTT output
                             }
                         ],                  
-                        "programBinary": "target\\thumbv7m-none-eabi\\debug\\bluepill_blinky",
+                        "programBinary": "target\\thumbv7m-none-eabi\\debug\\uflowmeter",
                         "svdFile": ".\\STM32L151.svd"
                     }
                 ],

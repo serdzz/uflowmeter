@@ -10,6 +10,7 @@ extern crate stm32l1xx_hal as hal;
 mod apps;
 mod gui;
 mod hardware;
+mod options;
 mod ui;
 
 use apps::*;
@@ -24,6 +25,7 @@ use hal::mco::*;
 use hal::prelude::*;
 use hal::rcc::Config;
 use hal::rtc::{Event, Rtc};
+//se hal::rtc::RestoredOrNewRtc::{New, Restored};
 use hal::serial;
 use hal::serial::SerialExt;
 use hal::spi;
@@ -31,19 +33,21 @@ use hal::timer::Timer;
 use hardware::*;
 use microchip_eeprom_25lcxx::*;
 use nb::block;
+use options::*;
 use panic_probe as _;
 use rtic::app;
 use shared_bus_rtic::SharedBus;
 use systick_monotonic::{fugit::ExtU64, Systick};
+use time::Duration;
 use time::{
     macros::{date, time},
     PrimitiveDateTime,
 };
 use ui::*;
-
 //use crate::alloc::string::ToString;
 
 type BusType = spi::Spi<hal::stm32::SPI2, (SpiSck, SpiMiso, SpiMosi)>;
+type MyStorage = Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>;
 
 #[global_allocator]
 static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
@@ -53,7 +57,7 @@ mod app {
     use super::*;
     use hal::exti::TriggerEdge;
 
-    defmt::timestamp!("{=u64:us}", { monotonics::now().ticks() });
+    defmt::timestamp!("{=u64:tms}", { monotonics::now().ticks() });
 
     #[shared]
     struct Shared {
@@ -98,6 +102,8 @@ mod app {
         ));
         defmt::info!("rcc freeze");
         rcc.enable_power();
+        //let mut pwr = p.PWR;
+        //let mut backup_domain = rcc.bkp.constrain(p.BKP, &mut pwr);
 
         defmt::info!("enable_power");
         let mut rtc = Rtc::new(p.RTC, &mut p.PWR);
@@ -188,17 +194,25 @@ mod app {
 
         let mut storage = microchip_eeprom_25lcxx::Storage::new(eeprom25x);
 
-        let mut data = [0u8; 4];
-        storage.read(0, &mut data).unwrap();
-        defmt::info!("serial_no: {}", u32::from_le_bytes(data));
+        let mut opt = Options::load(&mut storage).unwrap();
+        let reg = [
+            0x31_u8, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0, 0, 0, 0, 0, 0,
+        ];
+
+        opt.set_tdc7200_regs(u128::from_le_bytes(reg));
+        // opt.set_k11(k11 as u3u128::from_be_bytes(reg));2);
+        // defmt::info!("k11: {:x}", k11);
+        defmt::info!("opt: {:x}", opt.into_bytes());
+        //opt.save(&mut storage);
 
         let mut tdc1000 = TDC1000::new(bus.acquire(), tdc1000_cs, tdc1000_res, tdc1000_en);
         // let mut data = [0u8; 16];
         let mut cfg = Config0::default();
         cfg.set_num_tx(31);
         cfg.set_tx_freq_div(FrequencyDividerForTx::Div16);
-        let _bytes = cfg.into_bytes();
+        let bytes = cfg.into_bytes();
         tdc1000.set_config0(cfg).ok();
+        defmt::info!("tdc1000_regs: {:x}", bytes);
         // storage.read(254, &mut data).unwrap();
         // defmt::info!("read before: {:x}", data);
 
@@ -223,12 +237,11 @@ mod app {
         writeln!(serial, "Hello world\r").unwrap();
         block!(serial.flush()).ok();
 
-        rtc.set_datetime(&PrimitiveDateTime::new(
-            date!(2023 - 08 - 03),
-            time!(23:59:50),
-        ))
-        .unwrap();
-
+        defmt::info!("{}", compile_time::datetime_str!());
+        defmt::info!("{}", compile_time::rustc_version_str!());
+        let datetime = compile_time::datetime!().saturating_add(Duration::HOUR * 2);
+        rtc.set_datetime(&PrimitiveDateTime::new(datetime.date(), datetime.time()))
+            .unwrap();
         defmt::info!("rtc init");
 
         rtc.enable_wakeup(5);
@@ -392,6 +405,7 @@ mod app {
                 defmt::info!("DeepSleep");
                 (power, lcd).lock(|power, lcd| {
                     power.enter_sleep(|| {
+                        #[cfg(not(feature = "swd"))]
                         lcd.led_off();
                         lcd.off();
                     });
@@ -400,3 +414,14 @@ mod app {
         }
     }
 }
+
+// fn crc(data: &mut [u8], seed: u16) -> u16 {
+//     let mut crc = seed;
+//     for i in data {
+//         let c = *i as u16;
+//         let mut x = (crc >> 8) ^ c;
+//         x ^= x >> 4;
+//         crc = (crc << 8) ^ (x << 12) ^ (x << 5) ^ (x);
+//     }
+//     crc
+// }
