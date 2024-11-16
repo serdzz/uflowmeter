@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 #![deny(warnings)]
+#![allow(dead_code)]
 #![allow(unused_imports)]
 #![no_main]
 #![no_std]
@@ -10,6 +11,7 @@ extern crate stm32l1xx_hal as hal;
 mod apps;
 mod gui;
 mod hardware;
+mod history;
 mod options;
 mod ui;
 
@@ -31,6 +33,7 @@ use hal::serial::SerialExt;
 use hal::spi;
 use hal::timer::Timer;
 use hardware::*;
+use history::*;
 use microchip_eeprom_25lcxx::*;
 use nb::block;
 use options::*;
@@ -48,7 +51,13 @@ use ui::*;
 
 type BusType = spi::Spi<hal::stm32::SPI2, (SpiSck, SpiMiso, SpiMosi)>;
 type MyStorage = Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>;
-
+type HourHistory = RingStorage<0, 2160, 3600>;
+type DayHistory = RingStorage<{ HourHistory::SIZE_ON_FLASH }, { 31 * 12 * 3 }, { 3600 * 24 }>;
+type MonthHistory = RingStorage<
+    { HourHistory::SIZE_ON_FLASH + DayHistory::SIZE_ON_FLASH },
+    { 10 * 12 },
+    { 3600 * 24 * 31 },
+>;
 #[global_allocator]
 static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
 
@@ -222,6 +231,13 @@ mod app {
         // let mut data = [0u8; 256];
         // storage.read(0, &mut data).unwrap();
         // defmt::info!("read after: {:x}", data);
+        let mut asd = HourHistory::new(&mut storage).unwrap();
+        defmt::info!(
+            "read data.size: {:?} {:?} {:?}",
+            asd.data.size(),
+            asd.first_stored_timestamp(),
+            asd.last_stored_timestamp()
+        );
 
         rs_power_en.set_low().unwrap();
 
@@ -240,6 +256,8 @@ mod app {
         defmt::info!("{}", compile_time::datetime_str!());
         defmt::info!("{}", compile_time::rustc_version_str!());
         let datetime = compile_time::datetime!().saturating_add(Duration::HOUR * 2);
+        let asd = datetime.unix_timestamp();
+        defmt::info!("unix_timestamp {}", asd);
         rtc.set_datetime(&PrimitiveDateTime::new(datetime.date(), datetime.time()))
             .unwrap();
         defmt::info!("rtc init");
