@@ -6,7 +6,8 @@ rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-Tdefmt.x"]
 target = "thumbv7m-none-eabi"
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-rs run --chip STM32L151RC --probe  0483:3748"
+runner = "probe-rs run --chip STM32L151RC"
+# --probe  0483:3748"
 #STM32L151RC
 
 [env]

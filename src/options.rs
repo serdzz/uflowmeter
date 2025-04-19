@@ -57,7 +57,6 @@ impl Options {
     pub fn load(storage: &mut MyStorage) -> Result<Self, Error> {
         assert!(core::mem::size_of::<Options>() < Self::SIZE);
         let mut data = [0; Self::SIZE];
-
         storage
             .read(Self::OFFSET_PRIMARY, &mut data)
             .map_err(|_e| Error::Storage)?;
