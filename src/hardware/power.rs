@@ -1,3 +1,4 @@
+#![allow(warnings)]
 #![allow(dead_code)]
 use super::gpio_power::*;
 use crate::app::*;
@@ -47,7 +48,7 @@ impl Power {
         true
     }
 
-    pub fn enter_sleep(&mut self, _f: impl FnOnce()) {
+    pub fn enter_sleep(&mut self, f: impl FnOnce()) {
         if !self.is_active() || self.active_mode == 0_u64.secs::<1, 1000>() {
             self.sleep = true;
             defmt::info!("-- Enter sleep mode --");
