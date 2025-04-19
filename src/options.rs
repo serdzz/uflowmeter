@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use core::convert::Infallible;
+
 use super::*;
 use embedded_storage::Storage;
 use modular_bitfield::prelude::*;
@@ -43,6 +45,8 @@ pub enum Error {
     Storage,
     WrongCrc,
     TooMuchData,
+    SpiError(spi::Error),
+    OtherError(Infallible),
 }
 
 impl Options {
@@ -53,9 +57,10 @@ impl Options {
     pub fn load(storage: &mut MyStorage) -> Result<Self, Error> {
         assert!(core::mem::size_of::<Options>() < Self::SIZE);
         let mut data = [0; Self::SIZE];
-        if storage.read(Self::OFFSET_PRIMARY, &mut data).is_err() {
-            return Err(Error::Storage);
-        }
+
+        storage
+            .read(Self::OFFSET_PRIMARY, &mut data)
+            .map_err(|_e| Error::Storage)?;
         defmt::info!("data: {:x}", data);
         let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
         let mut bytes = [0u8; core::mem::size_of::<Options>()];
@@ -63,9 +68,9 @@ impl Options {
         let mut opt = Self { bytes };
         if crc != opt.crc() {
             defmt::warn!("Wrong CRC on primary page {:x} != {:x}", crc, opt.crc());
-            if storage.read(Self::OFFSET_SECONDARY, &mut data).is_err() {
-                return Err(Error::Storage);
-            }
+            storage
+                .read(Self::OFFSET_SECONDARY, &mut data)
+                .map_err(|_e| Error::Storage)?;
             let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
             let mut bytes = [0u8; core::mem::size_of::<Options>()];
             bytes.copy_from_slice(&data[0..core::mem::size_of::<Options>()]);
