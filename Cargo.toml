@@ -48,7 +48,7 @@ compile-time = "0.2.0"
 
 [features]
 default = []
-swd = []
+low_power = []
 
 # this lets you use `cargo fix`!
 [[bin]]

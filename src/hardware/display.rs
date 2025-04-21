@@ -23,6 +23,7 @@ impl Lcd {
     pub fn init(&mut self) -> bool {
         let ret = self.not_active;
         if self.not_active {
+            defmt::trace!("lcd init");
             self.not_active = false;
             self.led.set_high().unwrap();
             self.on.set_low().unwrap();
@@ -41,6 +42,7 @@ impl Lcd {
     }
 
     pub fn off(&mut self) {
+        defmt::trace!("lcd off");
         self.on.set_high().unwrap();
         self.not_active = true;
     }

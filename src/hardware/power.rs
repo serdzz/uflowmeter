@@ -36,6 +36,7 @@ impl Power {
 
     pub fn active(&mut self) {
         self.active_mode = monotonics::now().duration_since_epoch();
+        self.sleep = false;
     }
 
     pub fn is_active(&mut self) -> bool {
@@ -48,14 +49,18 @@ impl Power {
         true
     }
 
+    pub fn is_sleep(&self) -> bool {
+        self.sleep
+    }
+
     pub fn enter_sleep(&mut self, f: impl FnOnce()) {
         if !self.is_active() || self.active_mode == 0_u64.secs::<1, 1000>() {
             self.sleep = true;
+            self.active_mode = 0_u64.secs::<1, 1000>();
             defmt::info!("-- Enter sleep mode --");
-            defmt::info!("-- Enter sleep mode --");
-            #[cfg(not(feature = "swd"))]
+            f();
+            #[cfg(feature = "low_power")]
             {
-                f();
                 self.pwr.cr.modify(|_, w| {
                     w.fwu()
                         .set_bit()
@@ -71,8 +76,8 @@ impl Power {
                         .set_bit()
                 });
                 while self.pwr.csr.read().wuf().bit_is_set() {}
-                self.scb.set_sleepdeep();
                 self.gpio_power.down();
+                self.scb.set_sleepdeep();
             }
             rtic::export::wfi();
         }
@@ -83,7 +88,7 @@ impl Power {
         if self.sleep {
             self.sleep = false;
             defmt::info!("-- Exit sleep mode --");
-            #[cfg(not(feature = "swd"))]
+            #[cfg(feature = "low_power")]
             {
                 self.scb.clear_sleepdeep();
                 self.gpio_power.up();

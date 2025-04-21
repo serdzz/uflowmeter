@@ -352,7 +352,9 @@ mod app {
                 if let Some(event) = event {
                     app.handle_event(ui.event(event)).map(app_request::spawn);
                 }
+
                 if lcd.init() {
+                    defmt::info!("lcd init");
                     ui.invalidate();
                 }
                 ui.update(app);
@@ -423,7 +425,7 @@ mod app {
                 defmt::info!("DeepSleep");
                 (power, lcd).lock(|power, lcd| {
                     power.enter_sleep(|| {
-                        #[cfg(not(feature = "swd"))]
+                        // #[cfg(not(feature = "swd"))]
                         lcd.led_off();
                         lcd.off();
                     });

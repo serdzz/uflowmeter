@@ -49,6 +49,16 @@ pub enum Error {
     OtherError(Infallible),
 }
 
+impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>> for Error {
+    fn from(err: microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>) -> Self {
+        match err {
+            microchip_eeprom_25lcxx::Error::SpiError(e) => Error::SpiError(e),
+            microchip_eeprom_25lcxx::Error::PinError(_) => Error::Storage,
+            _ => Error::Storage,
+        }
+    }
+}
+
 impl Options {
     const SIZE: usize = 1024;
     const OFFSET_PRIMARY: u32 = 0;
@@ -57,9 +67,7 @@ impl Options {
     pub fn load(storage: &mut MyStorage) -> Result<Self, Error> {
         assert!(core::mem::size_of::<Options>() < Self::SIZE);
         let mut data = [0; Self::SIZE];
-        storage
-            .read(Self::OFFSET_PRIMARY, &mut data)
-            .map_err(|_e| Error::Storage)?;
+        storage.read(Self::OFFSET_PRIMARY, &mut data)?;
         defmt::info!("data: {:x}", data);
         let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
         let mut bytes = [0u8; core::mem::size_of::<Options>()];
@@ -67,9 +75,7 @@ impl Options {
         let mut opt = Self { bytes };
         if crc != opt.crc() {
             defmt::warn!("Wrong CRC on primary page {:x} != {:x}", crc, opt.crc());
-            storage
-                .read(Self::OFFSET_SECONDARY, &mut data)
-                .map_err(|_e| Error::Storage)?;
+            storage.read(Self::OFFSET_SECONDARY, &mut data)?;
             let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
             let mut bytes = [0u8; core::mem::size_of::<Options>()];
             bytes.copy_from_slice(&data[0..core::mem::size_of::<Options>()]);
@@ -82,7 +88,7 @@ impl Options {
         Ok(opt)
     }
 
-    pub fn save(&mut self, storage: &mut MyStorage) {
+    pub fn save(&mut self, storage: &mut MyStorage) -> Result<(), Error> {
         assert!(core::mem::size_of::<Options>() < Self::SIZE);
         let mut data = [0_u8; Self::SIZE];
         let src = self.into_bytes();
@@ -91,8 +97,9 @@ impl Options {
         self.set_crc(crc);
         let src = self.into_bytes();
         data[..src.len()].copy_from_slice(&src);
-        storage.write(Self::OFFSET_PRIMARY, &data).unwrap();
-        storage.write(Self::OFFSET_SECONDARY, &data).unwrap();
+        storage.write(Self::OFFSET_PRIMARY, &data)?;
+        storage.write(Self::OFFSET_SECONDARY, &data)?;
         defmt::info!("data: {:x}", data);
+        Ok(())
     }
 }

@@ -128,7 +128,7 @@ impl Pins {
         let port_d = gpiod.split();
         let port_h = gpioh.split();
 
-        #[cfg(not(feature = "swd"))]
+        #[cfg(feature = "low_power")]
         {
             let _swd_io = port_a.pa13.into_analog();
             let _swd_clk = port_a.pa14.into_analog();
