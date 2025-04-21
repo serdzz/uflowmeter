@@ -44,9 +44,7 @@ pub struct Options {
 pub enum Error {
     Storage,
     WrongCrc,
-    TooMuchData,
     SpiError(spi::Error),
-    OtherError(Infallible),
 }
 
 impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>> for Error {
