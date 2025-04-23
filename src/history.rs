@@ -72,14 +72,14 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         offset += size_of::<u32>() * index;
         offset as u32
     }
-    fn find(&mut self, _storage: &mut MyStorage, _time: u32) -> Result<i32> {
+    fn find(&mut self, _storage: &mut MyStorage, _time: u32) -> Result<Option<i32>> {
         Err(Error::Unimplented)
     }
-    fn last_value(&mut self, storage: &mut MyStorage) -> i32 {
+    fn last_value(&mut self, storage: &mut MyStorage) -> Result<Option<i32>> {
         if self.data.size() > 0 {
-            return self.find(storage, self.data.time_of_last()).unwrap();
+            return Ok(self.find(storage, self.data.time_of_last()).unwrap());
         }
-        0
+        Ok(None)
     }
     fn advance_offset_by_one(&mut self) {
         let offset_of_last = self.data.offset_of_last() + 1;

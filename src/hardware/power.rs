@@ -12,11 +12,11 @@ pub struct Power {
     pwr: hal::stm32::PWR,
     scb: hal::stm32::SCB,
     sleep: bool,
-    active_mode: Duration<u64, 1, 1000>,
+    active_mode: u64,
 }
 
 impl Power {
-    pub const IDLE_TIMEOUT: u64 = 15_u64;
+    pub const IDLE_TIMEOUT: u64 = 15_000u64;
 
     pub fn new(
         gpio_power: GpioPower,
@@ -30,22 +30,24 @@ impl Power {
             pwr,
             scb,
             sleep: false,
-            active_mode: monotonics::now().duration_since_epoch(),
+            active_mode: 0_u64,
         }
     }
 
     pub fn active(&mut self) {
-        self.active_mode = monotonics::now().duration_since_epoch();
+        self.active_mode = monotonics::now().ticks();
         self.sleep = false;
+
+        defmt::trace!("active ");
     }
 
     pub fn is_active(&mut self) -> bool {
-        if monotonics::now().duration_since_epoch() - self.active_mode
-            >= Self::IDLE_TIMEOUT.secs::<1, 1000>()
-            && !self.sleep
-        {
+        if monotonics::now().ticks() - self.active_mode >= Self::IDLE_TIMEOUT {
+            //&& !self.sleep {
+            //     defmt::trace!("is_active -- faslse");
             return false;
         }
+        //   defmt::trace!("is_active -- true");
         true
     }
 
@@ -54,9 +56,9 @@ impl Power {
     }
 
     pub fn enter_sleep(&mut self, f: impl FnOnce()) {
-        if !self.is_active() || self.active_mode == 0_u64.secs::<1, 1000>() {
+        if !self.is_active() || self.active_mode == 0_u64 {
             self.sleep = true;
-            self.active_mode = 0_u64.secs::<1, 1000>();
+            self.active_mode = 0_u64;
             defmt::info!("-- Enter sleep mode --");
             f();
             #[cfg(feature = "low_power")]
