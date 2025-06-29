@@ -25,6 +25,7 @@ pub enum UiEvent {
 pub trait CharacterDisplay: core::fmt::Write {
     fn set_position(&mut self, col: u8, row: u8);
     fn clear(&mut self);
+    fn reset_custom_chars(&mut self);
     fn finish_line(&mut self, width: usize, len: usize) {
         let remaining = width - len;
         for _ in 0..remaining {
@@ -39,5 +40,5 @@ pub trait Widget<S, A> {
     fn render(&mut self, display: &mut impl CharacterDisplay);
     fn event(&mut self, _e: UiEvent) -> Option<A> {
         None
-        }
+    }
 }

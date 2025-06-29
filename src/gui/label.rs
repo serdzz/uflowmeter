@@ -47,6 +47,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Label<A,
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
         if self.invalidate {
+            display.reset_custom_chars();
             display.set_position(X, Y);
             //defmt::info!("display {}", self.state.as_str());
             write!(display, "{}", self.state).unwrap();

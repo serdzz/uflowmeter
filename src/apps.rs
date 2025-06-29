@@ -54,7 +54,7 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            text: "Hello w\0rld!!",
+            text: "Привет",
             num: 34,
             label_title: "Uptime",
             label_value: String::from("123456"),

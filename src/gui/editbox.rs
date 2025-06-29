@@ -126,6 +126,7 @@ impl<A, B: 'static + core::fmt::Display, const LEN: usize, const X: u8, const Y:
                 display.finish_line(LEN, self.state.len() + X as usize);
             }
         } else if self.invalidate {
+            display.reset_custom_chars();
             display.set_position(X, Y);
             write!(display, "{}", self.state).unwrap();
             display.finish_line(LEN, self.state.len() + X as usize);

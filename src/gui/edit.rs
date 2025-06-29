@@ -96,6 +96,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
             }
         }
         if self.invalidate {
+            display.reset_custom_chars();
             display.set_position(X, Y);
             self.invalidate = false;
             let mut state = self.state.clone();
