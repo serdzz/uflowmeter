@@ -27,6 +27,8 @@ use hal::mco::*;
 use hal::prelude::*;
 use hal::rcc::Config;
 use hal::rtc::{Event, Rtc};
+use rand_core::{RngCore, SeedableRng};
+use rand_pcg::Pcg32;
 //se hal::rtc::RestoredOrNewRtc::{New, Restored};
 use hal::serial;
 use hal::serial::SerialExt;
@@ -73,7 +75,10 @@ mod app {
         power: hardware::Power,
         rtc: Rtc<hal::rtc::Lse>,
         lcd: Lcd,
-        //storage: Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>,
+        hour_history: HourHistory,
+        day_history: DayHistory,
+        month_history: MonthHistory,
+        storage: MyStorage,
         app: App,
         ui: Viewport,
     }
@@ -296,7 +301,10 @@ mod app {
                 power,
                 rtc,
                 lcd,
-                //storage,
+                hour_history: HourHistory::new(&mut storage).unwrap(),
+                day_history: DayHistory::new(&mut storage).unwrap(),
+                month_history: MonthHistory::new(&mut storage).unwrap(),
+                storage,
                 app: App::default(),
                 ui: Viewport::default(),
             },
@@ -402,16 +410,79 @@ mod app {
         }
     }
 
-    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc])]
+    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc,app , hour_history, day_history, month_history, storage])]
     fn app_request(ctx: app_request::Context, req: AppRequest) {
         let app_request::SharedResources {
             power,
             mut lcd,
             mut rtc,
+            mut app,
+            hour_history,
+            day_history,
+            month_history,
+            mut storage,
         } = ctx.shared;
         match req {
             AppRequest::Process => {
                 defmt::info!("Process");
+                let datetime = rtc.lock(|rtc| {
+                    return rtc.get_datetime();
+                });
+                let (hour_flow, day_flow, month_flow) = app.lock(|app| {
+                    let mut rng = Pcg32::seed_from_u64(monotonics::now().ticks());
+                    app.flow = rng.next_u32() as f32 / 1_000_000.0;
+                    defmt::info!("flow: {}", app.flow);
+                    app.hour_flow += app.flow;
+                    app.day_flow += app.flow;
+                    app.month_flow += app.flow;
+                    (app.hour_flow, app.day_flow, app.month_flow)
+                });
+                if datetime.time().second() < 5 {
+                    let timestamp = datetime.as_utc().unix_timestamp();
+                    if datetime.time().minute() == 0 {
+                        if let Err(_e) =
+                            (hour_history, &mut storage).lock(|hour_history, storage| {
+                                hour_history.add(storage, hour_flow as i32, timestamp as u32)
+                            })
+                        {
+                            defmt::error!("Failed to log hour flow:");
+                        } else {
+                            defmt::info!("Hour flow logged: {} at {}", hour_flow, timestamp);
+                        }
+
+                        if datetime.time().hour() == 0 {
+                            if let Err(_e) =
+                                (day_history, &mut storage).lock(|day_history, storage| {
+                                    day_history.add(storage, day_flow as i32, timestamp as u32)
+                                })
+                            {
+                                defmt::error!("Failed to log day flow:");
+                            } else {
+                                defmt::info!("Day flow logged: {} at {}", day_flow, timestamp);
+                            }
+
+                            if datetime.date().day() == 1 {
+                                if let Err(_e) =
+                                    (month_history, &mut storage).lock(|month_history, storage| {
+                                        month_history.add(
+                                            storage,
+                                            month_flow as i32,
+                                            timestamp as u32,
+                                        )
+                                    })
+                                {
+                                    defmt::error!("Failed to log month flow:");
+                                } else {
+                                    defmt::info!(
+                                        "Month flow logged: {} at {}",
+                                        month_flow,
+                                        timestamp
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 app_request::spawn_after(25_u64.millis(), AppRequest::DeepSleep).ok();
             }
             AppRequest::LcdLed(on) => {
@@ -430,6 +501,38 @@ mod app {
                         lcd.off();
                     });
                 });
+            }
+            AppRequest::SetHistory(history_type, timestamp) => {
+                defmt::info!("SetHistory");
+                match history_type {
+                    HistoryType::Hour => {
+                        (app, hour_history, storage).lock(|app, hour_history, storage| {
+                            if let Ok(Some(flow)) = hour_history.find(storage, timestamp as u32) {
+                                app.history_state.flow = Some(flow as f32);
+                            } else {
+                                app.history_state.flow = None;
+                            }
+                        });
+                    }
+                    HistoryType::Day => {
+                        (app, day_history, storage).lock(|app, day_history, storage| {
+                            if let Ok(Some(flow)) = day_history.find(storage, timestamp as u32) {
+                                app.history_state.flow = Some(flow as f32);
+                            } else {
+                                app.history_state.flow = None;
+                            }
+                        });
+                    }
+                    HistoryType::Month => {
+                        (app, month_history, storage).lock(|app, month_history, storage| {
+                            if let Ok(Some(flow)) = month_history.find(storage, timestamp as u32) {
+                                app.history_state.flow = Some(flow as f32);
+                            } else {
+                                app.history_state.flow = None;
+                            }
+                        });
+                    }
+                };
             }
         }
     }

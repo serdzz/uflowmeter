@@ -39,5 +39,5 @@ pub trait Widget<S, A> {
     fn render(&mut self, display: &mut impl CharacterDisplay);
     fn event(&mut self, _e: UiEvent) -> Option<A> {
         None
-    }
+        }
 }
