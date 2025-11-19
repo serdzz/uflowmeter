@@ -1,0 +1,14 @@
+/Users/sergejlepin/work/sandbox/uflowmeter/target/release/deps/thiserror-dcc6d4768e7b469a.d: /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /Users/sergejlepin/work/sandbox/uflowmeter/target/release/build/thiserror-3efff2437309e262/out/private.rs
+
+/Users/sergejlepin/work/sandbox/uflowmeter/target/release/deps/libthiserror-dcc6d4768e7b469a.rlib: /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /Users/sergejlepin/work/sandbox/uflowmeter/target/release/build/thiserror-3efff2437309e262/out/private.rs
+
+/Users/sergejlepin/work/sandbox/uflowmeter/target/release/deps/libthiserror-dcc6d4768e7b469a.rmeta: /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /Users/sergejlepin/work/sandbox/uflowmeter/target/release/build/thiserror-3efff2437309e262/out/private.rs
+
+/Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs:
+/Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs:
+/Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs:
+/Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs:
+/Users/sergejlepin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs:
+/Users/sergejlepin/work/sandbox/uflowmeter/target/release/build/thiserror-3efff2437309e262/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/sergejlepin/work/sandbox/uflowmeter/target/release/build/thiserror-3efff2437309e262/out

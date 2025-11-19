@@ -1,0 +1,8 @@
+# NOTE: This file overrides config.toml settings
+# It's used to run tests with host target instead of embedded target
+#
+# To use this:
+# 1. When you want to run tests: rename config.toml -> config.toml.embedded && rename config.local.toml -> config.toml
+# 2. When you want to build embedded binary: rename config.toml -> config.local.toml && rename config.toml.embedded -> config.toml
+#
+# Or just use: make test  (for tests) or make build (for embedded binary)

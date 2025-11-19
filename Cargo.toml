@@ -43,7 +43,7 @@ lcd = "0.4.1"
 emballoc = "0.1.0"
 paste = "1.0.9"
 crc16 = "0.4.0"
-modular-bitfield = "0.11.2"
+modular-bitfield = "0.13.0"
 compile-time = "0.2.0"
 volatile-register = "0.2.0"
 rand_core = "0.9.3"
@@ -54,10 +54,19 @@ default = []
 low_power = []
 
 # this lets you use `cargo fix`!
+[lib]
+name = "uflowmeter"
+path = "src/lib.rs"
+test = true
+
 [[bin]]
 name = "uflowmeter"
+path = "src/main.rs"
 test = false
 bench = false
+
+[package.metadata.cargo-xbuild]
+target = "thumbv7m-none-eabi"
 
 
 # cargo build/run

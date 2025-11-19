@@ -210,7 +210,8 @@ register_map!(
     // ClockRate: 0x09, RW,
 );
 
-#[derive(BitfieldSpecifier, Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Specifier, Debug, Clone, Copy, Eq, PartialEq)]
+#[bits = 3]
 pub enum FrequencyDividerForTx {
     Div2,
     Div4,
