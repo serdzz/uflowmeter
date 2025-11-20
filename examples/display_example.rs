@@ -20,19 +20,15 @@
 #![no_std]
 #![no_main]
 
-use panic_probe as _;
 use defmt_rtt as _;
+use panic_probe as _;
 
 use cortex_m_rt::entry;
-use stm32l1xx_hal::{
-    prelude::*,
-    rcc::Config,
-    stm32,
-};
+use stm32l1xx_hal::{prelude::*, rcc::Config, stm32};
 
+use core::fmt::Write;
 use uflowmeter::hardware::display::Lcd;
 use uflowmeter::hardware::hd44780::LcdHardware;
-use core::fmt::Write;
 
 #[entry]
 fn main() -> ! {
@@ -40,22 +36,16 @@ fn main() -> ! {
 
     // Get device peripherals
     let dp = stm32::Peripherals::take().unwrap();
-    
+
     // Configure clocks
-    let mut rcc = dp.RCC.freeze(Config::pll(
+    let _rcc = dp.RCC.freeze(Config::pll(
         stm32l1xx_hal::rcc::PLLSource::HSE(8.mhz()),
         stm32l1xx_hal::rcc::PLLMul::Mul6,
         stm32l1xx_hal::rcc::PLLDiv::Div3,
     ));
 
     // Initialize pins
-    let pins = uflowmeter::hardware::Pins::new(
-        dp.GPIOA,
-        dp.GPIOB,
-        dp.GPIOC,
-        dp.GPIOD,
-        dp.GPIOH,
-    );
+    let pins = uflowmeter::hardware::Pins::new(dp.GPIOA, dp.GPIOB, dp.GPIOC, dp.GPIOD, dp.GPIOH);
 
     defmt::info!("Initializing LCD...");
 
@@ -72,21 +62,21 @@ fn main() -> ! {
 
     // Create LCD display controller
     let mut lcd = Lcd::new(hd44780, pins.lcd_on, pins.lcd_led);
-    
+
     // Initialize the LCD
     lcd.init();
     defmt::info!("LCD initialized");
 
     // Turn on backlight
     lcd.led_on();
-    
+
     // Example 1: Display simple ASCII text
     defmt::info!("Example 1: ASCII text");
     lcd.clear();
     write!(lcd, "Hello World!").ok();
     lcd.set_position(0, 1); // Move to second line
     write!(lcd, "STM32 LCD Demo").ok();
-    
+
     cortex_m::asm::delay(32_000_000); // Delay ~2 seconds at 16MHz
 
     // Example 2: Display Russian text
@@ -95,40 +85,40 @@ fn main() -> ! {
     write!(lcd, "Привет мир!").ok();
     lcd.set_position(0, 1);
     write!(lcd, "Русский текст").ok();
-    
+
     cortex_m::asm::delay(32_000_000);
 
     // Example 3: Custom character management
     defmt::info!("Example 3: Custom chars");
     lcd.clear();
-    
+
     // Display info about custom character slots
     let loaded_count = lcd.get_loaded_chars_count();
     defmt::info!("Loaded custom chars: {}", loaded_count);
-    
+
     write!(lcd, "Custom: ").ok();
     write!(lcd, "{}", loaded_count).ok();
     lcd.set_position(0, 1);
     write!(lcd, "chars loaded").ok();
-    
+
     cortex_m::asm::delay(32_000_000);
 
     // Example 4: Reset and clear
     defmt::info!("Example 4: Reset");
     lcd.reset_custom_chars();
     lcd.clear();
-    
+
     write!(lcd, "Reset done").ok();
     lcd.set_position(0, 1);
     write!(lcd, "Chars cleared").ok();
-    
+
     cortex_m::asm::delay(32_000_000);
 
     // Example 5: Backlight control
     defmt::info!("Example 5: Backlight control");
     lcd.clear();
     write!(lcd, "Backlight test").ok();
-    
+
     // Blink backlight
     for i in 0..5 {
         cortex_m::asm::delay(8_000_000); // 0.5s
@@ -145,7 +135,7 @@ fn main() -> ! {
     write!(lcd, "°C").ok();
     lcd.set_position(0, 1);
     write!(lcd, "Влажн: 65%").ok();
-    
+
     cortex_m::asm::delay(32_000_000);
 
     // Example 7: Power off
@@ -154,15 +144,15 @@ fn main() -> ! {
     write!(lcd, "Powering off...").ok();
     lcd.set_position(0, 1);
     write!(lcd, "in 2 seconds").ok();
-    
+
     cortex_m::asm::delay(32_000_000);
-    
+
     lcd.off();
     defmt::info!("LCD powered off");
 
     // End of examples
     defmt::info!("Display Example - Complete");
-    
+
     loop {
         cortex_m::asm::wfi();
     }

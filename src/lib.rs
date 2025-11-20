@@ -19,7 +19,7 @@ pub mod hardware {
     pub mod gpio_power;
     pub mod hd44780;
     pub mod pins;
-    
+
     pub use display::*;
     pub use gpio_power::*;
     pub use hd44780::*;

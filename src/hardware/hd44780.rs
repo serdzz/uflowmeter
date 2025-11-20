@@ -1,5 +1,5 @@
+use super::pins::{LcdD4, LcdD5, LcdD6, LcdD7, LcdE, LcdRs, LcdRw};
 use embedded_hal::digital::v2::OutputPin;
-use super::pins::{LcdRs, LcdE, LcdD4, LcdD5, LcdD6, LcdD7, LcdRw};
 
 pub struct LcdHardware {
     rs: LcdRs,

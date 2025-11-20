@@ -439,9 +439,7 @@ mod app {
         match req {
             AppRequest::Process => {
                 defmt::info!("Process");
-                let datetime = rtc.lock(|rtc| {
-                    rtc.get_datetime()
-                });
+                let datetime = rtc.lock(|rtc| rtc.get_datetime());
                 let (hour_flow, day_flow, month_flow) = app.lock(|app| {
                     let mut rng = Pcg32::seed_from_u64(monotonics::now().ticks());
                     app.flow = rng.next_u32() as f32 / 1_000_000.0;

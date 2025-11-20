@@ -1,8 +1,11 @@
 #![allow(dead_code)]
+use super::{
+    pins::{LcdLed, LcdOn},
+    LcdHardware,
+};
 use alloc::string::String;
-use lcd::*;
 use embedded_hal::digital::v2::OutputPin;
-use super::{LcdHardware, pins::{LcdOn, LcdLed}};
+use lcd::*;
 
 pub struct Lcd {
     lcd: Display<LcdHardware>,
@@ -418,4 +421,3 @@ impl core::fmt::Write for Lcd {
         Ok(())
     }
 }
-

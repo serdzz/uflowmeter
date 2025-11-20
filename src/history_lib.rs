@@ -76,7 +76,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         self.data.time_of_last()
     }
 
-pub fn first_stored_timestamp(&mut self) -> u32 {
+    pub fn first_stored_timestamp(&mut self) -> u32 {
         if self.data.size() > 0 {
             return self.data.time_of_last() - ELEMENT_SIZE as u32 * (self.data.size() - 1);
         }
