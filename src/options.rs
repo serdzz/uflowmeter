@@ -44,13 +44,13 @@ pub struct Options {
 pub enum Error {
     Storage,
     WrongCrc,
-    SpiError(spi::Error),
+    Spi(spi::Error),
 }
 
 impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>> for Error {
     fn from(err: microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>) -> Self {
         match err {
-            microchip_eeprom_25lcxx::Error::SpiError(e) => Error::SpiError(e),
+            microchip_eeprom_25lcxx::Error::SpiError(e) => Error::Spi(e),
             microchip_eeprom_25lcxx::Error::PinError(_) => Error::Storage,
             _ => Error::Storage,
         }

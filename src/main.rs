@@ -51,6 +51,20 @@ use time::{
 use ui::*;
 //use crate::alloc::string::ToString;
 
+impl CharacterDisplay for hardware::Lcd {
+    fn set_position(&mut self, col: u8, row: u8) {
+        self.set_position(col, row);
+    }
+
+    fn reset_custom_chars(&mut self) {
+        self.reset_custom_chars();
+    }
+
+    fn clear(&mut self) {
+        self.clear();
+    }
+}
+
 type BusType = spi::Spi<hal::stm32::SPI2, (SpiSck, SpiMiso, SpiMosi)>;
 type MyStorage = Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>;
 type HourHistory = RingStorage<0, 2160, 3600>;
@@ -426,7 +440,7 @@ mod app {
             AppRequest::Process => {
                 defmt::info!("Process");
                 let datetime = rtc.lock(|rtc| {
-                    return rtc.get_datetime();
+                    rtc.get_datetime()
                 });
                 let (hour_flow, day_flow, month_flow) = app.lock(|app| {
                     let mut rng = Pcg32::seed_from_u64(monotonics::now().ticks());
@@ -507,7 +521,7 @@ mod app {
                 match history_type {
                     HistoryType::Hour => {
                         (app, hour_history, storage).lock(|app, hour_history, storage| {
-                            if let Ok(Some(flow)) = hour_history.find(storage, timestamp as u32) {
+                            if let Ok(Some(flow)) = hour_history.find(storage, timestamp) {
                                 app.history_state.flow = Some(flow as f32);
                             } else {
                                 app.history_state.flow = None;
@@ -516,7 +530,7 @@ mod app {
                     }
                     HistoryType::Day => {
                         (app, day_history, storage).lock(|app, day_history, storage| {
-                            if let Ok(Some(flow)) = day_history.find(storage, timestamp as u32) {
+                            if let Ok(Some(flow)) = day_history.find(storage, timestamp) {
                                 app.history_state.flow = Some(flow as f32);
                             } else {
                                 app.history_state.flow = None;
@@ -525,7 +539,7 @@ mod app {
                     }
                     HistoryType::Month => {
                         (app, month_history, storage).lock(|app, month_history, storage| {
-                            if let Ok(Some(flow)) = month_history.find(storage, timestamp as u32) {
+                            if let Ok(Some(flow)) = month_history.find(storage, timestamp) {
                                 app.history_state.flow = Some(flow as f32);
                             } else {
                                 app.history_state.flow = None;

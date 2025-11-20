@@ -1,13 +1,10 @@
-use super::*;
-use crate::hal::gpio::GpioExt;
-use crate::BusType;
+use stm32l1xx_hal::gpio::GpioExt;
 use stm32l1xx_hal::gpio::gpioa::*;
 use stm32l1xx_hal::gpio::gpiob::*;
 use stm32l1xx_hal::gpio::gpioc::*;
 use stm32l1xx_hal::gpio::{Analog, Floating, Input, Output, PullUp, PushPull, Speed};
 use stm32l1xx_hal::stm32::*;
-
-use crate::GpioPower;
+use super::GpioPower;
 
 pub type LcdD4 = PA4<Output<PushPull>>;
 pub type LcdD5 = PA5<Output<PushPull>>;

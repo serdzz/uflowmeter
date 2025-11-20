@@ -108,7 +108,7 @@ where
         Tdc7200 {
             spi,
             chip_select,
-            registers: 0x00 as *mut Tdc7200Registers, // Замените на фактический адрес при необходимости
+            registers: core::ptr::null_mut::<Tdc7200Registers>(), // Замените на фактический адрес при необходимости
         }
     }
 

@@ -27,6 +27,7 @@ stm32l1xx-hal = { version = "0.1.0", default-features = false, features = [
         "stm32l151",
 ] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.3"
 cortex-m-rtic = "1.1.4"
 rtic-sync = "1.0.1"
 panic-probe = { version = "1.0", features = ["print-defmt"] }

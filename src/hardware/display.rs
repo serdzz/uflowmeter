@@ -1,7 +1,8 @@
 #![allow(dead_code)]
-use crate::*;
 use alloc::string::String;
 use lcd::*;
+use embedded_hal::digital::v2::OutputPin;
+use super::{LcdHardware, pins::{LcdOn, LcdLed}};
 
 pub struct Lcd {
     lcd: Display<LcdHardware>,
@@ -99,6 +100,17 @@ impl Lcd {
         } else {
             false
         }
+    }
+
+    // Clear the display and reset custom characters
+    pub fn clear(&mut self) {
+        self.lcd.clear();
+        self.reset_custom_chars();
+    }
+
+    // Set cursor position
+    pub fn set_position(&mut self, col: u8, row: u8) {
+        self.lcd.position(col, row);
     }
 
     // Предварительная загрузка всех русских символов
@@ -407,17 +419,3 @@ impl core::fmt::Write for Lcd {
     }
 }
 
-impl CharacterDisplay for Lcd {
-    fn set_position(&mut self, col: u8, row: u8) {
-        self.lcd.position(col, row);
-    }
-
-    fn reset_custom_chars(&mut self) {
-        self.reset_custom_chars();
-    }
-
-    fn clear(&mut self) {
-        self.lcd.clear();
-        self.reset_custom_chars();
-    }
-}
