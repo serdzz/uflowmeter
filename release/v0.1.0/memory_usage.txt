@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+  61012	   4356	   2496	  67864	  10918	release/v0.1.0/uflowmeter.elf

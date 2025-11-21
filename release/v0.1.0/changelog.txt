@@ -1,0 +1,10 @@
+eea47f6 Apply cargo fix suggestions
+03310eb Refactor: improve code organization and add display example
+cd67b7c Add examples directory with HD44780 LCD documentation
+d2adb41 Add comprehensive unit tests for history module
+47db161  Fixed display russian font
+3115cf1 Fix
+3d3a063 Added tdc7200
+44e986c  Fixed power
+d4b1489 Added Error into History
+6d5bae1 Fix Error

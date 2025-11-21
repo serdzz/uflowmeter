@@ -1,0 +1,3 @@
+c6c9663bcc798ea503ca8d77b489ee6638a5950d607322564e9a53abb04e14ca  release/v0.1.0/uflowmeter.bin
+6d873950f6dedf1ddfc0944c7c2795ec3c8f24bce6bda47a9a239cb056574e71  release/v0.1.0/uflowmeter.elf
+3fe79499369b63c6add569c09b3edf0d393c1f3fec8a8d57c8975d4160e0b833  release/v0.1.0/uflowmeter.hex
