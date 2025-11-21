@@ -18,6 +18,12 @@ test:
 	mv .cargo/config.toml.bak .cargo/config.toml || \
 	(mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
 
+clippy:
+	@echo "Running clippy with host target..."
+        @sed -i.bak '/^target = /d' .cargo/config.toml && \
+        cargo clippy --lib --release -- -D warnings && \
+        mv .cargo/config.toml.bak .cargo/config.toml || \
+        (mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
 test-release: test
 
 clean:

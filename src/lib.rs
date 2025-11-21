@@ -28,3 +28,6 @@ pub mod hardware {
 
 #[cfg(test)]
 mod history_lib_tests;
+
+#[cfg(test)]
+mod ui_logic_tests;

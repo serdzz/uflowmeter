@@ -70,7 +70,7 @@ pub trait HistoryWidgetTrait {
                 self.set_datetime(self.get_datetime().saturating_add(Duration::SECOND));
             }
         }
-        self.set_timestamp(self.get_datetime().assume_utc().unix_timestamp() as u32 % 60);
+        self.set_timestamp(self.get_datetime().assume_utc().unix_timestamp() as u32);
     }
 
     fn dec(&mut self) {
@@ -97,7 +97,7 @@ pub trait HistoryWidgetTrait {
                 self.set_datetime(self.get_datetime().saturating_sub(Duration::SECOND));
             }
         }
-        self.set_timestamp(self.get_datetime().assume_utc().unix_timestamp() as u32 % 60);
+        self.set_timestamp(self.get_datetime().assume_utc().unix_timestamp() as u32);
     }
 
     fn next_item(&mut self) -> bool {
@@ -817,5 +817,61 @@ widget_mux! {
 impl Default for Viewport {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+
+    #[test]
+    fn test_blink_masks_correct() {
+        // Формат времени: "HH:MM:SS" (8 символов, позиции 0-7)
+        // Маскирование: бит i соответствует позиции (LEN - i - 1)
+
+        // Секунды (позиции 6-7) → биты 0-1 → маска 0x03
+        assert_eq!(0x03, 0b00000011);
+
+        // Минуты (позиции 3-4) → биты 3-4 → маска 0x18
+        assert_eq!(0x18, 0b00011000);
+
+        // Часы (позиции 0-1) → биты 6-7 → маска 0xc0
+        assert_eq!(0xc0, 0b11000000);
+    }
+
+    #[test]
+    fn test_timestamp_full_value() {
+        // Проверяем, что timestamp содержит полный Unix timestamp
+        let dt = datetime!(2023-06-15 10:30:45 UTC);
+        let ts = dt.unix_timestamp() as u32;
+
+        // Unix timestamp должен быть большим числом (не % 60)
+        assert!(ts > 1686000000);
+        assert!(ts < 2000000000); // разумная верхняя граница
+    }
+
+    #[test]
+    fn test_hour_increment_timestamp() {
+        // При инкременте часа timestamp должен увеличиться на 3600 секунд
+        let dt1 = datetime!(2023-06-15 10:00:00 UTC);
+        let ts1 = dt1.unix_timestamp() as u32;
+
+        let dt2 = dt1.saturating_add(Duration::HOUR);
+        let ts2 = dt2.unix_timestamp() as u32;
+
+        assert_eq!(ts2 - ts1, 3600);
+    }
+
+    #[test]
+    fn test_day_increment_timestamp() {
+        // При инкременте дня timestamp должен увеличиться на 86400 секунд
+        let dt1 = datetime!(2023-06-15 00:00:00 UTC);
+        let ts1 = dt1.unix_timestamp() as u32;
+
+        let dt2 = dt1.saturating_add(Duration::DAY);
+        let ts2 = dt2.unix_timestamp() as u32;
+
+        assert_eq!(ts2 - ts1, 86400);
     }
 }
