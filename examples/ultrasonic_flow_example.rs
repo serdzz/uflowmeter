@@ -297,11 +297,12 @@ fn example_1_hardware_config<SPI1, SPI2, CS1, CS2, RESET, EN>(
     EN: embedded_hal::digital::v2::OutputPin,
 {
     defmt::info!("Example 1: Hardware Configuration");
-    defmt::info!("TDC1000: Instance created and passed to example");
-    defmt::info!("TDC7200: Instance created and passed to example");
     
-    // Use the parameters to avoid unused variable warning
-    let _ = (tdc1000, tdc7200);
+    // Log TDC instance information
+    let tdc1000_size = core::mem::size_of_val(tdc1000);
+    let tdc7200_size = core::mem::size_of_val(tdc7200);
+    defmt::info!("TDC1000: Instance size {} bytes, ready for operation", tdc1000_size);
+    defmt::info!("TDC7200: Instance size {} bytes, ready for operation", tdc7200_size);
     
     lcd.clear();
     write!(lcd, "Ex1: Hardware").ok();
