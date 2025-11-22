@@ -56,14 +56,29 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 use cortex_m_rt::entry;
-use stm32l1xx_hal::{prelude::*, rcc::Config, stm32};
+use stm32l1xx_hal::{gpio::AltMode, prelude::*, rcc::Config, spi, stm32};
 
 use core::fmt::Write;
+use microchip_eeprom_25lcxx::*;
+use shared_bus_rtic::SharedBus;
 use uflowmeter::hardware::display::Lcd;
 use uflowmeter::hardware::hd44780::LcdHardware;
+use uflowmeter::options::Options;
 
-// Note: This example demonstrates the Options structure concept.
-// Full integration requires EEPROM hardware (25LC1024) and shared SPI bus setup.
+type BusType = spi::Spi<
+    stm32::SPI2,
+    (
+        uflowmeter::hardware::pins::SpiSck,
+        uflowmeter::hardware::pins::SpiMiso,
+        uflowmeter::hardware::pins::SpiMosi,
+    ),
+>;
+type MyStorage = Storage<
+    SharedBus<BusType>,
+    uflowmeter::hardware::pins::MemoryEn,
+    uflowmeter::hardware::pins::MemoryWp,
+    uflowmeter::hardware::pins::MemoryHold,
+>;
 
 #[entry]
 fn main() -> ! {
@@ -71,16 +86,14 @@ fn main() -> ! {
 
     // Initialize hardware
     let dp = stm32::Peripherals::take().unwrap();
-    
-    let _rcc = dp.RCC.freeze(Config::pll(
+
+    let mut rcc = dp.RCC.freeze(Config::pll(
         stm32l1xx_hal::rcc::PLLSource::HSE(8.mhz()),
         stm32l1xx_hal::rcc::PLLMul::Mul6,
         stm32l1xx_hal::rcc::PLLDiv::Div3,
     ));
 
-    let pins = uflowmeter::hardware::Pins::new(
-        dp.GPIOA, dp.GPIOB, dp.GPIOC, dp.GPIOD, dp.GPIOH
-    );
+    let pins = uflowmeter::hardware::Pins::new(dp.GPIOA, dp.GPIOB, dp.GPIOC, dp.GPIOD, dp.GPIOH);
 
     // Initialize LCD
     let hd44780 = LcdHardware::new(
@@ -97,15 +110,73 @@ fn main() -> ! {
     lcd.init();
     lcd.led_on();
 
+    // Initialize SPI2 for EEPROM communication
+    pins.spi_sck.set_alt_mode(AltMode::SPI1_2);
+    pins.spi_miso.set_alt_mode(AltMode::SPI1_2);
+    pins.spi_mosi.set_alt_mode(AltMode::SPI1_2);
+
+    let spi = dp.SPI2.spi(
+        (pins.spi_sck, pins.spi_miso, pins.spi_mosi),
+        spi::MODE_0,
+        16.mhz(),
+        &mut rcc,
+    );
+
+    // Create shared SPI bus
+    let bus = shared_bus_rtic::new!(spi, BusType);
+
+    // Initialize 25LC1024 EEPROM
+    let eeprom25x = Eeprom25x::new(
+        bus.acquire(),
+        pins.memory_en,
+        pins.memory_wp,
+        pins.memory_hold,
+    )
+    .unwrap();
+
+    let mut storage = Storage::new(eeprom25x);
+
     defmt::info!("LCD initialized");
+    defmt::info!("SPI and EEPROM initialized");
 
     // Show startup
     lcd.clear();
     write!(lcd, "Options Demo").ok();
     cortex_m::asm::delay(32_000_000);
 
+    // Load current options from EEPROM
+    lcd.clear();
+    write!(lcd, "Loading options").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "from EEPROM...").ok();
+
+    let options_result = Options::load(&mut storage);
+    let mut opt = match options_result {
+        Ok(opt) => {
+            lcd.clear();
+            write!(lcd, "Load OK!").ok();
+            lcd.set_position(0, 1);
+            write!(lcd, "SN: {}", opt.serial_number()).ok();
+            cortex_m::asm::delay(32_000_000);
+            defmt::info!("Options loaded successfully");
+            defmt::info!("Serial number: {}", opt.serial_number());
+            defmt::info!("Sensor type: {}", opt.sensor_type());
+            opt
+        }
+        Err(_e) => {
+            lcd.clear();
+            write!(lcd, "Load Error").ok();
+            lcd.set_position(0, 1);
+            write!(lcd, "Using defaults").ok();
+            cortex_m::asm::delay(32_000_000);
+            #[cfg(not(test))]
+            defmt::warn!("Failed to load options, using defaults");
+            Options::default()
+        }
+    };
+
     // Example 1: Configuration Structure
-    example_1_structure_overview(&mut lcd);
+    example_1_structure_overview(&mut lcd, &opt);
 
     // Example 2: CRC Validation
     example_2_crc_validation(&mut lcd);
@@ -114,13 +185,13 @@ fn main() -> ! {
     example_3_redundancy(&mut lcd);
 
     // Example 4: Configuration Fields
-    example_4_config_fields(&mut lcd);
+    example_4_config_fields(&mut lcd, &opt);
 
     // Example 5: Usage Statistics
-    example_5_usage_stats(&mut lcd);
+    example_5_usage_stats(&mut lcd, &opt);
 
-    // Example 6: Save/Load Cycle
-    example_6_save_load_cycle(&mut lcd);
+    // Example 6: Save/Load Cycle - with real hardware
+    example_6_save_load_cycle(&mut lcd, &mut opt, &mut storage);
 
     // Done
     lcd.clear();
@@ -136,9 +207,9 @@ fn main() -> ! {
 }
 
 /// Example 1: Configuration Structure Overview
-fn example_1_structure_overview(lcd: &mut Lcd) {
+fn example_1_structure_overview(lcd: &mut Lcd, opt: &Options) {
     defmt::info!("Example 1: Structure Overview");
-    
+
     lcd.clear();
     write!(lcd, "Ex1: Structure").ok();
     cortex_m::asm::delay(24_000_000);
@@ -176,8 +247,11 @@ fn example_1_structure_overview(lcd: &mut Lcd) {
 
     defmt::info!("Options structure:");
     defmt::info!("  - CRC: 16-bit");
-    defmt::info!("  - Serial number: 32-bit");
-    defmt::info!("  - Sensor type: 8-bit");
+    defmt::info!(
+        "  - Serial number: 32-bit (current: {})",
+        opt.serial_number()
+    );
+    defmt::info!("  - Sensor type: 8-bit (current: {})", opt.sensor_type());
     defmt::info!("  - TDC1000 regs: 80-bit");
     defmt::info!("  - TDC7200 regs: 80-bit");
     defmt::info!("  - Calibration: 12x 32-bit");
@@ -188,7 +262,7 @@ fn example_1_structure_overview(lcd: &mut Lcd) {
 /// Example 2: CRC Validation
 fn example_2_crc_validation(lcd: &mut Lcd) {
     defmt::info!("Example 2: CRC Validation");
-    
+
     lcd.clear();
     write!(lcd, "Ex2: CRC Check").ok();
     cortex_m::asm::delay(24_000_000);
@@ -204,11 +278,11 @@ fn example_2_crc_validation(lcd: &mut Lcd) {
     lcd.clear();
     write!(lcd, "1. Load data").ok();
     cortex_m::asm::delay(20_000_000);
-    
+
     lcd.clear();
     write!(lcd, "2. Calculate CRC").ok();
     cortex_m::asm::delay(20_000_000);
-    
+
     lcd.clear();
     write!(lcd, "3. Compare").ok();
     cortex_m::asm::delay(20_000_000);
@@ -237,7 +311,7 @@ fn example_2_crc_validation(lcd: &mut Lcd) {
 /// Example 3: Dual-Page Redundancy
 fn example_3_redundancy(lcd: &mut Lcd) {
     defmt::info!("Example 3: Dual-Page Redundancy");
-    
+
     lcd.clear();
     write!(lcd, "Ex3: Redundancy").ok();
     cortex_m::asm::delay(24_000_000);
@@ -290,18 +364,18 @@ fn example_3_redundancy(lcd: &mut Lcd) {
 }
 
 /// Example 4: Configuration Fields
-fn example_4_config_fields(lcd: &mut Lcd) {
+fn example_4_config_fields(lcd: &mut Lcd, opt: &Options) {
     defmt::info!("Example 4: Configuration Fields");
-    
+
     lcd.clear();
     write!(lcd, "Ex4: Fields").ok();
     cortex_m::asm::delay(24_000_000);
 
-    // Device identity
+    // Device identity - show real values
     lcd.clear();
-    write!(lcd, "Serial: 12345").ok();
+    write!(lcd, "Serial: {}", opt.serial_number()).ok();
     lcd.set_position(0, 1);
-    write!(lcd, "Type: 01").ok();
+    write!(lcd, "Type: {}", opt.sensor_type()).ok();
     cortex_m::asm::delay(28_000_000);
 
     // Calibration
@@ -332,37 +406,38 @@ fn example_4_config_fields(lcd: &mut Lcd) {
 
     defmt::info!("Configuration fields:");
     defmt::info!("  Device:");
-    defmt::info!("    - serial_number: u32");
-    defmt::info!("    - sensor_type: u8");
+    defmt::info!("    - serial_number: {} (u32)", opt.serial_number());
+    defmt::info!("    - sensor_type: {} (u8)", opt.sensor_type());
     defmt::info!("  Calibration:");
-    defmt::info!("    - zero1, zero2: 32-bit each");
+    defmt::info!("    - zero1: {} (u32)", opt.zero1());
+    defmt::info!("    - zero2: {} (u32)", opt.zero2());
     defmt::info!("    - v11..v23: 6x 32-bit");
     defmt::info!("    - k11..k23: 6x 32-bit");
     defmt::info!("  Comm:");
-    defmt::info!("    - slave_address: u8");
+    defmt::info!("    - slave_address: {} (u8)", opt.slave_address());
     defmt::info!("    - modbus_mode: u8");
 }
 
 /// Example 5: Usage Statistics
-fn example_5_usage_stats(lcd: &mut Lcd) {
+fn example_5_usage_stats(lcd: &mut Lcd, opt: &Options) {
     defmt::info!("Example 5: Usage Statistics");
-    
+
     lcd.clear();
     write!(lcd, "Ex5: Statistics").ok();
     cortex_m::asm::delay(24_000_000);
 
-    // Uptime
+    // Uptime - show real value
     lcd.clear();
     write!(lcd, "Uptime:").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "123456 seconds").ok();
+    write!(lcd, "{} seconds", opt.uptime()).ok();
     cortex_m::asm::delay(28_000_000);
 
-    // Totals
+    // Totals - show real value
     lcd.clear();
     write!(lcd, "Total Flow:").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "98765 Liters").ok();
+    write!(lcd, "{} units", opt.total()).ok();
     cortex_m::asm::delay(28_000_000);
 
     // Period totals
@@ -386,18 +461,18 @@ fn example_5_usage_stats(lcd: &mut Lcd) {
     cortex_m::asm::delay(28_000_000);
 
     defmt::info!("Statistics tracked:");
-    defmt::info!("  - uptime: Total runtime (seconds)");
-    defmt::info!("  - total: Cumulative flow");
-    defmt::info!("  - hour_total: Current hour accumulator");
-    defmt::info!("  - day_total: Current day accumulator");
-    defmt::info!("  - month_total: Current month accumulator");
-    defmt::info!("  - rest: Remaining quota/allocation");
+    defmt::info!("  - uptime: {} seconds", opt.uptime());
+    defmt::info!("  - total: {} (cumulative flow)", opt.total());
+    defmt::info!("  - hour_total: {} (current hour)", opt.hour_total());
+    defmt::info!("  - day_total: {} (current day)", opt.day_total());
+    defmt::info!("  - month_total: {} (current month)", opt.month_total());
+    defmt::info!("  - rest: {} (remaining quota)", opt.rest());
 }
 
-/// Example 6: Save/Load Cycle
-fn example_6_save_load_cycle(lcd: &mut Lcd) {
-    defmt::info!("Example 6: Save/Load Cycle");
-    
+/// Example 6: Save/Load Cycle - with real EEPROM operations
+fn example_6_save_load_cycle(lcd: &mut Lcd, opt: &mut Options, storage: &mut MyStorage) {
+    defmt::info!("Example 6: Save/Load Cycle (Real Hardware)");
+
     lcd.clear();
     write!(lcd, "Ex6: Save/Load").ok();
     cortex_m::asm::delay(24_000_000);
@@ -461,12 +536,96 @@ fn example_6_save_load_cycle(lcd: &mut Lcd) {
     write!(lcd, "opt.save()").ok();
     cortex_m::asm::delay(28_000_000);
 
-    defmt::info!("Complete save/load cycle:");
+    // Demonstrate real modification and save
+    lcd.clear();
+    write!(lcd, "Testing...").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Modify uptime").ok();
+    cortex_m::asm::delay(24_000_000);
+
+    // Store old values
+    let old_uptime = opt.uptime();
+    let old_serial = opt.serial_number();
+
+    // Modify uptime
+    opt.set_uptime(old_uptime + 1);
+
+    lcd.clear();
+    write!(lcd, "Uptime:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "{} -> {}", old_uptime, opt.uptime()).ok();
+    cortex_m::asm::delay(32_000_000);
+
+    // Save to EEPROM
+    lcd.clear();
+    write!(lcd, "Saving to").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "EEPROM...").ok();
+
+    defmt::info!("Saving modified options to EEPROM");
+    defmt::info!("  Old uptime: {}", old_uptime);
+    defmt::info!("  New uptime: {}", opt.uptime());
+
+    match opt.save(storage) {
+        Ok(_) => {
+            lcd.clear();
+            write!(lcd, "Save OK!").ok();
+            lcd.set_position(0, 1);
+            write!(lcd, "Verified").ok();
+            cortex_m::asm::delay(28_000_000);
+            defmt::info!("Save successful!");
+        }
+        Err(_e) => {
+            lcd.clear();
+            write!(lcd, "Save Error").ok();
+            lcd.set_position(0, 1);
+            write!(lcd, "Check EEPROM").ok();
+            cortex_m::asm::delay(28_000_000);
+            defmt::error!("Save failed");
+        }
+    }
+
+    // Verify by reading back
+    lcd.clear();
+    write!(lcd, "Verifying...").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Read back").ok();
+    cortex_m::asm::delay(24_000_000);
+
+    match Options::load(storage) {
+        Ok(loaded_opt) => {
+            lcd.clear();
+            if loaded_opt.uptime() == opt.uptime() && loaded_opt.serial_number() == old_serial {
+                write!(lcd, "Verify OK!").ok();
+                lcd.set_position(0, 1);
+                write!(lcd, "Data matches").ok();
+                defmt::info!("Verification successful!");
+                defmt::info!("  Loaded uptime: {}", loaded_opt.uptime());
+            } else {
+                write!(lcd, "Verify FAIL").ok();
+                lcd.set_position(0, 1);
+                write!(lcd, "Mismatch").ok();
+                defmt::warn!("Verification mismatch!");
+            }
+            cortex_m::asm::delay(32_000_000);
+        }
+        Err(_e) => {
+            lcd.clear();
+            write!(lcd, "Verify Error").ok();
+            lcd.set_position(0, 1);
+            write!(lcd, "Read failed").ok();
+            cortex_m::asm::delay(28_000_000);
+            defmt::error!("Verification read failed");
+        }
+    }
+
+    defmt::info!("Complete save/load cycle demonstrated");
     defmt::info!("Load:");
     defmt::info!("  let mut opt = Options::load(&mut storage)?;");
     defmt::info!("Modify:");
-    defmt::info!("  opt.set_serial_number(12345);");
     defmt::info!("  opt.set_uptime(opt.uptime() + 1);");
     defmt::info!("Save:");
     defmt::info!("  opt.save(&mut storage)?;");
+    defmt::info!("Verify:");
+    defmt::info!("  let loaded = Options::load(&mut storage)?;");
 }

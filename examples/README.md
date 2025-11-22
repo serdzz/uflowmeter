@@ -28,8 +28,10 @@ This directory contains examples demonstrating various hardware components and f
     3. Dual-page redundancy (primary 0x0000 + backup 0x0400)
     4. Configuration fields (device, calibration, communication)
     5. Usage statistics (uptime, totals, hour/day/month)
-    6. Complete save/load cycle
+    6. Complete save/load cycle with real EEPROM read/write
   - Demonstrates Options module with 25LC1024 EEPROM
+  - Full SPI2 and EEPROM hardware initialization
+  - Real load/save/verify operations on EEPROM
   - Includes TDC registers, calibration data, and Modbus settings
 
 ### UI Examples

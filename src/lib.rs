@@ -26,6 +26,9 @@ pub mod hardware {
     pub use pins::*;
 }
 
+#[cfg(not(test))]
+pub mod options;
+
 #[cfg(test)]
 mod history_lib_tests;
 
