@@ -47,31 +47,33 @@
 //! 
 //! ## Example Sequence
 //! 
-//! 1. **Initialization**
-//!    - Configure SPI2 bus (shared between TDC1000, TDC7200, EEPROM)
-//!    - Reset both TDCs
-//!    - Load calibration from EEPROM
+//! **Hardware Initialization**
+//! - Configure SPI2 bus (shared between TDC1000, TDC7200, EEPROM)
+//! - Initialize both TDCs (instances created but methods limited by SharedBus)
+//! - Load calibration from EEPROM
 //! 
-//! 2. **Downstream Measurement**
-//!    - Select TDC1000 CH1
-//!    - Trigger TDC7200 measurement
-//!    - Wait for completion interrupt
-//!    - Read time value
+//! **Example 1: Single TOF Measurement** (Conceptual)
+//! - Measurement sequence steps
+//! - Channel selection
+//! - Calibration process
+//! - Time-of-flight reading
 //! 
-//! 3. **Upstream Measurement**
-//!    - Select TDC1000 CH2
-//!    - Trigger TDC7200 measurement
-//!    - Wait for completion
-//!    - Read time value
+//! **Example 2: Bidirectional Measurement** (Conceptual)
+//! - Downstream (CH1) measurement
+//! - Upstream (CH2) measurement
+//! - Time difference calculation
 //! 
-//! 4. **Flow Calculation**
-//!    - Calculate time difference
-//!    - Apply calibration factors
-//!    - Compute flow velocity and volume
+//! **Example 3: Flow Calculation**
+//! - Apply calibration factors from EEPROM
+//! - Calculate velocity: v = k×Δt/(t_down×t_up)
+//! - Compute volume flow rate: Q = v×A
+//! - Determine flow direction
 //! 
-//! 5. **Display Results**
-//!    - Show on LCD: velocity, volume, direction
-//!    - Log via defmt for debugging
+//! **Example 4: TDC1000 Configuration** (Conceptual)
+//! - Transmit pulse configuration
+//! - Frequency divider settings
+//! - Channel switching (CH1/CH2)
+//! - Error detection
 //! 
 //! ## Hardware Requirements
 //! - STM32L151RC microcontroller
@@ -269,20 +271,29 @@ fn main() -> ! {
         },
     };
 
-    // Example 1: Hardware Configuration
-    example_1_hardware_config(&mut lcd, &mut tdc1000, &mut tdc7200);
+    // Note: TDC1000 and TDC7200 are initialized above
+    // Methods cannot be called due to SharedBus trait bound limitations
+    // See main.rs for working TDC usage without SharedBus
+    
+    lcd.clear();
+    write!(lcd, "TDCs Ready").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "TDC1000+7200").ok();
+    defmt::info!("TDC1000 size: {} bytes", core::mem::size_of_val(&tdc1000));
+    defmt::info!("TDC7200 size: {} bytes", core::mem::size_of_val(&tdc7200));
+    cortex_m::asm::delay(32_000_000);
 
-    // Example 2: Single TOF Measurement (conceptual)
-    example_2_single_measurement_concept(&mut lcd);
+    // Example 1: Single TOF Measurement (conceptual)
+    example_1_single_measurement_concept(&mut lcd);
 
-    // Example 3: Bidirectional Measurement (conceptual)
-    example_3_bidirectional_measurement_concept(&mut lcd);
+    // Example 2: Bidirectional Measurement (conceptual)
+    example_2_bidirectional_measurement_concept(&mut lcd);
 
-    // Example 4: Flow Calculation with Calibration
-    example_4_flow_calculation(&mut lcd, &opt);
+    // Example 3: Flow Calculation with Calibration
+    example_3_flow_calculation(&mut lcd, &opt);
 
-    // Example 5: TDC1000 Configuration (conceptual)
-    example_5_tdc1000_config_concept(&mut lcd);
+    // Example 4: TDC1000 Configuration (conceptual)
+    example_4_tdc1000_config_concept(&mut lcd);
 
     // Done
     lcd.clear();
@@ -297,101 +308,9 @@ fn main() -> ! {
     }
 }
 
-/// Example 1: Hardware Configuration
-/// Note: TDC1000 and TDC7200 are initialized and available for use.
-/// Actual register access methods require specific trait bounds that may not
-/// be satisfied with shared SPI bus. This example demonstrates the initialization
-/// and describes the capabilities of each component.
-fn example_1_hardware_config<SPI1, SPI2, CS1, CS2, RESET, EN>(
-    lcd: &mut Lcd,
-    tdc1000: &mut TDC1000<SPI1, CS1, RESET, EN>,
-    tdc7200: &mut Tdc7200<SPI2, CS2>,
-) where
-    SPI1: embedded_hal::blocking::spi::Transfer<u8> + embedded_hal::blocking::spi::Write<u8>,
-    SPI2: embedded_hal::blocking::spi::Transfer<u8> + embedded_hal::blocking::spi::Write<u8>,
-    CS1: embedded_hal::digital::v2::OutputPin,
-    CS2: embedded_hal::digital::v2::OutputPin,
-    RESET: embedded_hal::digital::v2::OutputPin,
-    EN: embedded_hal::digital::v2::OutputPin,
-{
-    defmt::info!("Example 1: Hardware Configuration");
-    
-    // Log TDC instance information
-    let tdc1000_size = core::mem::size_of_val(tdc1000);
-    let tdc7200_size = core::mem::size_of_val(tdc7200);
-    defmt::info!("TDC1000: Instance size {} bytes, ready for operation", tdc1000_size);
-    defmt::info!("TDC7200: Instance size {} bytes, ready for operation", tdc7200_size);
-    
-    lcd.clear();
-    write!(lcd, "Ex1: Hardware").ok();
-    cortex_m::asm::delay(24_000_000);
-
-    // TDC1000 initialized
-    lcd.clear();
-    write!(lcd, "TDC1000: Ready").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "Analog AFE").ok();
-    defmt::info!("TDC1000: Analog front-end initialized and ready");
-    cortex_m::asm::delay(28_000_000);
-
-    // TDC1000 capabilities
-    lcd.clear();
-    write!(lcd, "TDC1000:").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "TX/RX control").ok();
-    defmt::info!("TDC1000: Transmit burst generation, receive amplification");
-    cortex_m::asm::delay(28_000_000);
-
-    lcd.clear();
-    write!(lcd, "Channels:").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "CH1, CH2 mux").ok();
-    defmt::info!("TDC1000: Dual channel multiplexer (downstream/upstream)");
-    cortex_m::asm::delay(28_000_000);
-
-    // TDC7200 initialized
-    lcd.clear();
-    write!(lcd, "TDC7200: Ready").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "Time-to-Digital").ok();
-    defmt::info!("TDC7200: Time-to-digital converter initialized and ready");
-    cortex_m::asm::delay(28_000_000);
-
-    // TDC7200 capabilities
-    lcd.clear();
-    write!(lcd, "TDC7200:").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "ps resolution").ok();
-    defmt::info!("TDC7200: Picosecond resolution time measurement");
-    cortex_m::asm::delay(28_000_000);
-
-    lcd.clear();
-    write!(lcd, "Modes:").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "1,2,3 + Cal").ok();
-    defmt::info!("TDC7200: Measurement modes with continuous calibration");
-    cortex_m::asm::delay(28_000_000);
-
-    // Shared SPI bus
-    lcd.clear();
-    write!(lcd, "SPI2 Bus:").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "Shared 16MHz").ok();
-    defmt::info!("SPI2: Shared bus for TDC1000, TDC7200, EEPROM @ 16MHz");
-    cortex_m::asm::delay(28_000_000);
-
-    // Summary
-    lcd.clear();
-    write!(lcd, "Hardware ready").ok();
-    lcd.set_position(0, 1);
-    write!(lcd, "TDC1000+7200").ok();
-    defmt::info!("Hardware configuration: Both TDCs initialized and ready");
-    cortex_m::asm::delay(28_000_000);
-}
-
-/// Example 2: Single TOF Measurement (Conceptual)
-fn example_2_single_measurement_concept(lcd: &mut Lcd) {
-    defmt::info!("Example 2: Single TOF Measurement (Conceptual)");
+/// Example 1: Single TOF Measurement (Conceptual)
+fn example_1_single_measurement_concept(lcd: &mut Lcd) {
+    defmt::info!("Example 1: Single TOF Measurement (Conceptual)");
     
     lcd.clear();
     write!(lcd, "Ex2: TOF Meas.").ok();
@@ -438,9 +357,9 @@ fn example_2_single_measurement_concept(lcd: &mut Lcd) {
     defmt::info!("Single measurement sequence complete");
 }
 
-/// Example 3: Bidirectional Measurement (Conceptual)
-fn example_3_bidirectional_measurement_concept(lcd: &mut Lcd) {
-    defmt::info!("Example 3: Bidirectional Measurement (Conceptual)");
+/// Example 2: Bidirectional Measurement (Conceptual)
+fn example_2_bidirectional_measurement_concept(lcd: &mut Lcd) {
+    defmt::info!("Example 2: Bidirectional Measurement (Conceptual)");
     
     lcd.clear();
     write!(lcd, "Ex3: Bidir").ok();
@@ -506,12 +425,12 @@ fn example_3_bidirectional_measurement_concept(lcd: &mut Lcd) {
     defmt::info!("Bidirectional measurement complete");
 }
 
-/// Example 4: Flow Calculation with Calibration
-fn example_4_flow_calculation(
+/// Example 3: Flow Calculation with Calibration
+fn example_3_flow_calculation(
     lcd: &mut Lcd,
     opt: &Options,
 ) {
-    defmt::info!("Example 4: Flow Calculation");
+    defmt::info!("Example 3: Flow Calculation");
     
     lcd.clear();
     write!(lcd, "Ex4: Flow Calc").ok();
@@ -586,9 +505,9 @@ fn example_4_flow_calculation(
     defmt::info!("Flow calculation complete");
 }
 
-/// Example 5: TDC1000 Configuration (Conceptual)
-fn example_5_tdc1000_config_concept(lcd: &mut Lcd) {
-    defmt::info!("Example 5: TDC1000 Configuration (Conceptual)");
+/// Example 4: TDC1000 Configuration (Conceptual)
+fn example_4_tdc1000_config_concept(lcd: &mut Lcd) {
+    defmt::info!("Example 4: TDC1000 Configuration (Conceptual)");
     
     lcd.clear();
     write!(lcd, "Ex5: TDC1000").ok();

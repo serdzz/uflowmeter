@@ -36,17 +36,17 @@ This directory contains examples demonstrating various hardware components and f
 
 - **`ultrasonic_flow_example.rs`** - Ultrasonic flow measurement with TDC1000/TDC7200
   - Run on hardware: `cargo run --example ultrasonic_flow_example --release`
-  - 5 interactive examples on LCD:
-    1. Hardware configuration (TDC1000 + TDC7200 reset and setup)
-    2. Single time-of-flight (TOF) measurement
-    3. Bidirectional measurement (downstream + upstream)
-    4. Flow velocity calculation with calibration
-    5. Continuous flow monitoring (10 cycles)
-  - Demonstrates transit-time ultrasonic flow measurement
-  - TDC1000: Analog front-end for ultrasonic signal conditioning
-  - TDC7200: High-precision time-to-digital converter
-  - Calculates flow velocity, direction, and volume
+  - TDC initialization + 4 conceptual examples on LCD:
+    1. Single time-of-flight (TOF) measurement sequence
+    2. Bidirectional measurement (downstream + upstream)
+    3. Flow velocity calculation with EEPROM calibration
+    4. TDC1000 configuration parameters
+  - Demonstrates transit-time ultrasonic flow measurement principles
+  - TDC1000: Analog front-end (TX/RX, dual channel mux)
+  - TDC7200: High-precision time-to-digital converter (ps resolution)
+  - Calculates flow velocity, direction, and volume with formulas
   - Uses calibration data from EEPROM (zero offsets, velocity coefficients)
+  - Note: SharedBus limits direct TDC method calls (see main.rs for working usage)
 
 ### UI Examples
 
