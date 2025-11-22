@@ -10,6 +10,7 @@
 //! Note: This example temporarily removes the embedded target configuration
 //! via Makefile to run on host.
 
+use std::{assert_eq, println};
 use time::{macros::datetime, Duration, Month};
 
 fn main() {
