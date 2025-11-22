@@ -121,6 +121,9 @@ use uflowmeter::hardware::{
     tdc1000::TDC1000,
     tdc7200::Tdc7200,
 };
+
+// Suppress unused variable warnings for underscore-prefixed names
+#[allow(dead_code)]
 use uflowmeter::options::Options;
 
 type BusType = spi::Spi<stm32::SPI2, (uflowmeter::hardware::pins::SpiSck, uflowmeter::hardware::pins::SpiMiso, uflowmeter::hardware::pins::SpiMosi)>;
@@ -205,7 +208,7 @@ fn main() -> ! {
     let mut storage = Storage::new(eeprom25x);
 
     // Initialize TDC1000 (Analog Front-End)
-    let _tdc1000 = TDC1000::new(
+    let mut tdc1000 = TDC1000::new(
         bus.acquire(),
         pins.tdc1000_cs,
         pins.tdc1000_res,
@@ -213,7 +216,7 @@ fn main() -> ! {
     );
 
     // Initialize TDC7200 (Time-to-Digital Converter)
-    let _tdc7200 = Tdc7200::new(
+    let mut tdc7200 = Tdc7200::new(
         bus.acquire(),
         pins.tdc7200_cs,
     );
@@ -249,7 +252,7 @@ fn main() -> ! {
     };
 
     // Example 1: Hardware Configuration
-    example_1_hardware_config(&mut lcd);
+    example_1_hardware_config(&mut lcd, &mut tdc1000, &mut tdc7200);
 
     // Example 2: Single TOF Measurement (conceptual)
     example_2_single_measurement_concept(&mut lcd);
@@ -277,45 +280,85 @@ fn main() -> ! {
 }
 
 /// Example 1: Hardware Configuration
-fn example_1_hardware_config(lcd: &mut Lcd) {
+fn example_1_hardware_config<SPI1, SPI2, CS1, CS2, RESET, EN>(
+    lcd: &mut Lcd,
+    _tdc1000: &mut TDC1000<SPI1, CS1, RESET, EN>,
+    _tdc7200: &mut Tdc7200<SPI2, CS2>,
+) where
+    SPI1: embedded_hal::blocking::spi::Transfer<u8> + embedded_hal::blocking::spi::Write<u8>,
+    SPI2: embedded_hal::blocking::spi::Transfer<u8> + embedded_hal::blocking::spi::Write<u8>,
+    CS1: embedded_hal::digital::v2::OutputPin,
+    CS2: embedded_hal::digital::v2::OutputPin,
+    RESET: embedded_hal::digital::v2::OutputPin,
+    EN: embedded_hal::digital::v2::OutputPin,
+{
     defmt::info!("Example 1: Hardware Configuration");
     
     lcd.clear();
-    write!(lcd, "Ex1: Config").ok();
+    write!(lcd, "Ex1: Hardware").ok();
     cortex_m::asm::delay(24_000_000);
 
-    // TDC1000 overview
+    // TDC1000 initialization
+    lcd.clear();
+    write!(lcd, "TDC1000: Init").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Analog AFE").ok();
+    defmt::info!("TDC1000: Analog front-end initialized via SPI");
+    cortex_m::asm::delay(28_000_000);
+
+    // TDC1000 capabilities
     lcd.clear();
     write!(lcd, "TDC1000:").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "Analog AFE").ok();
-    defmt::info!("TDC1000: Analog front-end for signal conditioning");
+    write!(lcd, "TX/RX control").ok();
+    defmt::info!("TDC1000: Transmit burst generation, receive amplification");
     cortex_m::asm::delay(28_000_000);
 
-    // TDC1000 functions
     lcd.clear();
-    write!(lcd, "Functions:").ok();
+    write!(lcd, "Channels:").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "TX/RX, CH1/CH2").ok();
-    defmt::info!("TDC1000: Transmit burst, receive amplifier, channel mux");
+    write!(lcd, "CH1, CH2 mux").ok();
+    defmt::info!("TDC1000: Dual channel multiplexer (downstream/upstream)");
     cortex_m::asm::delay(28_000_000);
 
-    // TDC7200 Note
+    // TDC7200 initialization
+    lcd.clear();
+    write!(lcd, "TDC7200: Init").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Time-to-Digital").ok();
+    defmt::info!("TDC7200: Time-to-digital converter initialized via SPI");
+    cortex_m::asm::delay(28_000_000);
+
+    // TDC7200 capabilities
     lcd.clear();
     write!(lcd, "TDC7200:").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "See code docs").ok();
-    defmt::info!("TDC7200: Time-to-digital converter for picosecond resolution");
+    write!(lcd, "ps resolution").ok();
+    defmt::info!("TDC7200: Picosecond resolution time measurement");
+    cortex_m::asm::delay(28_000_000);
+
+    lcd.clear();
+    write!(lcd, "Modes:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "1,2,3 + Cal").ok();
+    defmt::info!("TDC7200: Measurement modes with continuous calibration");
+    cortex_m::asm::delay(28_000_000);
+
+    // Shared SPI bus
+    lcd.clear();
+    write!(lcd, "SPI2 Bus:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Shared 16MHz").ok();
+    defmt::info!("SPI2: Shared bus for TDC1000, TDC7200, EEPROM @ 16MHz");
     cortex_m::asm::delay(28_000_000);
 
     // Summary
     lcd.clear();
-    write!(lcd, "TDC1000 ready").ok();
+    write!(lcd, "Hardware ready").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "AFE configured").ok();
+    write!(lcd, "TDC1000+7200").ok();
+    defmt::info!("Hardware configuration: Both TDCs initialized and ready");
     cortex_m::asm::delay(28_000_000);
-    
-    defmt::info!("Hardware configuration complete");
 }
 
 /// Example 2: Single TOF Measurement (Conceptual)
