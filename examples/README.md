@@ -34,6 +34,20 @@ This directory contains examples demonstrating various hardware components and f
   - Real load/save/verify operations on EEPROM
   - Includes TDC registers, calibration data, and Modbus settings
 
+- **`ultrasonic_flow_example.rs`** - Ultrasonic flow measurement with TDC1000/TDC7200
+  - Run on hardware: `cargo run --example ultrasonic_flow_example --release`
+  - 5 interactive examples on LCD:
+    1. Hardware configuration (TDC1000 + TDC7200 reset and setup)
+    2. Single time-of-flight (TOF) measurement
+    3. Bidirectional measurement (downstream + upstream)
+    4. Flow velocity calculation with calibration
+    5. Continuous flow monitoring (10 cycles)
+  - Demonstrates transit-time ultrasonic flow measurement
+  - TDC1000: Analog front-end for ultrasonic signal conditioning
+  - TDC7200: High-precision time-to-digital converter
+  - Calculates flow velocity, direction, and volume
+  - Uses calibration data from EEPROM (zero offsets, velocity coefficients)
+
 ### UI Examples
 
 - **`ui_examples.rs`** - Runnable UI examples (host-only)

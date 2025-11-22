@@ -96,21 +96,25 @@ pub struct Tdc7200<SPI, CS> {
     registers: *mut Tdc7200Registers, // Указатель на регистры
 }
 
-// Реализуем методы для драйвера
-impl<SPI, CS, SpiError> Tdc7200<SPI, CS>
-where
-    SPI: Transfer<u8, Error = SpiError> + Write<u8, Error = SpiError>, // Убрали SpiDevice
-    CS: OutputPin,
-    SpiError: From<CS::Error>, // Добавлено ограничение
-{
+// Простой конструктор без trait bounds
+impl<SPI, CS> Tdc7200<SPI, CS> {
     /// Создает новый экземпляр драйвера TDC7200.
     pub fn new(spi: SPI, chip_select: CS) -> Self {
         Tdc7200 {
             spi,
             chip_select,
-            registers: core::ptr::null_mut::<Tdc7200Registers>(), // Замените на фактический адрес при необходимости
+            registers: core::ptr::null_mut::<Tdc7200Registers>(),
         }
     }
+}
+
+// Реализуем методы для драйвера
+impl<SPI, CS, SpiError, PinError> Tdc7200<SPI, CS>
+where
+    SPI: Transfer<u8, Error = SpiError> + Write<u8, Error = SpiError>,
+    CS: OutputPin<Error = PinError>,
+    SpiError: From<PinError>,
+{
 
     /// Инициализирует TDC7200 с заданными настройками.
     pub fn init(
@@ -152,10 +156,10 @@ where
 
     /// Читает регистр TDC7200.
     fn read_register(&mut self, address: u8) -> Result<u8, SpiError> {
-        let buffer = [0u8; 2];
-        self.chip_select.set_low().map_err(SpiError::from)?; // Преобразование ошибки
-        self.spi.transfer(&mut [address | 0x40, 0x00])?;
-        self.chip_select.set_high().map_err(SpiError::from)?; // Преобразование ошибки
+        let mut buffer = [address | 0x40, 0x00];
+        self.chip_select.set_low().map_err(SpiError::from)?;
+        self.spi.transfer(&mut buffer)?;
+        self.chip_select.set_high().map_err(SpiError::from)?;
         Ok(buffer[1])
     }
 
@@ -169,21 +173,20 @@ where
 
     /// Читает 16-битное значение из регистра.
     fn read_u16(&mut self, address: u8) -> Result<u16, SpiError> {
-        let buffer = [0u8; 2]; // Убрали `mut`
-        self.chip_select.set_low()?;
-        self.spi.transfer(&mut [address | 0x40, 0x00, 0x00])?;
-        self.chip_select.set_high()?;
-        Ok(u16::from_be_bytes(buffer))
+        let mut buffer = [address | 0x40, 0x00, 0x00];
+        self.chip_select.set_low().map_err(SpiError::from)?;
+        self.spi.transfer(&mut buffer)?;
+        self.chip_select.set_high().map_err(SpiError::from)?;
+        Ok(u16::from_be_bytes([buffer[1], buffer[2]]))
     }
 
     /// Читает 32-битное значение из регистра.
     fn read_u32(&mut self, address: u8) -> Result<u32, SpiError> {
-        let buffer = [0u8; 4]; // Убрали `mut`
-        self.chip_select.set_low()?;
-        self.spi
-            .transfer(&mut [address | 0x40, 0x00, 0x00, 0x00, 0x00])?;
-        self.chip_select.set_high()?;
-        Ok(u32::from_be_bytes(buffer))
+        let mut buffer = [address | 0x40, 0x00, 0x00, 0x00, 0x00];
+        self.chip_select.set_low().map_err(SpiError::from)?;
+        self.spi.transfer(&mut buffer)?;
+        self.chip_select.set_high().map_err(SpiError::from)?;
+        Ok(u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]))
     }
 
     /// Получает значение Measurement1.
