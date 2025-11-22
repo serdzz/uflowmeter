@@ -1,6 +1,22 @@
 # Examples
 
-This directory contains examples and documentation for various features of the uflowmeter project.
+This directory contains examples demonstrating various hardware components and features of the uFlowmeter project.
+
+## Available Examples
+
+### Hardware Examples
+
+- **`display_example.rs`** - LCD HD44780 display usage
+  - Run on hardware: `cargo run --example display_example --release`
+  - See: `lcd_display_usage.md` for detailed documentation
+
+### UI Examples
+
+- **`ui_examples.md`** - UI module documentation with code examples
+  - History widget navigation
+  - DateTime editing with blink masks
+  - Timestamp calculation
+  - Complete flow diagrams
 
 ## Available Examples
 
