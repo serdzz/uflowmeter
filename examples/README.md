@@ -13,9 +13,16 @@ This directory contains examples demonstrating various hardware components and f
 ### UI Examples
 
 - **`ui_examples.rs`** - Runnable UI examples (host-only)
-  - Run with: `make ui-examples` or `cargo run --example ui_examples`
-  - 6 interactive examples demonstrating blink masks, timestamps, and navigation
+  - Run with: `make ui-examples`
+  - 6 interactive examples with console output
+  - Demonstrates blink masks, timestamps, and navigation
   - Includes unit tests
+
+- **`ui_examples_embedded.rs`** - UI examples for hardware (STM32L151)
+  - Run with: `cargo run --example ui_examples_embedded --release`
+  - Displays on LCD with blink animations
+  - Auto-cycles through 5 examples
+  - Real hardware demonstration
 
 - **`ui_examples.md`** - UI module documentation with code examples
   - History widget navigation
