@@ -45,12 +45,21 @@ fn example_1_blink_masks() {
 
     const SECONDS_MASK: u32 = 0x03; // Bits 0-1 (positions 6-7)
     const MINUTES_MASK: u32 = 0x18; // Bits 3-4 (positions 3-4)
-    const HOURS_MASK: u32 = 0xc0;   // Bits 6-7 (positions 0-1)
+    const HOURS_MASK: u32 = 0xc0; // Bits 6-7 (positions 0-1)
 
     println!("Time Masks:");
-    println!("  Seconds: 0x{:02x} = 0b{:08b} (positions 6-7)", SECONDS_MASK, SECONDS_MASK);
-    println!("  Minutes: 0x{:02x} = 0b{:08b} (positions 3-4)", MINUTES_MASK, MINUTES_MASK);
-    println!("  Hours:   0x{:02x} = 0b{:08b} (positions 0-1)", HOURS_MASK, HOURS_MASK);
+    println!(
+        "  Seconds: 0x{:02x} = 0b{:08b} (positions 6-7)",
+        SECONDS_MASK, SECONDS_MASK
+    );
+    println!(
+        "  Minutes: 0x{:02x} = 0b{:08b} (positions 3-4)",
+        MINUTES_MASK, MINUTES_MASK
+    );
+    println!(
+        "  Hours:   0x{:02x} = 0b{:08b} (positions 0-1)",
+        HOURS_MASK, HOURS_MASK
+    );
 
     // Verify no overlap
     assert_eq!(SECONDS_MASK & MINUTES_MASK, 0, "Masks should not overlap");
@@ -64,14 +73,23 @@ fn example_1_blink_masks() {
     println!("Display:      D  D  /  M  M  /  Y  Y");
     println!("Bit:          7  6  5  4  3  2  1  0\n");
 
-    const DAY_MASK: u32 = 0xc0;    // Bits 6-7 (positions 0-1)
-    const MONTH_MASK: u32 = 0x18;  // Bits 3-4 (positions 3-4)
-    const YEAR_MASK: u32 = 0x03;   // Bits 0-1 (positions 6-7)
+    const DAY_MASK: u32 = 0xc0; // Bits 6-7 (positions 0-1)
+    const MONTH_MASK: u32 = 0x18; // Bits 3-4 (positions 3-4)
+    const YEAR_MASK: u32 = 0x03; // Bits 0-1 (positions 6-7)
 
     println!("Date Masks:");
-    println!("  Day:   0x{:02x} = 0b{:08b} (positions 0-1)", DAY_MASK, DAY_MASK);
-    println!("  Month: 0x{:02x} = 0b{:08b} (positions 3-4)", MONTH_MASK, MONTH_MASK);
-    println!("  Year:  0x{:02x} = 0b{:08b} (positions 6-7)", YEAR_MASK, YEAR_MASK);
+    println!(
+        "  Day:   0x{:02x} = 0b{:08b} (positions 0-1)",
+        DAY_MASK, DAY_MASK
+    );
+    println!(
+        "  Month: 0x{:02x} = 0b{:08b} (positions 3-4)",
+        MONTH_MASK, MONTH_MASK
+    );
+    println!(
+        "  Year:  0x{:02x} = 0b{:08b} (positions 6-7)",
+        YEAR_MASK, YEAR_MASK
+    );
     println!("  ✓ All masks verified\n");
 }
 
@@ -150,10 +168,18 @@ fn example_4_month_navigation() {
     println!("└──────────────────────────────────────────────────────────────┘\n");
 
     let months = [
-        Month::January, Month::February, Month::March,
-        Month::April, Month::May, Month::June,
-        Month::July, Month::August, Month::September,
-        Month::October, Month::November, Month::December,
+        Month::January,
+        Month::February,
+        Month::March,
+        Month::April,
+        Month::May,
+        Month::June,
+        Month::July,
+        Month::August,
+        Month::September,
+        Month::October,
+        Month::November,
+        Month::December,
     ];
 
     println!("Forward navigation:");
@@ -230,9 +256,15 @@ fn example_6_complete_simulation() {
     println!("Initial State:");
     println!("  DateTime: {}", datetime);
     println!("  Field: {}", current_field);
-    println!("  Display: \"{:02}/{:02}/{:02}    {:02}:{:02}:{:02}\"",
-        datetime.day(), datetime.month() as u8, datetime.year() - 2000,
-        datetime.hour(), datetime.minute(), datetime.second());
+    println!(
+        "  Display: \"{:02}/{:02}/{:02}    {:02}:{:02}:{:02}\"",
+        datetime.day(),
+        datetime.month() as u8,
+        datetime.year() - 2000,
+        datetime.hour(),
+        datetime.minute(),
+        datetime.second()
+    );
     println!("  Editable: {}\n", editable);
 
     // User presses Enter
@@ -242,9 +274,14 @@ fn example_6_complete_simulation() {
     editable = true;
     println!("  → Field: {} (mask: 0x03)", current_field);
     println!("  → Editable: {}", editable);
-    println!("  → Display: \"{:02}/{:02}/{:02}    {:02}:{:02}:__\" (blink)", 
-        datetime.day(), datetime.month() as u8, datetime.year() - 2000,
-        datetime.hour(), datetime.minute());
+    println!(
+        "  → Display: \"{:02}/{:02}/{:02}    {:02}:{:02}:__\" (blink)",
+        datetime.day(),
+        datetime.month() as u8,
+        datetime.year() - 2000,
+        datetime.hour(),
+        datetime.minute()
+    );
 
     // User presses Right (increment)
     println!("\n[User Action: Press Right - Increment]");
@@ -257,9 +294,14 @@ fn example_6_complete_simulation() {
     println!("\n[User Action: Press Enter]");
     current_field = "Minutes";
     println!("  → Field: {} (mask: 0x18)", current_field);
-    println!("  → Display: \"{:02}/{:02}/{:02}    {:02}:__:{:02}\" (blink)",
-        datetime.day(), datetime.month() as u8, datetime.year() - 2000,
-        datetime.hour(), datetime.second());
+    println!(
+        "  → Display: \"{:02}/{:02}/{:02}    {:02}:__:{:02}\" (blink)",
+        datetime.day(),
+        datetime.month() as u8,
+        datetime.year() - 2000,
+        datetime.hour(),
+        datetime.second()
+    );
 
     // Increment minutes
     println!("\n[User Action: Press Right - Increment]");
@@ -272,9 +314,14 @@ fn example_6_complete_simulation() {
     println!("\n[User Action: Press Enter]");
     current_field = "Hours";
     println!("  → Field: {} (mask: 0xc0)", current_field);
-    println!("  → Display: \"{:02}/{:02}/{:02}    __:{:02}:{:02}\" (blink)",
-        datetime.day(), datetime.month() as u8, datetime.year() - 2000,
-        datetime.minute(), datetime.second());
+    println!(
+        "  → Display: \"{:02}/{:02}/{:02}    __:{:02}:{:02}\" (blink)",
+        datetime.day(),
+        datetime.month() as u8,
+        datetime.year() - 2000,
+        datetime.minute(),
+        datetime.second()
+    );
 
     // Increment hours
     println!("\n[User Action: Press Right - Increment]");
@@ -288,9 +335,14 @@ fn example_6_complete_simulation() {
     current_field = "Day";
     println!("  → Field: {} (mask: 0xc0)", current_field);
     println!("  → Time edit: OFF, Date edit: ON");
-    println!("  → Display: \"__/{:02}/{:02}    {:02}:{:02}:{:02}\" (blink)",
-        datetime.month() as u8, datetime.year() - 2000,
-        datetime.hour(), datetime.minute(), datetime.second());
+    println!(
+        "  → Display: \"__/{:02}/{:02}    {:02}:{:02}:{:02}\" (blink)",
+        datetime.month() as u8,
+        datetime.year() - 2000,
+        datetime.hour(),
+        datetime.minute(),
+        datetime.second()
+    );
 
     // Increment day
     println!("\n[User Action: Press Right - Increment]");

@@ -165,7 +165,7 @@ fn main() -> ! {
 /// Example 1: Blink Masks
 fn show_blink_masks_example(lcd: &mut Lcd, state: &mut DemoEditState) {
     defmt::info!("Example 1: Blink Masks");
-    
+
     lcd.clear();
     write!(lcd, "Blink Masks").ok();
     cortex_m::asm::delay(16_000_000);
@@ -181,15 +181,15 @@ fn show_blink_masks_example(lcd: &mut Lcd, state: &mut DemoEditState) {
     lcd.set_position(0, 1);
     state.blink_mask = 0x03;
     state.set_time(10, 30, 45);
-    
+
     // Show blink animation
     for _ in 0..3 {
         lcd.set_position(0, 1);
         write!(lcd, "10:30:45").ok();
         cortex_m::asm::delay(8_000_000);
-        
+
         lcd.set_position(0, 1);
-        write!(lcd, "10:30:  ").ok();  // Seconds hidden
+        write!(lcd, "10:30:  ").ok(); // Seconds hidden
         cortex_m::asm::delay(8_000_000);
     }
 
@@ -204,14 +204,14 @@ fn show_blink_masks_example(lcd: &mut Lcd, state: &mut DemoEditState) {
     lcd.set_position(0, 1);
     state.blink_mask = 0xc0;
     state.set_date(15, 1, 24);
-    
+
     for _ in 0..3 {
         lcd.set_position(0, 1);
         write!(lcd, "15/01/24").ok();
         cortex_m::asm::delay(8_000_000);
-        
+
         lcd.set_position(0, 1);
-        write!(lcd, "  /01/24").ok();  // Day hidden
+        write!(lcd, "  /01/24").ok(); // Day hidden
         cortex_m::asm::delay(8_000_000);
     }
 }
@@ -219,7 +219,7 @@ fn show_blink_masks_example(lcd: &mut Lcd, state: &mut DemoEditState) {
 /// Example 2: Timestamp Calculation
 fn show_timestamp_example(lcd: &mut Lcd) {
     defmt::info!("Example 2: Timestamps");
-    
+
     lcd.clear();
     write!(lcd, "Timestamp Calc").ok();
     cortex_m::asm::delay(16_000_000);
@@ -254,7 +254,7 @@ fn show_timestamp_example(lcd: &mut Lcd) {
 /// Example 3: Navigation Flow
 fn show_navigation_example(lcd: &mut Lcd, state: &mut DemoEditState) {
     defmt::info!("Example 3: Navigation");
-    
+
     lcd.clear();
     write!(lcd, "Navigation Flow").ok();
     cortex_m::asm::delay(16_000_000);
@@ -274,7 +274,7 @@ fn show_navigation_example(lcd: &mut Lcd, state: &mut DemoEditState) {
         write!(lcd, "{}", name).ok();
         lcd.set_position(0, 1);
         write!(lcd, "{}", desc).ok();
-        
+
         state.blink_mask = *mask;
         cortex_m::asm::delay(20_000_000);
     }
@@ -283,7 +283,7 @@ fn show_navigation_example(lcd: &mut Lcd, state: &mut DemoEditState) {
 /// Example 4: Month Navigation
 fn show_month_example(lcd: &mut Lcd) {
     defmt::info!("Example 4: Month Nav");
-    
+
     lcd.clear();
     write!(lcd, "Month Wrap").ok();
     cortex_m::asm::delay(16_000_000);
@@ -305,7 +305,7 @@ fn show_month_example(lcd: &mut Lcd) {
 /// Example 5: Complete Simulation
 fn show_complete_example(lcd: &mut Lcd, state: &mut DemoEditState) {
     defmt::info!("Example 5: Complete");
-    
+
     lcd.clear();
     write!(lcd, "Full Demo").ok();
     cortex_m::asm::delay(16_000_000);
@@ -327,7 +327,7 @@ fn show_complete_example(lcd: &mut Lcd, state: &mut DemoEditState) {
     lcd.set_position(0, 1);
     state.set_time(dt.hour(), dt.minute(), dt.second());
     state.blink_mask = 0x03;
-    
+
     // Blink animation
     for _ in 0..2 {
         lcd.set_position(0, 1);

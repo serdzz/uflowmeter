@@ -20,6 +20,18 @@ This directory contains examples demonstrating various hardware components and f
   - Demonstrates GpioPower and Power modules
   - Optional `--features low_power` for full power management
 
+- **`options_example.rs`** - Configuration management with EEPROM
+  - Run on hardware: `cargo run --example options_example --release`
+  - 6 interactive examples on LCD:
+    1. Configuration structure overview (~100 bytes)
+    2. CRC-16/CCITT validation process
+    3. Dual-page redundancy (primary 0x0000 + backup 0x0400)
+    4. Configuration fields (device, calibration, communication)
+    5. Usage statistics (uptime, totals, hour/day/month)
+    6. Complete save/load cycle
+  - Demonstrates Options module with 25LC1024 EEPROM
+  - Includes TDC registers, calibration data, and Modbus settings
+
 ### UI Examples
 
 - **`ui_examples.rs`** - Runnable UI examples (host-only)

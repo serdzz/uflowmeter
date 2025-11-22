@@ -57,8 +57,8 @@ use stm32l1xx_hal::{prelude::*, rcc::Config, stm32};
 
 use core::fmt::Write;
 use uflowmeter::hardware::display::Lcd;
-use uflowmeter::hardware::hd44780::LcdHardware;
 use uflowmeter::hardware::gpio_power::GpioPower;
+use uflowmeter::hardware::hd44780::LcdHardware;
 
 // Mock Power structure for example (real one requires RTIC context)
 struct SimplePower {
@@ -95,16 +95,16 @@ impl SimplePower {
         if !self.sleep {
             self.sleep = true;
             defmt::info!("Power: Entering sleep mode");
-            
+
             // Save GPIO state and configure for low power
             self.gpio_power.down();
-            
+
             // In real implementation with 'low_power' feature:
             // - Configure PWR registers
             // - Set ultra-low power mode
             // - Disable voltage detector
             // - Enter stop mode
-            
+
             defmt::info!("Power: Sleep mode active (WFI)");
         }
     }
@@ -114,16 +114,16 @@ impl SimplePower {
         if self.sleep {
             self.sleep = false;
             defmt::info!("Power: Exiting sleep mode");
-            
+
             // Restore GPIO state
             self.gpio_power.up();
-            
+
             // In real implementation with 'low_power' feature:
             // - Clear sleep deep flag
             // - Restore clocks (HSE, HSI)
             // - Reconfigure MCO
             // - Update RCC
-            
+
             defmt::info!("Power: Normal mode restored");
         }
         was_sleeping
@@ -137,16 +137,14 @@ fn main() -> ! {
     // Initialize hardware
     let dp = stm32::Peripherals::take().unwrap();
     let cp = cortex_m::Peripherals::take().unwrap();
-    
+
     let _rcc = dp.RCC.freeze(Config::pll(
         stm32l1xx_hal::rcc::PLLSource::HSE(8.mhz()),
         stm32l1xx_hal::rcc::PLLMul::Mul6,
         stm32l1xx_hal::rcc::PLLDiv::Div3,
     ));
 
-    let pins = uflowmeter::hardware::Pins::new(
-        dp.GPIOA, dp.GPIOB, dp.GPIOC, dp.GPIOD, dp.GPIOH
-    );
+    let pins = uflowmeter::hardware::Pins::new(dp.GPIOA, dp.GPIOB, dp.GPIOC, dp.GPIOD, dp.GPIOH);
 
     // Initialize LCD for status display
     let hd44780 = LcdHardware::new(
@@ -199,14 +197,14 @@ fn main() -> ! {
     loop {
         cortex_m::asm::delay(16_000_000); // 1 second
         counter += 1;
-        
+
         // Simulate activity every 10 seconds
         if counter % 10 == 0 {
             power.active(counter * 1000);
             lcd.clear();
             write!(lcd, "Active: {}s", counter).ok();
         }
-        
+
         // Check if should sleep
         if !power.is_active(counter * 1000) && !power.sleep {
             lcd.clear();
@@ -221,7 +219,7 @@ fn main() -> ! {
 /// Example 1: GPIO State Saving
 fn example_1_gpio_state_saving(lcd: &mut Lcd) {
     defmt::info!("Example 1: GPIO State Saving");
-    
+
     lcd.clear();
     write!(lcd, "Ex1: GPIO Save").ok();
     cortex_m::asm::delay(24_000_000);
@@ -244,23 +242,23 @@ fn example_1_gpio_state_saving(lcd: &mut Lcd) {
     lcd.set_position(0, 1);
     write!(lcd, "- MODE").ok();
     cortex_m::asm::delay(16_000_000);
-    
+
     lcd.set_position(0, 1);
     write!(lcd, "- OUTPUT TYPE").ok();
     cortex_m::asm::delay(16_000_000);
-    
+
     lcd.set_position(0, 1);
     write!(lcd, "- SPEED      ").ok();
     cortex_m::asm::delay(16_000_000);
-    
+
     lcd.set_position(0, 1);
     write!(lcd, "- ALT FUNC   ").ok();
     cortex_m::asm::delay(16_000_000);
-    
+
     lcd.set_position(0, 1);
     write!(lcd, "- PULL UP/DN ").ok();
     cortex_m::asm::delay(16_000_000);
-    
+
     lcd.set_position(0, 1);
     write!(lcd, "- OUTPUT DATA").ok();
     cortex_m::asm::delay(16_000_000);
@@ -273,13 +271,9 @@ fn example_1_gpio_state_saving(lcd: &mut Lcd) {
 }
 
 /// Example 2: Activity Timeout
-fn example_2_activity_timeout(
-    lcd: &mut Lcd, 
-    power: &mut SimplePower,
-    _cp: &cortex_m::Peripherals
-) {
+fn example_2_activity_timeout(lcd: &mut Lcd, power: &mut SimplePower, _cp: &cortex_m::Peripherals) {
     defmt::info!("Example 2: Activity Timeout");
-    
+
     lcd.clear();
     write!(lcd, "Ex2: Timeout").ok();
     cortex_m::asm::delay(24_000_000);
@@ -310,11 +304,15 @@ fn example_2_activity_timeout(
             lcd.set_position(0, 1);
             write!(lcd, "Ready to sleep").ok();
         }
-        
+
         cortex_m::asm::delay(16_000_000); // ~1 second
-        
-        defmt::info!("Time: {}s, Active: {}, Remaining: {}s", 
-            i, power.is_active(current_time), remaining);
+
+        defmt::info!(
+            "Time: {}s, Active: {}, Remaining: {}s",
+            i,
+            power.is_active(current_time),
+            remaining
+        );
     }
 
     cortex_m::asm::delay(16_000_000);
@@ -323,7 +321,7 @@ fn example_2_activity_timeout(
 /// Example 3: Sleep/Wake Cycle
 fn example_3_sleep_wake_cycle(lcd: &mut Lcd, power: &mut SimplePower) {
     defmt::info!("Example 3: Sleep/Wake Cycle");
-    
+
     lcd.clear();
     write!(lcd, "Ex3: Sleep/Wake").ok();
     cortex_m::asm::delay(24_000_000);
@@ -345,14 +343,14 @@ fn example_3_sleep_wake_cycle(lcd: &mut Lcd, power: &mut SimplePower) {
     defmt::info!("Entering sleep mode...");
     lcd.led_off();
     power.enter_sleep();
-    
+
     // Simulate sleep time
     cortex_m::asm::delay(48_000_000); // 3 seconds
-    
+
     // Wake up
     defmt::info!("Waking up...");
     let was_sleeping = power.exit_sleep();
-    
+
     lcd.led_on();
     lcd.clear();
     if was_sleeping {
@@ -374,7 +372,7 @@ fn example_3_sleep_wake_cycle(lcd: &mut Lcd, power: &mut SimplePower) {
 /// Example 4: Power Consumption Info
 fn example_4_power_comparison(lcd: &mut Lcd) {
     defmt::info!("Example 4: Power Consumption Comparison");
-    
+
     lcd.clear();
     write!(lcd, "Ex4: Power Info").ok();
     cortex_m::asm::delay(24_000_000);
