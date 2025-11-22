@@ -92,10 +92,28 @@
 //! cargo run --example ultrasonic_flow_example --release
 //! ```
 //!
-//! ## Note
-//! This example demonstrates the complete ultrasonic flow measurement workflow.
-//! TDC7200 methods may require trait bound adjustments for SharedBus usage.
-//! The example focuses on showing the measurement sequence and calculations.
+//! ## Implementation Note
+//! 
+//! ### SharedBus Limitation
+//! This example uses `shared_bus_rtic` to share SPI2 between TDC1000, TDC7200, and EEPROM.
+//! However, TDC driver methods require specific trait bounds (all GPIO pins must have
+//! the same error type) that are not satisfied by SharedBus wrappers.
+//! 
+//! ### Real-World Usage
+//! In production code (see `src/main.rs`), TDCs work correctly when:
+//! - Using dedicated SPI instances, OR
+//! - Using `shared_bus_rtic::new!` with proper error type handling, OR
+//! - Implementing custom bus sharing that preserves pin error types
+//! 
+//! ### This Example
+//! Focuses on demonstrating:
+//! - Hardware initialization sequence
+//! - Measurement principles and formulas
+//! - Flow calculation algorithms with calibration
+//! - Transit-time measurement workflow
+//! 
+//! TDC instances are created to show proper initialization, while actual
+//! register operations are demonstrated conceptually.
 
 #![no_std]
 #![no_main]
