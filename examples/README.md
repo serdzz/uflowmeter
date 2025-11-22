@@ -12,6 +12,11 @@ This directory contains examples demonstrating various hardware components and f
 
 ### UI Examples
 
+- **`ui_examples.rs`** - Runnable UI examples (host-only)
+  - Run with: `make ui-examples` or `cargo run --example ui_examples`
+  - 6 interactive examples demonstrating blink masks, timestamps, and navigation
+  - Includes unit tests
+
 - **`ui_examples.md`** - UI module documentation with code examples
   - History widget navigation
   - DateTime editing with blink masks
