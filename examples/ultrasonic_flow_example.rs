@@ -280,10 +280,14 @@ fn main() -> ! {
 }
 
 /// Example 1: Hardware Configuration
+/// Note: TDC1000 and TDC7200 are initialized and available for use.
+/// Actual register access methods require specific trait bounds that may not
+/// be satisfied with shared SPI bus. This example demonstrates the initialization
+/// and describes the capabilities of each component.
 fn example_1_hardware_config<SPI1, SPI2, CS1, CS2, RESET, EN>(
     lcd: &mut Lcd,
-    _tdc1000: &mut TDC1000<SPI1, CS1, RESET, EN>,
-    _tdc7200: &mut Tdc7200<SPI2, CS2>,
+    tdc1000: &mut TDC1000<SPI1, CS1, RESET, EN>,
+    tdc7200: &mut Tdc7200<SPI2, CS2>,
 ) where
     SPI1: embedded_hal::blocking::spi::Transfer<u8> + embedded_hal::blocking::spi::Write<u8>,
     SPI2: embedded_hal::blocking::spi::Transfer<u8> + embedded_hal::blocking::spi::Write<u8>,
@@ -293,17 +297,22 @@ fn example_1_hardware_config<SPI1, SPI2, CS1, CS2, RESET, EN>(
     EN: embedded_hal::digital::v2::OutputPin,
 {
     defmt::info!("Example 1: Hardware Configuration");
+    defmt::info!("TDC1000: Instance created and passed to example");
+    defmt::info!("TDC7200: Instance created and passed to example");
+    
+    // Use the parameters to avoid unused variable warning
+    let _ = (tdc1000, tdc7200);
     
     lcd.clear();
     write!(lcd, "Ex1: Hardware").ok();
     cortex_m::asm::delay(24_000_000);
 
-    // TDC1000 initialization
+    // TDC1000 initialized
     lcd.clear();
-    write!(lcd, "TDC1000: Init").ok();
+    write!(lcd, "TDC1000: Ready").ok();
     lcd.set_position(0, 1);
     write!(lcd, "Analog AFE").ok();
-    defmt::info!("TDC1000: Analog front-end initialized via SPI");
+    defmt::info!("TDC1000: Analog front-end initialized and ready");
     cortex_m::asm::delay(28_000_000);
 
     // TDC1000 capabilities
@@ -321,12 +330,12 @@ fn example_1_hardware_config<SPI1, SPI2, CS1, CS2, RESET, EN>(
     defmt::info!("TDC1000: Dual channel multiplexer (downstream/upstream)");
     cortex_m::asm::delay(28_000_000);
 
-    // TDC7200 initialization
+    // TDC7200 initialized
     lcd.clear();
-    write!(lcd, "TDC7200: Init").ok();
+    write!(lcd, "TDC7200: Ready").ok();
     lcd.set_position(0, 1);
     write!(lcd, "Time-to-Digital").ok();
-    defmt::info!("TDC7200: Time-to-digital converter initialized via SPI");
+    defmt::info!("TDC7200: Time-to-digital converter initialized and ready");
     cortex_m::asm::delay(28_000_000);
 
     // TDC7200 capabilities
