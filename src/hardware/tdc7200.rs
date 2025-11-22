@@ -1,10 +1,9 @@
 #![allow(dead_code)]
 
 use bitflags::bitflags;
-use core::ops::DerefMut;
-use embedded_hal::blocking::spi::{self, Transfer, Write};
+use embedded_hal::blocking::spi::{Transfer, Write};
 use embedded_hal::digital::v2::OutputPin;
-use volatile_register::{RO as RORegister, RW as RWRegister, WO as WORegister}; // Закомментировано, требует добавления зависимости
+use volatile_register::{RO as RORegister, RW as RWRegister}; // Закомментировано, требует добавления зависимости
 
 // Чтобы использовать volatile_register, добавьте следующее в ваш Cargo.toml:
 // [dependencies]
@@ -115,7 +114,6 @@ where
     CS: OutputPin<Error = PinError>,
     SpiError: From<PinError>,
 {
-
     /// Инициализирует TDC7200 с заданными настройками.
     pub fn init(
         &mut self,
@@ -186,7 +184,9 @@ where
         self.chip_select.set_low().map_err(SpiError::from)?;
         self.spi.transfer(&mut buffer)?;
         self.chip_select.set_high().map_err(SpiError::from)?;
-        Ok(u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]))
+        Ok(u32::from_be_bytes([
+            buffer[1], buffer[2], buffer[3], buffer[4],
+        ]))
     }
 
     /// Получает значение Measurement1.

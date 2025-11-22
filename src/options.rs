@@ -7,8 +7,6 @@ use modular_bitfield::prelude::*;
 
 #[cfg(not(test))]
 use super::hal;
-#[cfg(not(test))]
-use defmt;
 
 #[bitfield]
 #[derive(Debug, Clone, Copy)]
@@ -63,14 +61,16 @@ impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>> for Error
     }
 }
 
+impl Default for Options {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Options {
     const SIZE: usize = 1024;
     const OFFSET_PRIMARY: u32 = 0;
     const OFFSET_SECONDARY: u32 = 1024;
-
-    pub fn default() -> Self {
-        Self::new()
-    }
 
     pub fn load<S, E>(storage: &mut S) -> Result<Self, Error<E>>
     where
