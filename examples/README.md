@@ -10,6 +10,16 @@ This directory contains examples demonstrating various hardware components and f
   - Run on hardware: `cargo run --example display_example --release`
   - See: `lcd_display_usage.md` for detailed documentation
 
+- **`power_management_example.rs`** - Power management and GPIO state saving
+  - Run on hardware: `cargo run --example power_management_example --release`
+  - 4 interactive examples on LCD:
+    1. GPIO state saving (MODER, OTYPER, OSPEEDR, etc.)
+    2. Activity timeout with countdown (15 second default)
+    3. Sleep/Wake cycle with GPIO restoration
+    4. Power consumption comparison (Run/Sleep/Stop/Standby modes)
+  - Demonstrates GpioPower and Power modules
+  - Optional `--features low_power` for full power management
+
 ### UI Examples
 
 - **`ui_examples.rs`** - Runnable UI examples (host-only)
