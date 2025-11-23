@@ -162,11 +162,16 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
                     self.write_value(storage, val, time)?;
                     self.write_service_data(storage)?;
                 } else {
+                    // Fill gaps with zero values but correct timestamps
                     while delta > ELEMENT_SIZE {
-                        self.write_value(storage, 0, 0)?;
+                        let gap_time = self.data.time_of_last() + ELEMENT_SIZE as u32;
+                        self.write_value(storage, 0, gap_time)?;
+                        self.write_service_data(storage)?;
                         delta -= ELEMENT_SIZE;
-                        self.advance_offset_by_one();
                     }
+                    self.write_value(storage, val, time)?;
+                    self.write_service_data(storage)?;
+                    return Ok(());
                 }
             } else if delta.abs() / ELEMENT_SIZE >= self.data.size() as i32 {
                 self.data.set_size(0);
@@ -174,20 +179,23 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
                 self.write_value(storage, val, time)?;
                 self.write_service_data(storage)?;
             } else {
-                delta = delta.abs() + ELEMENT_SIZE;
-                while delta != 0 {
+                // Handle negative delta (going back in time)
+                delta = delta.abs();
+                while delta >= ELEMENT_SIZE {
                     storage.write(
                         self.offset(self.data.offset_of_last() as usize),
                         &0_i32.to_le_bytes(),
                     )?;
-                    if self.data.offset_of_last() == self.data.size() {
+                    if self.data.offset_of_last() == self.data.size() - 1 {
                         let size = self.data.size() - 1;
                         self.data.set_size(size);
                     }
-                    let tmp = self.data.offset_of_last() - 1;
-                    self.data.set_offset_of_last(tmp);
-                    if self.data.offset_of_last() > SIZE as u32 {
-                        self.data.set_offset_of_last(SIZE as u32);
+                    // Handle underflow correctly
+                    if self.data.offset_of_last() == 0 {
+                        self.data.set_offset_of_last(SIZE as u32 - 1);
+                    } else {
+                        let tmp = self.data.offset_of_last() - 1;
+                        self.data.set_offset_of_last(tmp);
                     }
                     delta -= ELEMENT_SIZE;
                 }

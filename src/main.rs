@@ -451,49 +451,55 @@ mod app {
                 });
                 if datetime.time().second() < 5 {
                     let timestamp = datetime.as_utc().unix_timestamp();
-                    if datetime.time().minute() == 0 {
+                if datetime.time().minute() == 0 {
+                    if let Err(_e) =
+                        (hour_history, &mut storage).lock(|hour_history, storage| {
+                            hour_history.add(storage, hour_flow as i32, timestamp as u32)
+                        })
+                    {
+                        defmt::error!("Failed to log hour flow:");
+                    } else {
+                        defmt::info!("Hour flow logged: {} at {}", hour_flow, timestamp);
+                        // Reset hour accumulator after successful save
+                        app.lock(|app| app.hour_flow = 0.0);
+                    }
+
+                    if datetime.time().hour() == 0 {
                         if let Err(_e) =
-                            (hour_history, &mut storage).lock(|hour_history, storage| {
-                                hour_history.add(storage, hour_flow as i32, timestamp as u32)
+                            (day_history, &mut storage).lock(|day_history, storage| {
+                                day_history.add(storage, day_flow as i32, timestamp as u32)
                             })
                         {
-                            defmt::error!("Failed to log hour flow:");
+                            defmt::error!("Failed to log day flow:");
                         } else {
-                            defmt::info!("Hour flow logged: {} at {}", hour_flow, timestamp);
+                            defmt::info!("Day flow logged: {} at {}", day_flow, timestamp);
+                            // Reset day accumulator after successful save
+                            app.lock(|app| app.day_flow = 0.0);
                         }
 
-                        if datetime.time().hour() == 0 {
+                        if datetime.date().day() == 1 {
                             if let Err(_e) =
-                                (day_history, &mut storage).lock(|day_history, storage| {
-                                    day_history.add(storage, day_flow as i32, timestamp as u32)
+                                (month_history, &mut storage).lock(|month_history, storage| {
+                                    month_history.add(
+                                        storage,
+                                        month_flow as i32,
+                                        timestamp as u32,
+                                    )
                                 })
                             {
-                                defmt::error!("Failed to log day flow:");
+                                defmt::error!("Failed to log month flow:");
                             } else {
-                                defmt::info!("Day flow logged: {} at {}", day_flow, timestamp);
-                            }
-
-                            if datetime.date().day() == 1 {
-                                if let Err(_e) =
-                                    (month_history, &mut storage).lock(|month_history, storage| {
-                                        month_history.add(
-                                            storage,
-                                            month_flow as i32,
-                                            timestamp as u32,
-                                        )
-                                    })
-                                {
-                                    defmt::error!("Failed to log month flow:");
-                                } else {
-                                    defmt::info!(
-                                        "Month flow logged: {} at {}",
-                                        month_flow,
-                                        timestamp
-                                    );
-                                }
+                                defmt::info!(
+                                    "Month flow logged: {} at {}",
+                                    month_flow,
+                                    timestamp
+                                );
+                                // Reset month accumulator after successful save
+                                app.lock(|app| app.month_flow = 0.0);
                             }
                         }
                     }
+                }
                 }
                 app_request::spawn_after(25_u64.millis(), AppRequest::DeepSleep).ok();
             }
