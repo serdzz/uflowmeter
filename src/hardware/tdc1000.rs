@@ -198,16 +198,16 @@ macro_rules! register_map {
 }
 
 register_map!(
-    Config0 : 0x00, RW,
-    // Config1: 0x01, RW,
-    // Config2: 0x02, RW,
-    // Config3: 0x03, RW,
-    // Config4: 0x04, RW,
-    // TOF1: 0x05, RW,
-    // TOF0: 0x06, RW,
-    // ErrorFlags: 0x07, RW,
-    // Timeout: 0x08, RW,
-    // ClockRate: 0x09, RW,
+    Config0: 0x00, RW,      // Device Configuration Register 0
+    Config1: 0x01, RW,      // Device Configuration Register 1  
+    Config2: 0x02, RW,      // Device Configuration Register 2
+    Config3: 0x03, RW,      // Device Configuration Register 3
+    Config4: 0x04, RW,      // Device Configuration Register 4
+    TOF1: 0x05, RW,         // Time of Flight Register 1
+    TOF0: 0x06, RW,         // Time of Flight Register 0
+    ErrorFlags: 0x07, RW,   // Error Flags Register
+    Timeout: 0x08, RW,      // Timeout Register
+    ClockRate: 0x09, RW,    // Clock Rate Register
 );
 
 #[derive(Specifier, Debug, Clone, Copy, Eq, PartialEq)]
@@ -223,15 +223,176 @@ pub enum FrequencyDividerForTx {
     Div256,
 }
 
+// ============================================================================
+// Register Structures with Bitfield Definitions
+// ============================================================================
+
 #[bitfield]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Config0 {
+    /// TX frequency divider (bits 0-2)
     pub tx_freq_div: FrequencyDividerForTx,
+    /// Number of TX pulses (bits 3-7)
     pub num_tx: B5,
 }
 
 impl Default for Config0 {
     fn default() -> Self {
         Self { bytes: [0x45] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Config1 {
+    /// Measurement mode selection (bit 0)
+    pub measurement_mode: bool,
+    /// Enable continuous mode (bit 1)
+    pub continuous_mode: bool,
+    /// Channel selection (bit 2)
+    pub channel_select: bool,
+    /// Reserved (bits 3-7)
+    #[skip]
+    __: B5,
+}
+
+impl Default for Config1 {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Config2 {
+    /// Transmit pulse mask (bits 0-4)
+    pub tx_pulse_mask: B5,
+    /// Clock selection (bits 5-6)
+    pub clock_select: B2,
+    /// Reserved (bit 7)
+    #[skip]
+    __: B1,
+}
+
+impl Default for Config2 {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Config3 {
+    /// Transducer frequency selection (bits 0-2)
+    pub transducer_freq: B3,
+    /// Amplifier gain (bits 3-5)
+    pub amplifier_gain: B3,
+    /// Reserved (bits 6-7)
+    #[skip]
+    __: B2,
+}
+
+impl Default for Config3 {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Config4 {
+    /// Time-to-digital conversion resolution (bits 0-2)
+    pub tdc_resolution: B3,
+    /// Measurement range (bits 3-4)
+    pub measurement_range: B2,
+    /// Enable auto-calibration (bit 5)
+    pub auto_calibration: bool,
+    /// Reserved (bits 6-7)
+    #[skip]
+    __: B2,
+}
+
+impl Default for Config4 {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TOF1 {
+    /// Time of Flight high byte (bits 0-7)
+    pub tof_high: u8,
+}
+
+impl Default for TOF1 {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TOF0 {
+    /// Time of Flight low byte (bits 0-7)
+    pub tof_low: u8,
+}
+
+impl Default for TOF0 {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ErrorFlags {
+    /// Time of flight error flag (bit 0)
+    pub tof_error: bool,
+    /// Calibration error flag (bit 1)
+    pub cal_error: bool,
+    /// Range overflow flag (bit 2)
+    pub range_overflow: bool,
+    /// ADC overflow flag (bit 3)
+    pub adc_overflow: bool,
+    /// Reserved (bits 4-7)
+    #[skip]
+    __: B4,
+}
+
+impl Default for ErrorFlags {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Timeout {
+    /// Timeout value in clock cycles (bits 0-7)
+    pub timeout_value: u8,
+}
+
+impl Default for Timeout {
+    fn default() -> Self {
+        Self { bytes: [0xFF] }
+    }
+}
+
+#[bitfield]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ClockRate {
+    /// Clock divider ratio (bits 0-3)
+    pub clock_divider: B4,
+    /// Clock enable (bit 4)
+    pub clock_enable: bool,
+    /// Reserved (bits 5-7)
+    #[skip]
+    __: B3,
+}
+
+impl Default for ClockRate {
+    fn default() -> Self {
+        Self { bytes: [0x00] }
     }
 }
