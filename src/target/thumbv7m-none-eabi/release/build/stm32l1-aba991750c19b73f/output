@@ -1,3 +1,0 @@
-cargo:rustc-link-search=/Users/sergejlepin/work/sandbox/uflowmeter/target/thumbv7m-none-eabi/release/build/stm32l1-aba991750c19b73f/out
-cargo:rerun-if-changed=src/stm32l151/device.x
-cargo:rerun-if-changed=build.rs

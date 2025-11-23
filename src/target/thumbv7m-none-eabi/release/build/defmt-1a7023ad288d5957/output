@@ -1,3 +1,0 @@
-cargo:rustc-link-search=/Users/sergejlepin/work/sandbox/uflowmeter/target/thumbv7m-none-eabi/release/build/defmt-1a7023ad288d5957/out
-cargo:rustc-check-cfg=cfg(c_variadic)
-cargo:rustc-check-cfg=cfg(no_cas)

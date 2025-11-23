@@ -1,4 +1,0 @@
-cargo:rustc-link-lib=static=cortex-m
-cargo:rustc-link-search=/Users/sergejlepin/work/sandbox/uflowmeter/target/thumbv7m-none-eabi/release/build/cortex-m-56ee3cd18fbc7f5c/out
-cargo:rustc-cfg=cortex_m
-cargo:rustc-cfg=armv7m
