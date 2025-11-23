@@ -17,6 +17,7 @@ extern crate stm32l1xx_hal as hal;
 pub mod apps;
 pub mod gui;
 pub mod history_lib;
+pub mod measurement;
 pub mod ui;
 
 pub use apps::{Actions, App};
