@@ -199,7 +199,7 @@ macro_rules! register_map {
 
 register_map!(
     Config0: 0x00, RW,      // Device Configuration Register 0
-    Config1: 0x01, RW,      // Device Configuration Register 1  
+    Config1: 0x01, RW,      // Device Configuration Register 1
     Config2: 0x02, RW,      // Device Configuration Register 2
     Config3: 0x03, RW,      // Device Configuration Register 3
     Config4: 0x04, RW,      // Device Configuration Register 4
@@ -381,7 +381,7 @@ impl Default for Config0 {
 }
 
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct Config1 {
     /// Measurement mode selection (bit 0)
     pub measurement_mode: bool,
@@ -394,14 +394,8 @@ pub struct Config1 {
     __: B5,
 }
 
-impl Default for Config1 {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
-}
-
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct Config2 {
     /// Transmit pulse mask (bits 0-4)
     pub tx_pulse_mask: B5,
@@ -412,14 +406,8 @@ pub struct Config2 {
     __: B1,
 }
 
-impl Default for Config2 {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
-}
-
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct Config3 {
     /// Transducer frequency selection (bits 0-2)
     pub transducer_freq: TransducerFrequency,
@@ -430,14 +418,8 @@ pub struct Config3 {
     __: B2,
 }
 
-impl Default for Config3 {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
-}
-
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct Config4 {
     /// Time-to-digital conversion resolution (bits 0-2)
     pub tdc_resolution: TDCResolution,
@@ -450,40 +432,22 @@ pub struct Config4 {
     __: B2,
 }
 
-impl Default for Config4 {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
-}
-
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct TOF1 {
     /// Time of Flight high byte (bits 0-7)
     pub tof_high: u8,
 }
 
-impl Default for TOF1 {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
-}
-
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct TOF0 {
     /// Time of Flight low byte (bits 0-7)
     pub tof_low: u8,
 }
 
-impl Default for TOF0 {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
-}
-
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct ErrorFlags {
     /// Time of flight error flag (bit 0)
     pub tof_error: bool,
@@ -496,12 +460,6 @@ pub struct ErrorFlags {
     /// Reserved (bits 4-7)
     #[skip]
     __: B4,
-}
-
-impl Default for ErrorFlags {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
 }
 
 #[bitfield]
@@ -518,7 +476,7 @@ impl Default for Timeout {
 }
 
 #[bitfield]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct ClockRate {
     /// Clock divider ratio (bits 0-3)
     pub clock_divider: ClockDivider,
@@ -527,10 +485,4 @@ pub struct ClockRate {
     /// Reserved (bits 5-7)
     #[skip]
     __: B3,
-}
-
-impl Default for ClockRate {
-    fn default() -> Self {
-        Self { bytes: [0x00] }
-    }
 }

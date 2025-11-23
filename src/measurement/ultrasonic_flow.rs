@@ -84,8 +84,7 @@ pub struct UltrasonicFlowMeter<SPI, CS, RESET, EN> {
     calibration_factor: f32,
 }
 
-impl<SPI, CS, RESET, EN, SpiError, PinError>
-    UltrasonicFlowMeter<SPI, CS, RESET, EN>
+impl<SPI, CS, RESET, EN, SpiError, PinError> UltrasonicFlowMeter<SPI, CS, RESET, EN>
 where
     SPI: Transfer<u8, Error = SpiError> + Write<u8, Error = SpiError>,
     CS: OutputPin<Error = PinError>,
@@ -93,13 +92,7 @@ where
     EN: OutputPin<Error = PinError>,
 {
     /// Create new ultrasonic flow meter instance
-    pub fn new(
-        config: FlowMeterConfig,
-        spi: SPI,
-        cs: CS,
-        reset: RESET,
-        en: EN,
-    ) -> Self {
+    pub fn new(config: FlowMeterConfig, spi: SPI, cs: CS, reset: RESET, en: EN) -> Self {
         UltrasonicFlowMeter {
             config,
             spi,
@@ -163,10 +156,7 @@ where
     }
 
     /// Perform dual-path flow measurement
-    pub fn measure_flow(
-        &mut self,
-        temperature_c: f32,
-    ) -> Result<FlowResult, &'static str> {
+    pub fn measure_flow(&mut self, temperature_c: f32) -> Result<FlowResult, &'static str> {
         // Measurement 1: Downstream (with flow)
         self.transmit_pulse()?;
         self.delay_us(200);
@@ -233,7 +223,7 @@ where
 
         // Calculate volumetric flow rate
         // Q = velocity * Area = v * π * (d/2)^2
-        const PI: f32 = 3.14159265359;
+        use core::f32::consts::PI;
         let pipe_radius_m = self.config.pipe_diameter_mm / 2.0 / 1000.0;
         let pipe_area_m2 = PI * pipe_radius_m * pipe_radius_m;
         let flow_rate_m3_s = flow_velocity_mps * pipe_area_m2;
@@ -276,11 +266,10 @@ where
 
     /// Evaluate signal quality (0-255)
     fn evaluate_signal_quality(&self, time_down: u32, time_up: u32) -> u8 {
-        let min_time = 10000u32;   // 10 µs
+        let min_time = 10000u32; // 10 µs
         let max_time = 1000000u32; // 1000 µs
 
-        if time_down < min_time || time_down > max_time
-            || time_up < min_time || time_up > max_time
+        if time_down < min_time || time_down > max_time || time_up < min_time || time_up > max_time
         {
             return 0; // Invalid signal
         }
@@ -353,14 +342,20 @@ pub struct CalibrationData {
     pub count: usize,
 }
 
-impl CalibrationData {
-    /// Create new calibration data
-    pub fn new() -> Self {
+impl Default for CalibrationData {
+    fn default() -> Self {
         Self {
             reference_flows: [0.0; 4],
             measured_deltas: [0; 4],
             count: 0,
         }
+    }
+}
+
+impl CalibrationData {
+    /// Create new calibration data
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Add calibration point
@@ -454,7 +449,7 @@ pub mod examples {
         FlowMeterConfig {
             distance_mm: 100.0,
             pipe_diameter_mm: 50.0,
-            acoustic_velocity: 1480.0,  // m/s in water @ 20°C
+            acoustic_velocity: 1480.0, // m/s in water @ 20°C
             temp_coefficient: 0.002,
             ref_temperature: 20.0,
         }
@@ -469,7 +464,7 @@ pub mod examples {
     /// - Expected accuracy: ±1-2%
     pub fn tdc7200_water_meter() -> FlowMeterConfig {
         FlowMeterConfig {
-            distance_mm: 150.0,         // Longer section for better accuracy
+            distance_mm: 150.0, // Longer section for better accuracy
             pipe_diameter_mm: 50.0,
             acoustic_velocity: 1480.0,
             temp_coefficient: 0.002,
@@ -504,7 +499,7 @@ pub mod examples {
     pub fn tdc7200_hot_water_meter() -> FlowMeterConfig {
         FlowMeterConfig {
             distance_mm: 100.0,
-            pipe_diameter_mm: 32.0,    // Smaller diameter for higher flow speeds
+            pipe_diameter_mm: 32.0, // Smaller diameter for higher flow speeds
             acoustic_velocity: 1497.0, // 80°C water
             temp_coefficient: 0.002,
             ref_temperature: 80.0,
@@ -519,7 +514,7 @@ pub mod examples {
     /// - Requires closer transducer spacing
     pub fn tdc1000_small_pipe() -> FlowMeterConfig {
         FlowMeterConfig {
-            distance_mm: 30.0,          // 30mm transducer distance
+            distance_mm: 30.0, // 30mm transducer distance
             pipe_diameter_mm: 25.0,
             acoustic_velocity: 1480.0,
             temp_coefficient: 0.002,
@@ -553,10 +548,10 @@ pub mod examples {
     pub fn calibration_example() -> CalibrationData {
         let mut cal = CalibrationData::new();
         // Add reference points (known flows vs measured time deltas)
-        let _ = cal.add_point(10.0, 100);   // 10 L/min → 100 ns delta
-        let _ = cal.add_point(20.0, 200);   // 20 L/min → 200 ns delta
-        let _ = cal.add_point(30.0, 300);   // 30 L/min → 300 ns delta
-        let _ = cal.add_point(40.0, 400);   // 40 L/min → 400 ns delta
+        let _ = cal.add_point(10.0, 100); // 10 L/min → 100 ns delta
+        let _ = cal.add_point(20.0, 200); // 20 L/min → 200 ns delta
+        let _ = cal.add_point(30.0, 300); // 30 L/min → 300 ns delta
+        let _ = cal.add_point(40.0, 400); // 40 L/min → 400 ns delta
         cal
     }
 
@@ -574,10 +569,10 @@ pub mod examples {
     /// - Measurement at 30°C:
     ///   v = 1480 * (1 + 0.002 * 10) = 1480 * 1.02 = 1509.6 m/s
     pub fn temperature_compensation_example() {
-        let v_ref = 1480.0;      // m/s at 20°C
-        let temp_ref = 20.0;     // °C
-        let temp_meas = 30.0;    // °C
-        let alpha = 0.002;       // 0.2% per °C
+        let v_ref = 1480.0; // m/s at 20°C
+        let temp_ref = 20.0; // °C
+        let temp_meas = 30.0; // °C
+        let alpha = 0.002; // 0.2% per °C
 
         let delta_t = temp_meas - temp_ref;
         let _v_corrected = v_ref * (1.0 + alpha * delta_t);
@@ -616,21 +611,21 @@ pub mod examples {
         // 1. Initialize system
         // let mut flow_meter = UltrasonicFlowMeter::new(config, spi, cs, reset, en);
         // let _ = flow_meter.init();
-        
+
         // 2. Apply calibration factor if available
         // flow_meter.set_calibration_factor(1.02);
-        
+
         // 3. Measure at regular intervals
         // let temp = get_temperature();  // From temperature sensor
         // let result = flow_meter.measure_flow(temp);
-        
+
         // 4. Validate result
         // if let Some(last) = flow_meter.last_measurement() {
         //     if last.signal_quality < 100 {
         //         // Log warning: signal quality degrading
         //     }
         // }
-        
+
         // 5. Log or transmit result
         // log_flow_rate(result.unwrap().flow_rate_lpm);
     }
@@ -685,13 +680,13 @@ pub mod examples {
     pub fn error_handling_example() {
         // Timeout error: Signal never received
         // Solution: Increase signal amplitude or check transducers
-        
+
         // Crosstalk: Multiple reflections detected
         // Solution: Improve bandpass filtering
-        
+
         // Communication error: SPI failure
         // Solution: Check SPI clock, CS timing
-        
+
         // Quality degradation: Signal amplitude dropping
         // Solution: Clean transducers or check alignment
     }
@@ -707,10 +702,10 @@ pub mod examples {
     /// Trade-off: 5 measurements × 300ms settling = 1.5s total
     pub fn performance_tuning_example() -> PerformanceTuning {
         PerformanceTuning {
-            averaging_samples: 5,           // 5-point moving average
-            signal_threshold_mv: 50.0,      // 50mV threshold
-            time_variance_threshold: 5.0,   // ±5% variation allowed
-            settling_time_us: 150000,       // 150ms between directions
+            averaging_samples: 5,         // 5-point moving average
+            signal_threshold_mv: 50.0,    // 50mV threshold
+            time_variance_threshold: 5.0, // ±5% variation allowed
+            settling_time_us: 150000,     // 150ms between directions
         }
     }
 
