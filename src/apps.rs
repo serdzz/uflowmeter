@@ -1,7 +1,5 @@
 use crate::ui::{HistoryType, ViewportNode};
 use alloc::string::String;
-use core::str::FromStr;
-
 use time::{
     macros::{date, time},
     PrimitiveDateTime,

@@ -1,11 +1,10 @@
-use crate::*;
+use crate::gui::{CharacterDisplay, Widget};
 use alloc::string::String;
 use core::marker::PhantomData;
-use core::str::FromStr;
 #[derive(Debug, Clone)]
 pub struct Label<A, const LEN: usize, const X: u8, const Y: u8> {
     pub state: String,
-    invalidate: bool,
+    pub invalidate: bool,
     phantom: PhantomData<A>,
 }
 

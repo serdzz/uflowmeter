@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::*;
+use crate::gui::{CharacterDisplay, UiEvent, Widget};
 use core::fmt::Write;
 use core::marker::PhantomData;
 use core::str::FromStr;
@@ -77,14 +77,14 @@ impl<A, B, const LEN: usize, const X: u8, const Y: u8> core::fmt::Write
     }
 }
 
-impl<A, B: 'static + core::fmt::Display, const LEN: usize, const X: u8, const Y: u8> Widget<&App, A>
+impl<A, B: 'static + core::fmt::Display, const LEN: usize, const X: u8, const Y: u8> Widget<(), A>
     for EditBox<A, B, LEN, X, Y>
 {
     fn invalidate(&mut self) {
         self.invalidate = true;
     }
 
-    fn update(&mut self, _state: &App) {
+    fn update(&mut self, _state: ()) {
         if self.state != self.selected_str() {
             self.state = self.selected_str();
             self.invalidate = true;

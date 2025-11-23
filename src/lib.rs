@@ -4,6 +4,9 @@
 #[cfg(not(test))]
 extern crate alloc;
 
+#[cfg(test)]
+extern crate alloc;
+
 #[cfg(not(test))]
 #[global_allocator]
 static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
@@ -11,7 +14,13 @@ static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
 #[cfg(not(test))]
 extern crate stm32l1xx_hal as hal;
 
+pub mod apps;
+pub mod gui;
 pub mod history_lib;
+pub mod ui;
+
+pub use apps::{Actions, App};
+pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 
 #[cfg(not(test))]
 pub mod hardware {
@@ -35,4 +44,13 @@ pub mod options;
 mod history_lib_tests;
 
 #[cfg(test)]
+mod history_tests;
+
+#[cfg(test)]
 mod ui_logic_tests;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod ui_history_tests;

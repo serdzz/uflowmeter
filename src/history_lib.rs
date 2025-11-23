@@ -54,7 +54,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         self.data.size() == 0
     }
 
-    fn size(&mut self) -> u32 {
+    pub fn size(&mut self) -> u32 {
         self.data.size()
     }
 

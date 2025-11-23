@@ -1,25 +1,24 @@
 #![allow(unsafe_code)]
-use crate::app::*;
-use crate::*;
+use crate::gui::{CharacterDisplay, UiEvent, Widget};
 use bit_field::*;
+#[allow(unused_imports)]
+use core::fmt::Write;
 use core::marker::PhantomData;
 use core::str::FromStr;
-//use core::str::FromStr;
 use heapless::String;
-
 #[derive(Debug, Clone)]
 pub struct Edit<A, const LEN: usize, const X: u8, const Y: u8> {
     pub state: String<LEN>,
-    editable: bool,
-    blink_state: bool,
-    invalidate: bool,
-    blink: u64,
-    blink_mask: u32,
+    pub editable: bool,
+    pub blink_state: bool,
+    pub invalidate: bool,
+    pub blink: u64,
+    pub blink_mask: u32,
     phantom: PhantomData<A>,
 }
 
 impl<A, const LEN: usize, const X: u8, const Y: u8> Edit<A, LEN, X, Y> {
-    const BLINK_TIME: u64 = 200_u64;
+    pub const BLINK_TIME: u64 = 200_u64;
 
     pub fn new(val: &str) -> Self {
         Self {
@@ -83,18 +82,6 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
-        if self.editable && monotonics::now().ticks() > self.blink {
-            self.blink = monotonics::now().ticks() + Self::BLINK_TIME;
-            self.invalidate = true;
-            if self.blink_state {
-                self.blink_state = false;
-                display.finish_line(LEN, X as usize);
-            } else {
-                self.blink_state = true;
-                write!(display, "{}", self.state).unwrap();
-                display.finish_line(LEN, self.state.len() + X as usize);
-            }
-        }
         if self.invalidate {
             display.reset_custom_chars();
             display.set_position(X, Y);

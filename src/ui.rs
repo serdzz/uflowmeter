@@ -1,19 +1,14 @@
+use crate::gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 use crate::Actions;
 use crate::App;
-use crate::CharacterDisplay;
-use crate::Edit;
-use crate::Label;
-use crate::UiEvent;
-use crate::Widget;
 use crate::{widget_group, widget_mux};
 use core::fmt::Write;
-use hal::stm32::rtc::tr;
 use time::{
     macros::{date, time},
     Duration, PrimitiveDateTime,
 };
 
-#[derive(PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DateTimeItems {
     None,
     Seconds,
@@ -23,7 +18,7 @@ pub enum DateTimeItems {
     Month,
     Year,
 }
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub enum HistoryType {
     #[default]
     Hour,
@@ -141,7 +136,7 @@ pub trait HistoryWidgetTrait {
 }
 
 pub struct HistoryWidget {
-    date: Edit<Actions, 16, 8, 0>,
+    pub date: Edit<Actions, 16, 8, 0>,
     time: Edit<Actions, 16, 0, 1>,
     pub label: Edit<Actions, 16, 0, 0>,
     pub value: Edit<Actions, 16, 10, 1>,
@@ -191,6 +186,12 @@ impl HistoryWidgetTrait for HistoryWidget {
     }
     fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1> {
         &mut self.value
+    }
+}
+
+impl Default for HistoryWidget {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -275,7 +276,7 @@ impl Widget<&App, Actions> for HistoryWidget {
 }
 
 pub struct DayHistoryWidget {
-    date: Edit<Actions, 16, 8, 0>,
+    pub date: Edit<Actions, 16, 8, 0>,
     time: Edit<Actions, 16, 0, 1>,
     pub label: Edit<Actions, 16, 0, 0>,
     pub value: Edit<Actions, 16, 10, 1>,
@@ -325,6 +326,12 @@ impl HistoryWidgetTrait for DayHistoryWidget {
     }
     fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1> {
         &mut self.value
+    }
+}
+
+impl Default for DayHistoryWidget {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -409,7 +416,7 @@ impl Widget<&App, Actions> for DayHistoryWidget {
 }
 
 pub struct MonthHistoryWidget {
-    date: Edit<Actions, 16, 8, 0>,
+    pub date: Edit<Actions, 16, 8, 0>,
     time: Edit<Actions, 16, 0, 1>,
     pub label: Edit<Actions, 16, 0, 0>,
     pub value: Edit<Actions, 16, 10, 1>,
@@ -459,6 +466,12 @@ impl HistoryWidgetTrait for MonthHistoryWidget {
     }
     fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1> {
         &mut self.value
+    }
+}
+
+impl Default for MonthHistoryWidget {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -548,6 +561,12 @@ pub struct DateTimeWidget {
     items: DateTimeItems,
     datetime: PrimitiveDateTime,
     editable: bool,
+}
+
+impl Default for DateTimeWidget {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DateTimeWidget {

@@ -1,4 +1,4 @@
-use crate::*;
+use crate::gui::{CharacterDisplay, Widget};
 use core::marker::PhantomData;
 
 #[derive(Debug, Clone)]
