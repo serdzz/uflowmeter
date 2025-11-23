@@ -60,6 +60,12 @@ name = "uflowmeter"
 path = "src/lib.rs"
 test = true
 
+[[bin]]
+name = "uflowmeter"
+path = "src/main.rs"
+test = false
+bench = false
+
 [package.metadata.cargo-xbuild]
 target = "thumbv7m-none-eabi"
 
