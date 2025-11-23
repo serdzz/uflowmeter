@@ -416,3 +416,326 @@ impl Default for PerformanceTuning {
         }
     }
 }
+
+/// Example: Basic flow measurement with TDC1000
+///
+/// Usage in real firmware:
+/// ```ignore
+/// // Hardware setup
+/// let spi = hal::spi::Spi::spi2(pac.SPI2, (clk, miso, mosi),
+///     hal::spi::Mode { polarity: IdleLow, phase: CaptureOnFirstChange },
+///     1.MHz(), clk);
+/// let cs = gpio_b.pb12.into_push_pull_output();
+/// let reset = gpio_a.pa4.into_push_pull_output();
+/// let en = gpio_a.pa5.into_push_pull_output();
+///
+/// // Create and initialize flow meter
+/// let mut flow_meter = UltrasonicFlowMeter::new(
+///     FlowMeterConfig::default(),
+///     spi, cs, reset, en
+/// );
+/// flow_meter.init()?;
+///
+/// // Measure flow
+/// let result = flow_meter.measure_flow(25.0)?; // 25°C
+/// // Use result.flow_rate_lpm
+/// ```
+pub mod examples {
+    use super::*;
+
+    /// Example 1: TDC1000 water flow measurement setup
+    ///
+    /// Typical application:
+    /// - 100mm distance between transducers
+    /// - 50mm pipe diameter
+    /// - Water at 20-30°C
+    /// - Expected accuracy: ±2-3%
+    pub fn tdc1000_water_meter() -> FlowMeterConfig {
+        FlowMeterConfig {
+            distance_mm: 100.0,
+            pipe_diameter_mm: 50.0,
+            acoustic_velocity: 1480.0,  // m/s in water @ 20°C
+            temp_coefficient: 0.002,
+            ref_temperature: 20.0,
+        }
+    }
+
+    /// Example 2: TDC7200 high-accuracy water flow
+    ///
+    /// Benefits over TDC1000:
+    /// - Better time resolution (55ps vs 250ps)
+    /// - Longer measurement range
+    /// - Better for longer pipe sections
+    /// - Expected accuracy: ±1-2%
+    pub fn tdc7200_water_meter() -> FlowMeterConfig {
+        FlowMeterConfig {
+            distance_mm: 150.0,         // Longer section for better accuracy
+            pipe_diameter_mm: 50.0,
+            acoustic_velocity: 1480.0,
+            temp_coefficient: 0.002,
+            ref_temperature: 20.0,
+        }
+    }
+
+    /// Example 3: TDC1000 mineral oil measurement
+    ///
+    /// Hydraulic fluid applications:
+    /// - Lower acoustic velocity than water
+    /// - Different temperature coefficient
+    /// - Density affects mass flow calculations
+    pub fn tdc1000_oil_meter() -> FlowMeterConfig {
+        let oil = MediumProperties::oil();
+        FlowMeterConfig {
+            distance_mm: 100.0,
+            pipe_diameter_mm: 50.0,
+            acoustic_velocity: oil.acoustic_velocity,
+            temp_coefficient: oil.temp_coefficient,
+            ref_temperature: 20.0,
+        }
+    }
+
+    /// Example 4: TDC7200 high-temperature water flow
+    ///
+    /// Hot water/steam applications:
+    /// - Higher temperature compensation needed
+    /// - Acoustic velocity at 80°C:
+    ///   v = 1449 + 4.6*80 - 0.055*80² ≈ 1497 m/s
+    /// - Temperature stability important
+    pub fn tdc7200_hot_water_meter() -> FlowMeterConfig {
+        FlowMeterConfig {
+            distance_mm: 100.0,
+            pipe_diameter_mm: 32.0,    // Smaller diameter for higher flow speeds
+            acoustic_velocity: 1497.0, // 80°C water
+            temp_coefficient: 0.002,
+            ref_temperature: 80.0,
+        }
+    }
+
+    /// Example 5: TDC1000 small pipe (narrow range)
+    ///
+    /// Applications:
+    /// - 20-30mm pipes
+    /// - Higher velocity flows
+    /// - Requires closer transducer spacing
+    pub fn tdc1000_small_pipe() -> FlowMeterConfig {
+        FlowMeterConfig {
+            distance_mm: 30.0,          // 30mm transducer distance
+            pipe_diameter_mm: 25.0,
+            acoustic_velocity: 1480.0,
+            temp_coefficient: 0.002,
+            ref_temperature: 20.0,
+        }
+    }
+
+    /// Example 6: TDC7200 large pipe (extended range)
+    ///
+    /// Applications:
+    /// - Industrial large-diameter pipes
+    /// - 100-200mm diameters
+    /// - Better accuracy with longer path
+    pub fn tdc7200_large_pipe() -> FlowMeterConfig {
+        FlowMeterConfig {
+            distance_mm: 200.0,
+            pipe_diameter_mm: 100.0,
+            acoustic_velocity: 1480.0,
+            temp_coefficient: 0.002,
+            ref_temperature: 20.0,
+        }
+    }
+
+    /// Example 7: Calibration procedure
+    ///
+    /// Steps:
+    /// 1. Measure at known reference flows (10, 20, 30, 40 L/min)
+    /// 2. Record time differences from TDC
+    /// 3. Compute calibration factor
+    /// 4. Apply factor to all subsequent measurements
+    pub fn calibration_example() -> CalibrationData {
+        let mut cal = CalibrationData::new();
+        // Add reference points (known flows vs measured time deltas)
+        let _ = cal.add_point(10.0, 100);   // 10 L/min → 100 ns delta
+        let _ = cal.add_point(20.0, 200);   // 20 L/min → 200 ns delta
+        let _ = cal.add_point(30.0, 300);   // 30 L/min → 300 ns delta
+        let _ = cal.add_point(40.0, 400);   // 40 L/min → 400 ns delta
+        cal
+    }
+
+    /// Example 8: Temperature compensation
+    ///
+    /// Physics: Sound velocity varies with temperature
+    /// For water: v(T) = 1449 + 4.6*T - 0.055*T²
+    ///
+    /// Simple linear approximation:
+    /// v_corrected = v_ref * (1 + alpha * ΔT)
+    /// where alpha ≈ 0.002 (0.2% per °C)
+    ///
+    /// Example:
+    /// - Reference: 1480 m/s at 20°C
+    /// - Measurement at 30°C:
+    ///   v = 1480 * (1 + 0.002 * 10) = 1480 * 1.02 = 1509.6 m/s
+    pub fn temperature_compensation_example() {
+        let v_ref = 1480.0;      // m/s at 20°C
+        let temp_ref = 20.0;     // °C
+        let temp_meas = 30.0;    // °C
+        let alpha = 0.002;       // 0.2% per °C
+
+        let delta_t = temp_meas - temp_ref;
+        let _v_corrected = v_ref * (1.0 + alpha * delta_t);
+
+        // v_corrected ≈ 1509.6 m/s
+        // This affects flow calculation:
+        // Flow difference for 1°C change: ~±0.2%
+        // For 100 L/min system: ±0.2 L/min per °C
+    }
+
+    /// Example 9: Signal quality monitoring
+    ///
+    /// Quality indicators:
+    /// - 200: Good signal (healthy system)
+    /// - 64: Degraded signal (may indicate fouling or misalignment)
+    /// - 0: Invalid signal (transducer problem)
+    ///
+    /// Typical issues:
+    /// - Mineral deposits on transducer surfaces
+    /// - Transducer misalignment
+    /// - Air bubbles in liquid
+    /// - Cavitation in high-speed flows
+    pub fn signal_quality_monitoring() {
+        // Example: Monitor signal quality over time
+        // if let Some(m) = flow_meter.last_measurement() {
+        //     if m.signal_quality < 100 {
+        //         // Alert: Signal degrading - transducer may need cleaning
+        //     }
+        // }
+    }
+
+    /// Example 10: Dual-channel measurement workflow
+    ///
+    /// Complete measurement sequence:
+    pub fn measurement_workflow_example() {
+        // 1. Initialize system
+        // let mut flow_meter = UltrasonicFlowMeter::new(config, spi, cs, reset, en);
+        // let _ = flow_meter.init();
+        
+        // 2. Apply calibration factor if available
+        // flow_meter.set_calibration_factor(1.02);
+        
+        // 3. Measure at regular intervals
+        // let temp = get_temperature();  // From temperature sensor
+        // let result = flow_meter.measure_flow(temp);
+        
+        // 4. Validate result
+        // if let Some(last) = flow_meter.last_measurement() {
+        //     if last.signal_quality < 100 {
+        //         // Log warning: signal quality degrading
+        //     }
+        // }
+        
+        // 5. Log or transmit result
+        // log_flow_rate(result.unwrap().flow_rate_lpm);
+    }
+
+    /// Example 11: TDC1000 register configuration
+    ///
+    /// Key registers:
+    /// - Config0 (0x00): Measurement mode, resolution
+    /// - Config1-4: Frequency, gain, range settings
+    /// - TOF0/TOF1 (0x08-0x09): Time-of-flight results (24-bit)
+    /// - ErrorFlags (0x07): Timeout and error detection
+    ///
+    /// SPI Protocol:
+    /// READ:  [Address | 0x40] → [MSB, ...data...]
+    /// WRITE: [Address | 0x40] [Data]
+    pub fn tdc1000_register_sequence() {
+        // 1. Reset TDC1000 (GPIO PA4 low for 100µs, then high)
+        // 2. Wait 10ms for stabilization
+        // 3. Enable TDC1000 (GPIO PA5 high)
+        // 4. Configure Config0 register
+        //    - Measurement enable
+        //    - Resolution selection (250ps TDC1000, 55ps TDC7200)
+        // 5. Read TOF0/TOF1 after measurement complete
+        // 6. Process time values through flow calculation
+    }
+
+    /// Example 12: TDC7200 extended measurement range
+    ///
+    /// Advantages over TDC1000:
+    /// - 19 registers across 5 banks
+    /// - 24-bit counter for longer pipe sections
+    /// - Better noise immunity
+    /// - Suitable for up to 1m+ distances
+    ///
+    /// Bank structure:
+    /// - Bank 0: Config and status (address 0x00-0x04)
+    /// - Bank 1: Interrupt control (0x10-0x14)
+    /// - Bank 2: Measurement results (0x20-0x21)
+    /// - Bank 3: Advanced calibration (0x30-0x39)
+    /// - Bank 4: Test mode (0x40-0x41)
+    pub fn tdc7200_advanced_features() {
+        // 1. Select bank before register access
+        // 2. Longer measurement windows (1ms+)
+        // 3. Interrupt-driven operation
+        // 4. Post-processing digital filter
+        // 5. Better temperature stability
+    }
+
+    /// Example 13: Error handling and recovery
+    ///
+    /// Common error scenarios:
+    pub fn error_handling_example() {
+        // Timeout error: Signal never received
+        // Solution: Increase signal amplitude or check transducers
+        
+        // Crosstalk: Multiple reflections detected
+        // Solution: Improve bandpass filtering
+        
+        // Communication error: SPI failure
+        // Solution: Check SPI clock, CS timing
+        
+        // Quality degradation: Signal amplitude dropping
+        // Solution: Clean transducers or check alignment
+    }
+
+    /// Example 14: Performance optimization
+    ///
+    /// Measurement averaging:
+    /// N=1:   Fast (1 measurement), Noisy
+    /// N=5:   Good balance (5 measurements), ~50% noise reduction
+    /// N=10:  Better (10 measurements), ~68% noise reduction
+    /// N=20:  Best (20 measurements), ~78% noise reduction
+    ///
+    /// Trade-off: 5 measurements × 300ms settling = 1.5s total
+    pub fn performance_tuning_example() -> PerformanceTuning {
+        PerformanceTuning {
+            averaging_samples: 5,           // 5-point moving average
+            signal_threshold_mv: 50.0,      // 50mV threshold
+            time_variance_threshold: 5.0,   // ±5% variation allowed
+            settling_time_us: 150000,       // 150ms between directions
+        }
+    }
+
+    /// Example 15: Real-world accuracy expectations
+    ///
+    /// Factors affecting accuracy:
+    /// 1. Transducer alignment: ±0.5%
+    /// 2. Temperature variation: ±0.2% per °C
+    /// 3. Pipe vibration: ±1-2%
+    /// 4. Signal noise: ±0.5%
+    /// 5. Calibration error: ±0.3%
+    ///
+    /// Combined typical accuracy:
+    /// - TDC1000: ±2-3%
+    /// - TDC7200: ±1-2%
+    /// - After multi-point calibration: ±0.5-1%
+    pub fn accuracy_analysis_example() {
+        // Measurement: 100 L/min
+        // Error contribution:
+        // - Alignment: ±0.5 L/min
+        // - Temperature: ±0.2 L/min (assuming 1°C stability)
+        // - Vibration: ±1-2 L/min
+        // - Noise: ±0.5 L/min
+        // - Calibration: ±0.3 L/min
+        //
+        // Total uncertainty: ±2-3 L/min (±2-3%)
+    }
+}
