@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(response[0], 0x01); // Slave address
         assert_eq!(response[1], 0x03); // Function code
         assert_eq!(response[2], 0x04); // Byte count (2 registers * 2 bytes)
-        // Serial number bytes (bitfield stores as little-endian)
+                                       // Serial number bytes (bitfield stores as little-endian)
         assert_eq!(response[3], 0x78); // Low byte of serial
         assert_eq!(response[4], 0x56);
         assert_eq!(response[5], 0x34);
@@ -547,7 +547,7 @@ mod tests {
         assert_eq!(response[0], 0x01); // Slave address
         assert_eq!(response[1], 0x03); // Function code
         assert_eq!(response[2], 0x04); // Byte count
-        // Verify float value 1.5 in IEEE 754 format (big-endian)
+                                       // Verify float value 1.5 in IEEE 754 format (big-endian)
         let float_bytes = 1.5f32.to_be_bytes();
         assert_eq!(response[3], float_bytes[0]);
         assert_eq!(response[4], float_bytes[1]);

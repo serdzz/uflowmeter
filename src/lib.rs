@@ -38,10 +38,10 @@ pub mod hardware {
     pub use pins::*;
 }
 
-pub mod options;
+pub mod history;
 pub mod modbus;
 pub mod modbus_handler;
-pub mod history;
+pub mod options;
 
 #[cfg(test)]
 mod history_lib_tests;

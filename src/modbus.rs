@@ -331,7 +331,7 @@ mod tests {
     fn test_parse_write_single_register() {
         let modbus = ModbusRtu::new(0x01);
         let frame = [0x01, 0x06, 0x00, 0x05, 0x12, 0x34, 0x94, 0xBC];
-        
+
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x01);
         assert_eq!(request.function_code, FunctionCode::WriteSingleRegister);
@@ -343,8 +343,10 @@ mod tests {
     #[test]
     fn test_parse_write_multiple_registers() {
         let modbus = ModbusRtu::new(0x01);
-        let frame = [0x01, 0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x01, 0x02, 0x92, 0x30];
-        
+        let frame = [
+            0x01, 0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x01, 0x02, 0x92, 0x30,
+        ];
+
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x01);
         assert_eq!(request.function_code, FunctionCode::WriteMultipleRegisters);
@@ -357,7 +359,7 @@ mod tests {
     fn test_parse_read_input_registers() {
         let modbus = ModbusRtu::new(0x01);
         let frame = [0x01, 0x04, 0x00, 0x00, 0x00, 0x04, 0xF1, 0xC9];
-        
+
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x01);
         assert_eq!(request.function_code, FunctionCode::ReadInputRegisters);
@@ -369,7 +371,7 @@ mod tests {
     fn test_parse_invalid_crc() {
         let modbus = ModbusRtu::new(0x01);
         let frame = [0x01, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xFF, 0xFF];
-        
+
         let result = modbus.parse_request(&frame);
         assert!(matches!(result, Err(ModbusError::InvalidCrc)));
     }
@@ -378,7 +380,7 @@ mod tests {
     fn test_parse_invalid_length() {
         let modbus = ModbusRtu::new(0x01);
         let frame = [0x01, 0x03];
-        
+
         let result = modbus.parse_request(&frame);
         assert!(matches!(result, Err(ModbusError::InvalidLength)));
     }
@@ -387,7 +389,7 @@ mod tests {
     fn test_parse_wrong_slave_address() {
         let modbus = ModbusRtu::new(0x01);
         let frame = [0x02, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC4, 0x1E];
-        
+
         let result = modbus.parse_request(&frame);
         assert!(matches!(result, Err(ModbusError::InvalidSlaveAddress)));
     }
@@ -396,7 +398,7 @@ mod tests {
     fn test_parse_broadcast_address() {
         let modbus = ModbusRtu::new(0x01);
         let frame = [0x00, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC4, 0x1C];
-        
+
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x00);
     }
@@ -404,8 +406,10 @@ mod tests {
     #[test]
     fn test_build_exception_response() {
         let modbus = ModbusRtu::new(0x01);
-        let frame = modbus.build_exception(0x01, 0x03, ExceptionCode::IllegalDataAddress).unwrap();
-        
+        let frame = modbus
+            .build_exception(0x01, 0x03, ExceptionCode::IllegalDataAddress)
+            .unwrap();
+
         assert_eq!(frame[0], 0x01); // Slave address
         assert_eq!(frame[1], 0x83); // Function code with error bit (0x03 | 0x80)
         assert_eq!(frame[2], 0x02); // Exception code
@@ -423,17 +427,29 @@ mod tests {
     fn test_slave_address_get_set() {
         let mut modbus = ModbusRtu::new(0x01);
         assert_eq!(modbus.slave_address(), 0x01);
-        
+
         modbus.set_slave_address(0x05);
         assert_eq!(modbus.slave_address(), 0x05);
     }
 
     #[test]
     fn test_function_code_from_u8() {
-        assert_eq!(FunctionCode::from_u8(0x03), Some(FunctionCode::ReadHoldingRegisters));
-        assert_eq!(FunctionCode::from_u8(0x04), Some(FunctionCode::ReadInputRegisters));
-        assert_eq!(FunctionCode::from_u8(0x06), Some(FunctionCode::WriteSingleRegister));
-        assert_eq!(FunctionCode::from_u8(0x10), Some(FunctionCode::WriteMultipleRegisters));
+        assert_eq!(
+            FunctionCode::from_u8(0x03),
+            Some(FunctionCode::ReadHoldingRegisters)
+        );
+        assert_eq!(
+            FunctionCode::from_u8(0x04),
+            Some(FunctionCode::ReadInputRegisters)
+        );
+        assert_eq!(
+            FunctionCode::from_u8(0x06),
+            Some(FunctionCode::WriteSingleRegister)
+        );
+        assert_eq!(
+            FunctionCode::from_u8(0x10),
+            Some(FunctionCode::WriteMultipleRegisters)
+        );
         assert_eq!(FunctionCode::from_u8(0xFF), None);
     }
 }
