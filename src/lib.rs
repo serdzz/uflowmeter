@@ -41,6 +41,15 @@ pub mod hardware {
 #[cfg(not(test))]
 pub mod options;
 
+#[cfg(not(test))]
+pub mod modbus;
+
+#[cfg(not(test))]
+pub mod modbus_handler;
+
+#[cfg(not(test))]
+pub mod history;
+
 #[cfg(test)]
 mod history_lib_tests;
 

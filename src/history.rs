@@ -1,13 +1,8 @@
 #![allow(dead_code)]
-use core::cmp::max_by;
-use core::convert::Infallible;
 
-use super::*;
 use embedded_storage::Storage;
-use hal::stm32::adc::ccr::R;
 use modular_bitfield::prelude::*;
 
-type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     NoRecords,
@@ -15,18 +10,9 @@ pub enum Error {
     Unimplented,
     Storage,
     WrongCrc,
-    Spi(spi::Error),
 }
 
-impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>> for Error {
-    fn from(err: microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>) -> Self {
-        match err {
-            microchip_eeprom_25lcxx::Error::SpiError(e) => Error::Spi(e),
-            microchip_eeprom_25lcxx::Error::PinError(_) => Error::Storage,
-            _ => Error::Storage,
-        }
-    }
-}
+type Result<T> = core::result::Result<T, Error>;
 
 #[bitfield]
 #[derive(Default, Debug, Clone, Copy)]
@@ -48,9 +34,11 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
     pub const SIZE_ON_FLASH: usize =
         size_of::<u32>() + SIZE as usize + size_of::<ServiceData>() + size_of::<u16>();
 
-    pub fn new(storage: &mut MyStorage) -> Result<Self> {
+    pub fn new<S: Storage>(storage: &mut S) -> Result<Self> {
         let mut buf = [0_u8; size_of::<ServiceData>()];
-        storage.read(Self::OFFSET as u32, &mut buf)?;
+        storage
+            .read(Self::OFFSET as u32, &mut buf)
+            .map_err(|_| Error::Storage)?;
         let crc =
             crc16::State::<crc16::CCITT_FALSE>::calculate(&buf[..size_of::<ServiceData>() - 2]);
         let data = ServiceData { bytes: buf };
@@ -72,7 +60,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         offset += size_of::<u32>() * index;
         offset as u32
     }
-    pub fn find(&mut self, storage: &mut MyStorage, time: u32) -> Result<Option<i32>> {
+    pub fn find<S: Storage>(&mut self, storage: &mut S, time: u32) -> Result<Option<i32>> {
         if self.data.size() == 0 {
             return Ok(None);
         }
@@ -81,7 +69,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         for _ in 0..self.data.size() {
             let offset = self.offset(index);
             let mut buf = [0_u8; size_of::<i32>()];
-            storage.read(offset, &mut buf)?;
+            storage.read(offset, &mut buf).map_err(|_| Error::Storage)?;
             let value = i32::from_le_bytes(buf);
 
             let expected_time = self.data.time_of_last()
@@ -99,7 +87,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
 
         Ok(None)
     }
-    fn last_value(&mut self, storage: &mut MyStorage) -> Result<Option<i32>> {
+    fn last_value<S: Storage>(&mut self, storage: &mut S) -> Result<Option<i32>> {
         if self.data.size() > 0 {
             return Ok(self.find(storage, self.data.time_of_last()).unwrap());
         }
@@ -113,19 +101,21 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
             self.data.set_offset_of_last(0);
         }
     }
-    fn write_value(&mut self, storage: &mut MyStorage, val: i32, time: u32) -> Result<()> {
+    fn write_value<S: Storage>(&mut self, storage: &mut S, val: i32, time: u32) -> Result<()> {
         if self.data.size() < SIZE as u32 {
             let tmp = self.data.size() + 1;
             self.data.set_size(tmp);
         }
         self.data.set_time_of_last(time);
-        storage.write(
-            self.offset(self.data.offset_of_last() as usize),
-            &val.to_le_bytes(),
-        )?;
+        storage
+            .write(
+                self.offset(self.data.offset_of_last() as usize),
+                &val.to_le_bytes(),
+            )
+            .map_err(|_| Error::Storage)?;
         Ok(())
     }
-    fn write_service_data(&mut self, storage: &mut MyStorage) -> Result<()> {
+    fn write_service_data<S: Storage>(&mut self, storage: &mut S) -> Result<()> {
         self.advance_offset_by_one();
         let mut buff = self.data.into_bytes();
         self.data
@@ -133,7 +123,9 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
                 &buff[..size_of::<ServiceData>() - 2],
             ));
         buff = self.data.into_bytes();
-        storage.write(Self::OFFSET as u32, &buff)?;
+        storage
+            .write(Self::OFFSET as u32, &buff)
+            .map_err(|_| Error::Storage)?;
         Ok(())
     }
     pub fn last_stored_timestamp(&mut self) -> u32 {
@@ -147,7 +139,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         self.data.time_of_last()
     }
 
-    pub fn add(&mut self, storage: &mut MyStorage, val: i32, time: u32) -> Result<()> {
+    pub fn add<S: Storage>(&mut self, storage: &mut S, val: i32, time: u32) -> Result<()> {
         let mut time = time;
         time -= time % 60;
         if self.empty() {
@@ -182,10 +174,12 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
                 // Handle negative delta (going back in time)
                 delta = delta.abs();
                 while delta >= ELEMENT_SIZE {
-                    storage.write(
-                        self.offset(self.data.offset_of_last() as usize),
-                        &0_i32.to_le_bytes(),
-                    )?;
+                    storage
+                        .write(
+                            self.offset(self.data.offset_of_last() as usize),
+                            &0_i32.to_le_bytes(),
+                        )
+                        .map_err(|_| Error::Storage)?;
                     if self.data.offset_of_last() == self.data.size() - 1 {
                         let size = self.data.size() - 1;
                         self.data.set_size(size);
