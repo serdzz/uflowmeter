@@ -405,3 +405,371 @@ impl<S: Storage, E, const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i3
         RingStorage::last_stored_timestamp(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::Options;
+
+    // Mock storage for testing
+    struct MockStorage {
+        data: [u8; 4096],
+    }
+
+    impl MockStorage {
+        fn new() -> Self {
+            Self { data: [0xFF; 4096] }
+        }
+    }
+
+    impl embedded_storage::ReadStorage for MockStorage {
+        type Error = crate::options::Error<()>;
+
+        fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+            let start = offset as usize;
+            let end = start + bytes.len();
+            if end <= self.data.len() {
+                bytes.copy_from_slice(&self.data[start..end]);
+                Ok(())
+            } else {
+                Err(crate::options::Error::Storage)
+            }
+        }
+
+        fn capacity(&self) -> usize {
+            self.data.len()
+        }
+    }
+
+    impl embedded_storage::Storage for MockStorage {
+        fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+            let start = offset as usize;
+            let end = start + bytes.len();
+            if end <= self.data.len() {
+                self.data[start..end].copy_from_slice(bytes);
+                Ok(())
+            } else {
+                Err(crate::options::Error::Storage)
+            }
+        }
+    }
+
+    // Mock history for testing
+    struct MockHistory;
+
+    impl<S, E> HistoryAccess<S, E> for MockHistory {
+        fn find(
+            &mut self,
+            _storage: &mut S,
+            _time: u32,
+        ) -> Result<Option<i32>, crate::history::Error> {
+            Ok(None)
+        }
+
+        fn first_timestamp(&mut self) -> u32 {
+            0
+        }
+
+        fn last_timestamp(&mut self) -> u32 {
+            0
+        }
+    }
+
+    #[test]
+    fn test_read_holding_registers_options() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Set specific serial number for testing
+        options.set_serial_number(0x12345678);
+
+        // Read registers 1-2 (serial number: u32 = 2 registers)
+        let frame = [0x01, 0x03, 0x00, 0x01, 0x00, 0x02, 0x95, 0xCB];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                1.5,
+                10.0,
+                100.0,
+                1000.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        // Response: slave(1) + func(1) + byte_count(1) + data(4) + crc(2) = 9 bytes
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x03); // Function code
+        assert_eq!(response[2], 0x04); // Byte count (2 registers * 2 bytes)
+        // Serial number bytes (bitfield stores as little-endian)
+        assert_eq!(response[3], 0x78); // Low byte of serial
+        assert_eq!(response[4], 0x56);
+        assert_eq!(response[5], 0x34);
+        assert_eq!(response[6], 0x12); // High byte of serial
+        assert_eq!(response.len(), 9); // Total length with CRC
+    }
+
+    #[test]
+    fn test_read_holding_registers_flow_data() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Read flow_rate (registers 100-101: 0x0064-0x0065)
+        let frame = [0x01, 0x03, 0x00, 0x64, 0x00, 0x02, 0x85, 0xD4];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                1.5,
+                10.0,
+                100.0,
+                1000.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x03); // Function code
+        assert_eq!(response[2], 0x04); // Byte count
+        // Verify float value 1.5 in IEEE 754 format (big-endian)
+        let float_bytes = 1.5f32.to_be_bytes();
+        assert_eq!(response[3], float_bytes[0]);
+        assert_eq!(response[4], float_bytes[1]);
+        assert_eq!(response[5], float_bytes[2]);
+        assert_eq!(response[6], float_bytes[3]);
+    }
+
+    #[test]
+    fn test_read_input_registers() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Read first 4 registers (flow_rate and hour_flow)
+        let frame = [0x01, 0x04, 0x00, 0x00, 0x00, 0x04, 0xF1, 0xC9];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                2.5,
+                15.0,
+                150.0,
+                1500.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x04); // Function code
+        assert_eq!(response[2], 0x08); // Byte count (4 registers * 2 bytes)
+
+        // Verify flow_rate (2.5)
+        let flow_rate_bytes = 2.5f32.to_be_bytes();
+        assert_eq!(response[3], flow_rate_bytes[0]);
+        assert_eq!(response[4], flow_rate_bytes[1]);
+        assert_eq!(response[5], flow_rate_bytes[2]);
+        assert_eq!(response[6], flow_rate_bytes[3]);
+
+        // Verify hour_flow (15.0)
+        let hour_flow_bytes = 15.0f32.to_be_bytes();
+        assert_eq!(response[7], hour_flow_bytes[0]);
+        assert_eq!(response[8], hour_flow_bytes[1]);
+        assert_eq!(response[9], hour_flow_bytes[2]);
+        assert_eq!(response[10], hour_flow_bytes[3]);
+    }
+
+    #[test]
+    fn test_write_single_register() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Write register 0 (CRC field)
+        let frame = [0x01, 0x06, 0x00, 0x00, 0xAB, 0xCD, 0x37, 0x6F];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        // Response should echo the request
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x06); // Function code
+        assert_eq!(response[2], 0x00); // Address high
+        assert_eq!(response[3], 0x00); // Address low
+        assert_eq!(response[4], 0xAB); // Value high
+        assert_eq!(response[5], 0xCD); // Value low
+
+        // Note: CRC is recalculated by options.save(), so we don't check the exact value
+    }
+
+    #[test]
+    fn test_write_multiple_registers() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Write 2 registers starting at register 0 (CRC and part of serial)
+        let frame = [
+            0x01, 0x10, 0x00, 0x00, 0x00, 0x02, 0x04, 0x12, 0x34, 0x56, 0x78, 0x88, 0x9B,
+        ];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        // Response: slave + func + start_addr + quantity + crc
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x10); // Function code
+        assert_eq!(response[2], 0x00); // Start address high
+        assert_eq!(response[3], 0x00); // Start address low
+        assert_eq!(response[4], 0x00); // Quantity high
+        assert_eq!(response[5], 0x02); // Quantity low
+
+        // Note: CRC is recalculated by options.save(), so we don't check the exact value
+    }
+
+    #[test]
+    fn test_invalid_slave_address() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Request for slave 0x02 (not us)
+        let frame = [0x02, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC4, 0x1E];
+
+        let result = handler.handle_request(
+            &frame,
+            &mut options,
+            &mut storage,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            &mut hour_history,
+            &mut day_history,
+            &mut month_history,
+        );
+
+        assert!(matches!(result, Err(ModbusError::InvalidSlaveAddress)));
+    }
+
+    #[test]
+    fn test_illegal_data_address() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Try to read from invalid address 0x1000
+        let frame = [0x01, 0x03, 0x10, 0x00, 0x00, 0x01, 0x80, 0xCA];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        // Should be an exception response
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x83); // Function code with error bit (0x03 | 0x80)
+        assert_eq!(response[2], 0x02); // Exception code: IllegalDataAddress
+    }
+
+    #[test]
+    fn test_illegal_quantity() {
+        let handler = ModbusHandler::new(0x01);
+        let mut options = Options::default();
+        let mut storage = MockStorage::new();
+        let mut hour_history = MockHistory;
+        let mut day_history = MockHistory;
+        let mut month_history = MockHistory;
+
+        // Try to read 0 registers (invalid)
+        let frame = [0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x45, 0xCA];
+
+        let response = handler
+            .handle_request(
+                &frame,
+                &mut options,
+                &mut storage,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                &mut hour_history,
+                &mut day_history,
+                &mut month_history,
+            )
+            .unwrap();
+
+        // Should be an exception response
+        assert_eq!(response[0], 0x01); // Slave address
+        assert_eq!(response[1], 0x83); // Function code with error bit
+        assert_eq!(response[2], 0x03); // Exception code: IllegalDataValue
+    }
+}

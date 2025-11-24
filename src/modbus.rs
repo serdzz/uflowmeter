@@ -286,7 +286,7 @@ mod tests {
         // Example from Modbus spec
         let data = [0x01, 0x03, 0x00, 0x00, 0x00, 0x0A];
         let crc = ModbusRtu::calculate_crc(&data);
-        assert_eq!(crc, 0xC5CD); // Expected CRC for this frame
+        assert_eq!(crc, 0xCDC5); // Expected CRC for this frame
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn test_parse_write_single_register() {
         let modbus = ModbusRtu::new(0x01);
-        let frame = [0x01, 0x06, 0x00, 0x05, 0x12, 0x34, 0xD8, 0x5E];
+        let frame = [0x01, 0x06, 0x00, 0x05, 0x12, 0x34, 0x94, 0xBC];
         
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x01);
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn test_parse_write_multiple_registers() {
         let modbus = ModbusRtu::new(0x01);
-        let frame = [0x01, 0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x01, 0x02, 0xC6, 0xF0];
+        let frame = [0x01, 0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x0A, 0x01, 0x02, 0x92, 0x30];
         
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x01);
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn test_parse_read_input_registers() {
         let modbus = ModbusRtu::new(0x01);
-        let frame = [0x01, 0x04, 0x00, 0x00, 0x00, 0x04, 0xF1, 0xCC];
+        let frame = [0x01, 0x04, 0x00, 0x00, 0x00, 0x04, 0xF1, 0xC9];
         
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x01);
@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn test_parse_broadcast_address() {
         let modbus = ModbusRtu::new(0x01);
-        let frame = [0x00, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC4, 0x0C];
+        let frame = [0x00, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC4, 0x1C];
         
         let request = modbus.parse_request(&frame).unwrap();
         assert_eq!(request.slave_address, 0x00);
@@ -416,7 +416,7 @@ mod tests {
     fn test_crc_another_example() {
         let data = [0x11, 0x03, 0x00, 0x6B, 0x00, 0x03];
         let crc = ModbusRtu::calculate_crc(&data);
-        assert_eq!(crc, 0x7687);
+        assert_eq!(crc, 0x8776);
     }
 
     #[test]

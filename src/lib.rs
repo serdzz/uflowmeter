@@ -38,16 +38,9 @@ pub mod hardware {
     pub use pins::*;
 }
 
-#[cfg(not(test))]
 pub mod options;
-
-#[cfg(not(test))]
 pub mod modbus;
-
-#[cfg(not(test))]
 pub mod modbus_handler;
-
-#[cfg(not(test))]
 pub mod history;
 
 #[cfg(test)]
