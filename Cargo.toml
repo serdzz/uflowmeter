@@ -11,8 +11,8 @@ edition = "2021"
 [patch.crates-io]
 microchip-eeprom-25lcxx = { git = "https://github.com/serdzz/microchip-eeprom-25x.git" }
 # microchip-eeprom-25lcxx = { path = "../../../microchip-eeprom-25x" }
-stm32l1xx-hal = { git = "https://github.com/serdzz/stm32l1xx-hal", branch = "update_stm32l1_0.15.1" }
-# stm32l1xx-hal = { path = "../../../stm32l1xx-hal.serdz" }
+stm32l1xx-hal = { git = "https://github.com/serdzz/stm32l1xx-hal" }
+#stm32l1xx-hal = { path = "../stm32l1xx-hal" }
 
 [dependencies]
 defmt = "0.3.5"
