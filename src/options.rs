@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use core::convert::Infallible;
-
 use embedded_storage::Storage;
 use modular_bitfield::prelude::*;
 
@@ -51,8 +49,12 @@ pub enum Error<E> {
 }
 
 #[cfg(not(test))]
-impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>> for Error<hal::spi::Error> {
-    fn from(err: microchip_eeprom_25lcxx::Error<hal::spi::Error, Infallible>) -> Self {
+impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, core::convert::Infallible>>
+    for Error<hal::spi::Error>
+{
+    fn from(
+        err: microchip_eeprom_25lcxx::Error<hal::spi::Error, core::convert::Infallible>,
+    ) -> Self {
         match err {
             microchip_eeprom_25lcxx::Error::SpiError(e) => Error::Spi(e),
             microchip_eeprom_25lcxx::Error::PinError(_) => Error::Storage,

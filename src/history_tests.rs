@@ -511,7 +511,7 @@ mod history_integration_tests {
 
     #[test]
     fn test_ring_storage_with_state_mock() {
-        let mut storage: RingStorage<0, 100, 10> = RingStorage::new_empty();
+        let storage: RingStorage<0, 100, 10> = RingStorage::new_empty();
         let mut state = HistoryStateMock::new();
 
         state.update_size(storage.data.size());
@@ -532,7 +532,7 @@ mod history_integration_tests {
         state.update_size(storage.data.size());
 
         // Add some operations
-        for i in 0..5 {
+        for _ in 0..5 {
             storage.advance_offset_by_one();
             mock_records.write_count += 1;
         }

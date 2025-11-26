@@ -522,7 +522,7 @@ mod integration_tests {
         label.render(&mut display);
         assert!(display.assertions().contains("Init"));
 
-        let first_content = display.get_content().to_string();
+        let _first_content = display.get_content().to_string();
 
         // Update and render - this clears and resets the buffer in our mock
         // so we need to test that the new content contains the updated text
@@ -634,8 +634,8 @@ mod edge_case_tests {
 
     #[test]
     fn test_label_max_length() {
-        let mut label: Label<(), 16, 0, 0> = Label::new("Short");
-        let mut label_long: Label<(), 256, 0, 0> = Label::new("Short");
+        let label: Label<(), 16, 0, 0> = Label::new("Short");
+        let label_long: Label<(), 256, 0, 0> = Label::new("Short");
 
         assert_eq!(label.state.len(), 5);
         assert_eq!(label_long.state.len(), 5);
