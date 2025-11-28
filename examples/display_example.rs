@@ -79,12 +79,51 @@ fn main() -> ! {
 
     cortex_m::asm::delay(32_000_000); // Delay ~2 seconds at 16MHz
 
+
     // Example 2: Display Russian text
+    // Важно: HD44780 может хранить только 8 пользовательских символов,
+    // поэтому используем короткие строки с не более 8 уникальных букв
     defmt::info!("Example 2: Russian characters");
     lcd.clear();
-    write!(lcd, "Привет мир!").ok();
+    write!(lcd, "Привет!").ok(); // 6 уникальных символов
     lcd.set_position(0, 1);
-    write!(lcd, "Русский текст").ok();
+    write!(lcd, "LCD HD44780").ok(); // ASCII текст
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 2.1: Другие русские слова
+    defmt::info!("Example 2.1: More Russian words");
+    lcd.clear();
+    write!(lcd, "Доброе утро!").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Как дела?").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 2.2: Русский текст - время
+    defmt::info!("Example 2.2: Time in Russian");
+    lcd.clear();
+    write!(lcd, "Время: 12:34").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Дата: 28.11").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 2.3: Статус
+    defmt::info!("Example 2.3: Status");
+    lcd.clear();
+    write!(lcd, "Система").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "работает").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 2.4: Счетчик
+    defmt::info!("Example 2.4: Counter");
+    lcd.clear();
+    write!(lcd, "Счетчик:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Литров: 123.4").ok();
 
     cortex_m::asm::delay(32_000_000);
 
@@ -131,10 +170,54 @@ fn main() -> ! {
     // Example 6: Mixed content with Russian
     defmt::info!("Example 6: Mixed content");
     lcd.clear();
-    write!(lcd, "Темп: 23.5").ok();
-    write!(lcd, "°C").ok();
+    write!(lcd, "Темп: 23.5C").ok();
     lcd.set_position(0, 1);
-    write!(lcd, "Влажн: 65%").ok();
+    write!(lcd, "Влага: 65%").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 6.1: Меню
+    defmt::info!("Example 6.1: Menu");
+    lcd.clear();
+    write!(lcd, "Меню:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "1.Настройки").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 6.2: Давление
+    defmt::info!("Example 6.2: Pressure");
+    lcd.clear();
+    write!(lcd, "Давление:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "1.2 бар").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 6.3: Расход
+    defmt::info!("Example 6.3: Flow rate");
+    lcd.clear();
+    write!(lcd, "Расход:").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "5.7 л/мин").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 6.4: Сообщения
+    defmt::info!("Example 6.4: Messages");
+    lcd.clear();
+    write!(lcd, "Внимание!").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "Ошибка!").ok();
+
+    cortex_m::asm::delay(32_000_000);
+
+    // Example 6.5: Состояние
+    defmt::info!("Example 6.5: State");
+    lcd.clear();
+    write!(lcd, "Готово").ok();
+    lcd.set_position(0, 1);
+    write!(lcd, "к работе").ok();
 
     cortex_m::asm::delay(32_000_000);
 
@@ -154,6 +237,6 @@ fn main() -> ! {
     defmt::info!("Display Example - Complete");
 
     loop {
-        cortex_m::asm::wfi();
+        cortex_m::asm::nop();
     }
 }

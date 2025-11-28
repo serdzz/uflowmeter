@@ -13,6 +13,8 @@ pub struct Lcd {
     led: LcdLed,
     not_active: bool,
     loaded_chars: [bool; 8], // Отслеживаем загруженные пользовательские символы
+    cursor_col: u8, // Текущая позиция курсора
+    cursor_row: u8,
 }
 
 impl Lcd {
@@ -23,6 +25,8 @@ impl Lcd {
             led,
             not_active: true,
             loaded_chars: [false; 8],
+            cursor_col: 0,
+            cursor_row: 0,
         }
     }
 
@@ -40,9 +44,9 @@ impl Lcd {
                 DisplayBlink::BlinkOff,
             );
             self.lcd
-                .entry_mode(EntryModeDirection::EntryRight, EntryModeShift::NoShift);
-            self.lcd
-                .upload_character(0u8, [0x1f, 0x0, 0xe, 0x1, 0xf, 0x11, 0xf, 0x0]);
+                .entry_mode(EntryModeDirection::EntryLeft, EntryModeShift::NoShift);
+            //           self.lcd
+            //              .upload_character(0u8, [0x1f, 0x0, 0xe, 0x1, 0xf, 0x11, 0xf, 0x0]);
         }
         ret
     }
@@ -74,8 +78,19 @@ impl Lcd {
         // Ищем свободный слот
         for i in 0..8 {
             if !self.loaded_chars[i] {
+                // Сохраняем текущую позицию курсора
+                let saved_col = self.cursor_col;
+                let saved_row = self.cursor_row;
+                
+                // Загружаем символ в CGRAM
                 self.lcd.upload_character(i as u8, pattern);
                 self.loaded_chars[i] = true;
+                
+                // Важно: после загрузки в CGRAM нужно вернуться к DDRAM
+                // Восстанавливаем позицию курсора на LCD
+                self.lcd.position(saved_col, saved_row);
+                // НЕ изменяем self.cursor_col и self.cursor_row - они уже корректны
+                
                 defmt::trace!("Loaded custom char in slot {} for Russian font", i);
                 return Some(i as u8);
             }
@@ -109,11 +124,15 @@ impl Lcd {
     pub fn clear(&mut self) {
         self.lcd.clear();
         self.reset_custom_chars();
+        self.cursor_col = 0;
+        self.cursor_row = 0;
     }
 
     // Set cursor position
     pub fn set_position(&mut self, col: u8, row: u8) {
         self.lcd.position(col, row);
+        self.cursor_col = col;
+        self.cursor_row = row;
     }
 
     // Предварительная загрузка всех русских символов
@@ -205,198 +224,164 @@ impl Lcd {
             //'0' => b'O',
             //'\0'..='\u{ff}' => c as u8,
             // Заглавные русские буквы
-            'А' => self
-                .load_custom_char([0x1f, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1f, 0x00])
-                .unwrap_or(b'A'),
+            'А' => b'A', // Выглядит идентично латинской A
             'Б' => self
-                .load_custom_char([0x1f, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x1f, 0x00])
+                .load_custom_char([0x1f, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x1e, 0x00])
                 .unwrap_or(b'B'),
-            'В' => self
-                .load_custom_char([0x1f, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x1f, 0x00])
-                .unwrap_or(b'B'),
+            'В' => b'B', // Выглядит идентично латинской B
             'Г' => self
-                .load_custom_char([0x1f, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00])
+                .load_custom_char([0x1f, 0x11, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00])
                 .unwrap_or(b'L'),
             'Д' => self
-                .load_custom_char([0x0f, 0x09, 0x09, 0x09, 0x09, 0x1f, 0x11, 0x00])
+                .load_custom_char([0x06, 0x0a, 0x0a, 0x0a, 0x0a, 0x1f, 0x11, 0x00])
                 .unwrap_or(b'U'),
-            'Е' => self
-                .load_custom_char([0x1f, 0x10, 0x10, 0x1f, 0x10, 0x10, 0x1f, 0x00])
-                .unwrap_or(b'E'),
+            'Е' => b'E', // Выглядит идентично латинской E
             'Ж' => self
-                .load_custom_char([0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11, 0x00])
+                .load_custom_char([0x15, 0x15, 0x0e, 0x04, 0x0e, 0x15, 0x15, 0x00])
                 .unwrap_or(b'X'),
             'З' => self
-                .load_custom_char([0x1f, 0x01, 0x01, 0x0f, 0x01, 0x01, 0x1f, 0x00])
+                .load_custom_char([0x0e, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0e, 0x00])
                 .unwrap_or(b'3'),
             'И' => self
-                .load_custom_char([0x11, 0x13, 0x15, 0x19, 0x11, 0x11, 0x11, 0x00])
+                .load_custom_char([0x11, 0x11, 0x13, 0x15, 0x19, 0x11, 0x11, 0x00])
                 .unwrap_or(b'I'),
             'Й' => self
-                .load_custom_char([0x04, 0x11, 0x13, 0x15, 0x19, 0x11, 0x11, 0x00])
+                .load_custom_char([0x0a, 0x11, 0x13, 0x15, 0x19, 0x11, 0x11, 0x00])
                 .unwrap_or(b'I'),
-            'К' => self
-                .load_custom_char([0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11, 0x00])
-                .unwrap_or(b'K'),
+            'К' => b'K', // Выглядит идентично латинской K
             'Л' => self
-                .load_custom_char([0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x00])
+                .load_custom_char([0x0f, 0x09, 0x09, 0x09, 0x09, 0x11, 0x11, 0x00])
                 .unwrap_or(b'V'),
-            'М' => self
-                .load_custom_char([0x11, 0x1b, 0x15, 0x11, 0x11, 0x11, 0x11, 0x00])
-                .unwrap_or(b'M'),
+            'М' => b'M', // Выглядит идентично латинской M
             'Н' => self
                 .load_custom_char([0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11, 0x00])
                 .unwrap_or(b'H'),
-            'О' => self
-                .load_custom_char([0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e, 0x00])
-                .unwrap_or(b'O'),
+            'О' => b'O', // Выглядит идентично латинской O
             'П' => self
                 .load_custom_char([0x1f, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x00])
                 .unwrap_or(b'U'),
-            'Р' => self
-                .load_custom_char([0x1f, 0x11, 0x11, 0x1f, 0x10, 0x10, 0x10, 0x00])
-                .unwrap_or(b'P'),
-            'С' => self
-                .load_custom_char([0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e, 0x00])
-                .unwrap_or(b'C'),
-            'Т' => self
-                .load_custom_char([0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x00])
-                .unwrap_or(b'T'),
+            'Р' => b'P', // Выглядит идентично латинской P
+            'С' => b'C', // Выглядит идентично латинской C
+            'Т' => b'T', // Выглядит идентично латинской T
             'У' => self
-                .load_custom_char([0x11, 0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x00])
+                .load_custom_char([0x11, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x1c, 0x00])
                 .unwrap_or(b'Y'),
             'Ф' => self
-                .load_custom_char([0x0e, 0x15, 0x15, 0x15, 0x0e, 0x04, 0x04, 0x00])
+                .load_custom_char([0x04, 0x0e, 0x15, 0x15, 0x15, 0x0e, 0x04, 0x00])
                 .unwrap_or(b'F'),
-            'Х' => self
-                .load_custom_char([0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11, 0x00])
-                .unwrap_or(b'X'),
+            'Х' => b'X', // Выглядит идентично латинской X
             'Ц' => self
-                .load_custom_char([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1f, 0x01])
+                .load_custom_char([0x11, 0x11, 0x11, 0x11, 0x11, 0x1f, 0x1f, 0x01])
                 .unwrap_or(b'U'),
             'Ч' => self
-                .load_custom_char([0x11, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x01, 0x00])
+                .load_custom_char([0x11, 0x11, 0x11, 0x0f, 0x0f, 0x01, 0x01, 0x00])
                 .unwrap_or(b'4'),
             'Ш' => self
-                .load_custom_char([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1f, 0x00])
+                .load_custom_char([0x15, 0x15, 0x15, 0x15, 0x15, 0x15, 0x1f, 0x00])
                 .unwrap_or(b'W'),
             'Щ' => self
-                .load_custom_char([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1f, 0x01])
+                .load_custom_char([0x15, 0x15, 0x15, 0x15, 0x15, 0x1f, 0x1f, 0x01])
                 .unwrap_or(b'W'),
             'Ъ' => self
-                .load_custom_char([0x18, 0x08, 0x08, 0x0f, 0x09, 0x09, 0x0f, 0x00])
+                .load_custom_char([0x1c, 0x04, 0x04, 0x0e, 0x05, 0x05, 0x0e, 0x00])
                 .unwrap_or(b'b'),
             'Ы' => self
-                .load_custom_char([0x11, 0x11, 0x11, 0x17, 0x19, 0x19, 0x17, 0x00])
+                .load_custom_char([0x11, 0x11, 0x11, 0x1f, 0x19, 0x19, 0x1f, 0x00])
                 .unwrap_or(b'B'),
             'Ь' => self
-                .load_custom_char([0x10, 0x10, 0x10, 0x1f, 0x11, 0x11, 0x1f, 0x00])
+                .load_custom_char([0x10, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x1e, 0x00])
                 .unwrap_or(b'b'),
             'Э' => self
-                .load_custom_char([0x1f, 0x01, 0x01, 0x0f, 0x01, 0x01, 0x1f, 0x00])
+                .load_custom_char([0x0e, 0x11, 0x01, 0x07, 0x01, 0x11, 0x0e, 0x00])
                 .unwrap_or(b'E'),
             'Ю' => self
-                .load_custom_char([0x17, 0x19, 0x19, 0x19, 0x19, 0x19, 0x17, 0x00])
+                .load_custom_char([0x12, 0x15, 0x15, 0x1d, 0x15, 0x15, 0x12, 0x00])
                 .unwrap_or(b'U'),
             'Я' => self
-                .load_custom_char([0x0f, 0x11, 0x11, 0x0f, 0x05, 0x09, 0x11, 0x00])
+                .load_custom_char([0x0f, 0x11, 0x11, 0x0f, 0x09, 0x09, 0x11, 0x00])
                 .unwrap_or(b'R'),
             // Строчные русские буквы
-            'а' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x01, 0x0f, 0x11, 0x0f, 0x00])
-                .unwrap_or(b'a'),
+            'а' => b'a', // Выглядит идентично латинской a
             'б' => self
-                .load_custom_char([0x01, 0x01, 0x0f, 0x11, 0x11, 0x11, 0x0f, 0x00])
+                .load_custom_char([0x03, 0x04, 0x08, 0x0e, 0x11, 0x11, 0x0e, 0x00])
                 .unwrap_or(b'6'),
             'в' => self
-                .load_custom_char([0x00, 0x00, 0x17, 0x19, 0x17, 0x19, 0x17, 0x00])
+                .load_custom_char([0x00, 0x00, 0x1e, 0x11, 0x1e, 0x11, 0x1e, 0x00])
                 .unwrap_or(b'b'),
             'г' => self
-                .load_custom_char([0x00, 0x00, 0x1e, 0x10, 0x10, 0x10, 0x10, 0x00])
+                .load_custom_char([0x00, 0x00, 0x1f, 0x11, 0x10, 0x10, 0x10, 0x00])
                 .unwrap_or(b'r'),
             'д' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x11, 0x11, 0x0f, 0x01, 0x1f])
+                .load_custom_char([0x00, 0x06, 0x0a, 0x0a, 0x0a, 0x1f, 0x11, 0x00])
                 .unwrap_or(b'd'),
-            'е' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e, 0x00])
-                .unwrap_or(b'e'),
+            'е' => b'e', // Выглядит идентично латинской e
             'ж' => self
-                .load_custom_char([0x00, 0x00, 0x15, 0x15, 0x0e, 0x15, 0x15, 0x00])
+                .load_custom_char([0x00, 0x00, 0x15, 0x0e, 0x04, 0x0e, 0x15, 0x00])
                 .unwrap_or(b'x'),
             'з' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x01, 0x06, 0x01, 0x0e, 0x00])
+                .load_custom_char([0x00, 0x00, 0x0e, 0x11, 0x02, 0x11, 0x0e, 0x00])
                 .unwrap_or(b'3'),
             'и' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x13, 0x15, 0x19, 0x11, 0x00])
+                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x13, 0x15, 0x19, 0x00])
                 .unwrap_or(b'u'),
             'й' => self
-                .load_custom_char([0x04, 0x00, 0x11, 0x13, 0x15, 0x19, 0x11, 0x00])
+                .load_custom_char([0x0a, 0x00, 0x11, 0x11, 0x13, 0x15, 0x19, 0x00])
                 .unwrap_or(b'u'),
             'к' => self
-                .load_custom_char([0x00, 0x00, 0x12, 0x14, 0x18, 0x14, 0x12, 0x00])
+                .load_custom_char([0x00, 0x00, 0x11, 0x12, 0x1c, 0x12, 0x11, 0x00])
                 .unwrap_or(b'k'),
             'л' => self
-                .load_custom_char([0x00, 0x00, 0x07, 0x09, 0x09, 0x09, 0x09, 0x00])
+                .load_custom_char([0x00, 0x00, 0x0f, 0x09, 0x09, 0x09, 0x11, 0x00])
                 .unwrap_or(b'n'),
             'м' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x1b, 0x15, 0x11, 0x11, 0x00])
+                .load_custom_char([0x00, 0x00, 0x11, 0x1b, 0x1b, 0x15, 0x11, 0x00])
                 .unwrap_or(b'm'),
             'н' => self
                 .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x00])
                 .unwrap_or(b'h'),
-            'о' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x11, 0x11, 0x11, 0x0e, 0x00])
-                .unwrap_or(b'o'),
+            'о' => b'o', // Выглядит идентично латинской o
             'п' => self
                 .load_custom_char([0x00, 0x00, 0x1f, 0x11, 0x11, 0x11, 0x11, 0x00])
                 .unwrap_or(b'n'),
-            'р' => self
-                .load_custom_char([0x00, 0x00, 0x17, 0x19, 0x19, 0x17, 0x10, 0x10])
-                .unwrap_or(b'p'),
-            'с' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x10, 0x10, 0x10, 0x0e, 0x00])
-                .unwrap_or(b'c'),
+            'р' => b'p', // Выглядит похоже на латинскую p
+            'с' => b'c', // Выглядит идентично латинской c
             'т' => self
                 .load_custom_char([0x00, 0x00, 0x1f, 0x04, 0x04, 0x04, 0x04, 0x00])
                 .unwrap_or(b't'),
-            'у' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x11, 0x0f, 0x01, 0x0e])
-                .unwrap_or(b'y'),
+            'у' => b'y', // Выглядит похоже на латинскую y
             'ф' => self
-                .load_custom_char([0x00, 0x04, 0x0e, 0x15, 0x15, 0x0e, 0x04, 0x00])
+                .load_custom_char([0x04, 0x04, 0x0e, 0x15, 0x15, 0x0e, 0x04, 0x04])
                 .unwrap_or(b'f'),
-            'х' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x00])
-                .unwrap_or(b'x'),
+            'х' => b'x', // Выглядит идентично латинской x
             'ц' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x11, 0x11, 0x1f, 0x01])
+                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x11, 0x1f, 0x1f, 0x01])
                 .unwrap_or(b'u'),
             'ч' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x11, 0x0f, 0x01, 0x01])
+                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x00])
                 .unwrap_or(b'4'),
             'ш' => self
                 .load_custom_char([0x00, 0x00, 0x15, 0x15, 0x15, 0x15, 0x1f, 0x00])
                 .unwrap_or(b'w'),
             'щ' => self
-                .load_custom_char([0x00, 0x00, 0x15, 0x15, 0x15, 0x15, 0x1f, 0x01])
+                .load_custom_char([0x00, 0x00, 0x15, 0x15, 0x15, 0x1f, 0x1f, 0x01])
                 .unwrap_or(b'w'),
             'ъ' => self
-                .load_custom_char([0x00, 0x00, 0x18, 0x08, 0x0f, 0x09, 0x0f, 0x00])
+                .load_custom_char([0x00, 0x00, 0x1c, 0x04, 0x0e, 0x05, 0x0e, 0x00])
                 .unwrap_or(b'b'),
             'ы' => self
-                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x17, 0x19, 0x17, 0x00])
+                .load_custom_char([0x00, 0x00, 0x11, 0x11, 0x1f, 0x19, 0x1f, 0x00])
                 .unwrap_or(b'b'),
             'ь' => self
-                .load_custom_char([0x00, 0x00, 0x10, 0x10, 0x1f, 0x11, 0x1f, 0x00])
+                .load_custom_char([0x00, 0x00, 0x10, 0x10, 0x1e, 0x11, 0x1e, 0x00])
                 .unwrap_or(b'b'),
             'э' => self
-                .load_custom_char([0x00, 0x00, 0x0e, 0x01, 0x0f, 0x01, 0x0e, 0x00])
+                .load_custom_char([0x00, 0x00, 0x0e, 0x11, 0x07, 0x11, 0x0e, 0x00])
                 .unwrap_or(b'e'),
             'ю' => self
-                .load_custom_char([0x00, 0x00, 0x17, 0x19, 0x19, 0x19, 0x17, 0x00])
+                .load_custom_char([0x00, 0x00, 0x12, 0x15, 0x1d, 0x15, 0x12, 0x00])
                 .unwrap_or(b'u'),
             'я' => self
-                .load_custom_char([0x00, 0x00, 0x0f, 0x11, 0x0f, 0x05, 0x09, 0x00])
+                .load_custom_char([0x00, 0x00, 0x0f, 0x11, 0x0f, 0x09, 0x11, 0x00])
                 .unwrap_or(b'r'),
             // Дополнительные символы
             'ё' => self
@@ -405,7 +390,10 @@ impl Lcd {
             'Ё' => self
                 .load_custom_char([0x0a, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e, 0x00])
                 .unwrap_or(b'E'),
-            _ => b'\0',
+            // Пропускаем ASCII символы как есть
+            c if c.is_ascii() => c as u8,
+            // Неизвестные символы
+            _ => b'?',
         }
     }
 }
@@ -413,11 +401,24 @@ impl Lcd {
 impl core::fmt::Write for Lcd {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let mut val = String::new();
-        for c in s.chars().enumerate() {
-            let ascii = self.convert_char(c.1);
+        let char_count = s.chars().count();
+        
+        for c in s.chars() {
+            let ascii = self.convert_char(c);
             val.push(ascii as char);
         }
+        
+        // Записываем все символы на LCD
         self.lcd.write_str(val.as_str()).ok();
+        
+        // Обновляем позицию курсора ПОСЛЕ записи
+        // LCD автоматически инкрементирует курсор при записи
+        self.cursor_col += char_count as u8;
+        while self.cursor_col >= 16 { // 16x2 LCD
+            self.cursor_col -= 16;
+            self.cursor_row = (self.cursor_row + 1) % 2;
+        }
+        
         Ok(())
     }
 }
