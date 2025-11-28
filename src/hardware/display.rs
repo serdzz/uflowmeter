@@ -44,7 +44,7 @@ impl Lcd {
                 DisplayBlink::BlinkOff,
             );
             self.lcd
-                .entry_mode(EntryModeDirection::EntryLeft, EntryModeShift::NoShift);
+                .entry_mode(EntryModeDirection::EntryRight, EntryModeShift::NoShift);
             //           self.lcd
             //              .upload_character(0u8, [0x1f, 0x0, 0xe, 0x1, 0xf, 0x11, 0xf, 0x0]);
         }
@@ -400,23 +400,18 @@ impl Lcd {
 
 impl core::fmt::Write for Lcd {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let mut val = String::new();
-        let char_count = s.chars().count();
-        
+        // Пишем посимвольно для надежности
         for c in s.chars() {
             let ascii = self.convert_char(c);
-            val.push(ascii as char);
-        }
-        
-        // Записываем все символы на LCD
-        self.lcd.write_str(val.as_str()).ok();
-        
-        // Обновляем позицию курсора ПОСЛЕ записи
-        // LCD автоматически инкрементирует курсор при записи
-        self.cursor_col += char_count as u8;
-        while self.cursor_col >= 16 { // 16x2 LCD
-            self.cursor_col -= 16;
-            self.cursor_row = (self.cursor_row + 1) % 2;
+            // Пишем один символ
+            self.lcd.write(ascii);
+            
+            // Обновляем позицию курсора
+            self.cursor_col += 1;
+            if self.cursor_col >= 16 { // 16x2 LCD
+                self.cursor_col = 0;
+                self.cursor_row = (self.cursor_row + 1) % 2;
+            }
         }
         
         Ok(())

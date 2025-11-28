@@ -38,11 +38,12 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Edit<A, LEN, X, Y> {
 
     pub fn set_editable(&mut self, val: bool) {
         self.editable = val;
-        self.blink_state = false;
+        self.blink_state = val; // Start with true when editable
     }
 
     pub fn blink_mask(&mut self, mask: u32) {
         self.blink_mask = mask;
+        self.invalidate = true;
     }
 }
 
@@ -82,12 +83,18 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
+        // If editable, toggle blink state to create blinking effect
+        if self.editable {
+            self.blink_state = !self.blink_state;
+            self.invalidate = true;
+        }
+        
         if self.invalidate {
             display.reset_custom_chars();
             display.set_position(X, Y);
             self.invalidate = false;
             let mut state = self.state.clone();
-            if self.blink_state {
+            if self.editable && self.blink_state {
                 unsafe {
                     let bytes = state.as_bytes_mut();
                     for (i, item) in bytes.iter_mut().enumerate().take(LEN) {

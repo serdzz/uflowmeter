@@ -38,8 +38,8 @@ pub trait HistoryWidgetTrait {
     fn get_history_type(&self) -> HistoryType;
     fn get_date_edit(&mut self) -> &mut Edit<Actions, 16, 8, 0>;
     fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1>;
-    fn get_label_edit(&mut self) -> &mut Edit<Actions, 16, 0, 0>;
-    fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1>;
+    fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0>;
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1>;
 
     fn inc(&mut self) {
         match self.get_items() {
@@ -98,9 +98,9 @@ pub trait HistoryWidgetTrait {
     fn next_item(&mut self) -> bool {
         match self.get_items() {
             DateTimeItems::None => {
-                self.get_time_edit().blink_mask(0x03);
+                self.get_time_edit().blink_mask(0xc0);
                 self.get_time_edit().set_editable(true);
-                self.set_items(DateTimeItems::Seconds);
+                self.set_items(DateTimeItems::Hours);
             }
             DateTimeItems::Seconds => {
                 self.get_time_edit().blink_mask(0x18);
@@ -138,8 +138,8 @@ pub trait HistoryWidgetTrait {
 pub struct HistoryWidget {
     pub date: Edit<Actions, 16, 8, 0>,
     time: Edit<Actions, 16, 0, 1>,
-    pub label: Edit<Actions, 16, 0, 0>,
-    pub value: Edit<Actions, 16, 10, 1>,
+    pub label: Label<Actions, 16, 0, 0>,
+    pub value: Label<Actions, 16, 10, 1>,
     pub items: DateTimeItems,
     datetime: PrimitiveDateTime,
     pub editable: bool,
@@ -181,10 +181,10 @@ impl HistoryWidgetTrait for HistoryWidget {
     fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1> {
         &mut self.time
     }
-    fn get_label_edit(&mut self) -> &mut Edit<Actions, 16, 0, 0> {
+    fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0> {
         &mut self.label
     }
-    fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1> {
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1> {
         &mut self.value
     }
 }
@@ -200,11 +200,11 @@ impl HistoryWidget {
         Self {
             date: Edit::<Actions, 16, 8, 0>::new(""),
             time: Edit::<Actions, 16, 0, 1>::new(""),
-            label: Edit::<Actions, 16, 0, 0>::new("From"),
-            value: Edit::<Actions, 16, 10, 1>::new(""),
+            label: Label::<Actions, 16, 0, 0>::new("From"),
+            value: Label::<Actions, 16, 10, 1>::new(""),
             items: DateTimeItems::None,
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
-            editable: true,
+            editable: false,
             timestamp: 0,
             history_type: HistoryType::Hour,
         }
@@ -218,9 +218,10 @@ impl Widget<&App, Actions> for HistoryWidget {
         if !self.editable {
             self.datetime = state.datetime;
         }
+        
+        // Always update date/time to ensure blinking works
         self.date.state.clear();
         self.time.state.clear();
-        self.value.state.clear();
         write!(
             self.date,
             "{:02}/{:02}/{:02}",
@@ -230,10 +231,16 @@ impl Widget<&App, Actions> for HistoryWidget {
         )
         .ok();
         write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
+        
+        // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
-            write!(self.value, "{flow}").ok();
-        } else {
-            write!(self.value, "None").ok();
+            let mut value_str = alloc::string::String::new();
+            write!(value_str, "{flow}").ok();
+            if self.value.state != value_str {
+                self.value.update(&value_str);
+            }
+        } else if self.value.state != "None" {
+            self.value.update("None");
         }
     }
 
@@ -268,9 +275,9 @@ impl Widget<&App, Actions> for HistoryWidget {
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
-        self.date.render(display);
         self.label.render(display);
         self.value.render(display);
+        self.date.render(display);
         self.time.render(display);
     }
 }
@@ -278,8 +285,8 @@ impl Widget<&App, Actions> for HistoryWidget {
 pub struct DayHistoryWidget {
     pub date: Edit<Actions, 16, 8, 0>,
     time: Edit<Actions, 16, 0, 1>,
-    pub label: Edit<Actions, 16, 0, 0>,
-    pub value: Edit<Actions, 16, 10, 1>,
+    pub label: Label<Actions, 16, 0, 0>,
+    pub value: Label<Actions, 16, 10, 1>,
     pub items: DateTimeItems,
     datetime: PrimitiveDateTime,
     pub editable: bool,
@@ -321,10 +328,10 @@ impl HistoryWidgetTrait for DayHistoryWidget {
     fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1> {
         &mut self.time
     }
-    fn get_label_edit(&mut self) -> &mut Edit<Actions, 16, 0, 0> {
+    fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0> {
         &mut self.label
     }
-    fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1> {
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1> {
         &mut self.value
     }
 }
@@ -340,11 +347,11 @@ impl DayHistoryWidget {
         Self {
             date: Edit::<Actions, 16, 8, 0>::new(""),
             time: Edit::<Actions, 16, 0, 1>::new(""),
-            label: Edit::<Actions, 16, 0, 0>::new("From"),
-            value: Edit::<Actions, 16, 10, 1>::new(""),
+            label: Label::<Actions, 16, 0, 0>::new("From"),
+            value: Label::<Actions, 16, 10, 1>::new(""),
             items: DateTimeItems::None,
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
-            editable: true,
+            editable: false,
             timestamp: 0,
             history_type: HistoryType::Day,
         }
@@ -358,9 +365,10 @@ impl Widget<&App, Actions> for DayHistoryWidget {
         if !self.editable {
             self.datetime = state.datetime;
         }
+        
+        // Always update date/time to ensure blinking works
         self.date.state.clear();
         self.time.state.clear();
-        self.value.state.clear();
         write!(
             self.date,
             "{:02}/{:02}/{:02}",
@@ -370,10 +378,16 @@ impl Widget<&App, Actions> for DayHistoryWidget {
         )
         .ok();
         write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
+        
+        // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
-            write!(self.value, "{flow}").ok();
-        } else {
-            write!(self.value, "None").ok();
+            let mut value_str = alloc::string::String::new();
+            write!(value_str, "{flow}").ok();
+            if self.value.state != value_str {
+                self.value.update(&value_str);
+            }
+        } else if self.value.state != "None" {
+            self.value.update("None");
         }
     }
 
@@ -408,9 +422,9 @@ impl Widget<&App, Actions> for DayHistoryWidget {
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
-        self.date.render(display);
         self.label.render(display);
         self.value.render(display);
+        self.date.render(display);
         self.time.render(display);
     }
 }
@@ -418,8 +432,8 @@ impl Widget<&App, Actions> for DayHistoryWidget {
 pub struct MonthHistoryWidget {
     pub date: Edit<Actions, 16, 8, 0>,
     time: Edit<Actions, 16, 0, 1>,
-    pub label: Edit<Actions, 16, 0, 0>,
-    pub value: Edit<Actions, 16, 10, 1>,
+    pub label: Label<Actions, 16, 0, 0>,
+    pub value: Label<Actions, 16, 10, 1>,
     pub items: DateTimeItems,
     datetime: PrimitiveDateTime,
     pub editable: bool,
@@ -461,10 +475,10 @@ impl HistoryWidgetTrait for MonthHistoryWidget {
     fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1> {
         &mut self.time
     }
-    fn get_label_edit(&mut self) -> &mut Edit<Actions, 16, 0, 0> {
+    fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0> {
         &mut self.label
     }
-    fn get_value_edit(&mut self) -> &mut Edit<Actions, 16, 10, 1> {
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1> {
         &mut self.value
     }
 }
@@ -480,11 +494,11 @@ impl MonthHistoryWidget {
         Self {
             date: Edit::<Actions, 16, 8, 0>::new(""),
             time: Edit::<Actions, 16, 0, 1>::new(""),
-            label: Edit::<Actions, 16, 0, 0>::new("From"),
-            value: Edit::<Actions, 16, 10, 1>::new(""),
+            label: Label::<Actions, 16, 0, 0>::new("From"),
+            value: Label::<Actions, 16, 10, 1>::new(""),
             items: DateTimeItems::None,
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
-            editable: true,
+            editable: false,
             timestamp: 0,
             history_type: HistoryType::Month,
         }
@@ -498,9 +512,10 @@ impl Widget<&App, Actions> for MonthHistoryWidget {
         if !self.editable {
             self.datetime = state.datetime;
         }
+        
+        // Always update date/time to ensure blinking works
         self.date.state.clear();
         self.time.state.clear();
-        self.value.state.clear();
         write!(
             self.date,
             "{:02}/{:02}/{:02}",
@@ -510,10 +525,16 @@ impl Widget<&App, Actions> for MonthHistoryWidget {
         )
         .ok();
         write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
+        
+        // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
-            write!(self.value, "{flow}").ok();
-        } else {
-            write!(self.value, "None").ok();
+            let mut value_str = alloc::string::String::new();
+            write!(value_str, "{flow}").ok();
+            if self.value.state != value_str {
+                self.value.update(&value_str);
+            }
+        } else if self.value.state != "None" {
+            self.value.update("None");
         }
     }
 
@@ -548,9 +569,9 @@ impl Widget<&App, Actions> for MonthHistoryWidget {
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
-        self.date.render(display);
         self.label.render(display);
         self.value.render(display);
+        self.date.render(display);
         self.time.render(display);
     }
 }
