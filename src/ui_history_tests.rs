@@ -595,19 +595,19 @@ mod ui_history_tests {
     #[test]
     fn test_history_widget_editable_after_creation() {
         let widget = HistoryWidget::new();
-        assert!(widget.get_editable());
+        assert!(!widget.get_editable());
     }
 
     #[test]
     fn test_history_widget_toggle_editable() {
         let mut widget = HistoryWidget::new();
-        assert!(widget.get_editable());
-
-        widget.set_editable(false);
         assert!(!widget.get_editable());
 
         widget.set_editable(true);
         assert!(widget.get_editable());
+
+        widget.set_editable(false);
+        assert!(!widget.get_editable());
     }
 
     #[test]

@@ -3,7 +3,6 @@ use super::{
     pins::{LcdLed, LcdOn},
     LcdHardware,
 };
-use alloc::string::String;
 use embedded_hal::digital::v2::OutputPin;
 use lcd::*;
 

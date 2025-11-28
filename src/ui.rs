@@ -98,9 +98,9 @@ pub trait HistoryWidgetTrait {
     fn next_item(&mut self) -> bool {
         match self.get_items() {
             DateTimeItems::None => {
-                self.get_time_edit().blink_mask(0xc0);
+                self.get_time_edit().blink_mask(0x03);
                 self.get_time_edit().set_editable(true);
-                self.set_items(DateTimeItems::Hours);
+                self.set_items(DateTimeItems::Seconds);
             }
             DateTimeItems::Seconds => {
                 self.get_time_edit().blink_mask(0x18);
