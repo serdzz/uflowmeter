@@ -12,6 +12,7 @@ pub use label::*;
 //pub use macros::*;
 
 #[allow(dead_code)]
+#[cfg_attr(not(test), derive(defmt::Format))]
 #[derive(Debug, Copy, Clone)]
 pub enum UiEvent {
     Up,

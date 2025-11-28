@@ -84,8 +84,28 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
         // If editable, toggle blink state to create blinking effect
+        // Toggle every BLINK_TIME renders (~200ms at 10Hz = 2 renders)
         if self.editable {
-            self.blink_state = !self.blink_state;
+            self.blink += 1;
+            #[cfg(not(test))]
+            defmt::trace!(
+                "Edit::render editable - blink={}, threshold={}, blink_state={}, blink_mask={:08b}",
+                self.blink,
+                Self::BLINK_TIME / 100,
+                self.blink_state,
+                self.blink_mask
+            );
+            if self.blink >= Self::BLINK_TIME / 100 {
+                // Assuming ~100ms per render
+                self.blink = 0;
+                self.blink_state = !self.blink_state;
+                #[cfg(not(test))]
+                defmt::info!(
+                    "Edit::render TOGGLED blink_state to {}, blink_mask={:08b}",
+                    self.blink_state,
+                    self.blink_mask
+                );
+            }
             self.invalidate = true;
         }
 
@@ -94,7 +114,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
             display.set_position(X, Y);
             self.invalidate = false;
             let mut state = self.state.clone();
-            if self.editable && self.blink_state {
+            if self.editable && !self.blink_state {
                 unsafe {
                     let bytes = state.as_bytes_mut();
                     for (i, item) in bytes.iter_mut().enumerate().take(LEN) {

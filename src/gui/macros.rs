@@ -114,6 +114,7 @@ macro_rules! widget_mux {
     $($event_hook:expr)?
 ) => {
     paste::paste! {
+        #[cfg_attr(not(test), derive(defmt::Format))]
         #[derive(PartialEq, Eq, Clone, Copy, Debug)]
         pub enum [<$name:camel Node>] {
             $([<$node_name:camel>]),+

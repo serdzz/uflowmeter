@@ -380,6 +380,7 @@ mod app {
                     ui.invalidate();
                 }
                 ui.update(app);
+                ui.get_active();
                 ui.render(lcd);
             });
             if event.is_some() {
@@ -411,6 +412,7 @@ mod app {
                     ui.invalidate();
                 }
                 ui.update(app);
+                ui.get_active();
                 ui.render(lcd);
             });
             let chan_val: u16 = ctx.local.adc.read(ctx.local.photo_r).unwrap();

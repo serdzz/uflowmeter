@@ -8,6 +8,7 @@ use time::{
     Duration, PrimitiveDateTime,
 };
 
+#[cfg_attr(not(test), derive(defmt::Format))]
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DateTimeItems {
     None,
@@ -18,6 +19,7 @@ pub enum DateTimeItems {
     Month,
     Year,
 }
+#[cfg_attr(not(test), derive(defmt::Format))]
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
 pub enum HistoryType {
     #[default]
@@ -37,9 +39,9 @@ pub trait HistoryWidgetTrait {
     fn set_timestamp(&mut self, timestamp: u32);
     fn get_history_type(&self) -> HistoryType;
     fn get_date_edit(&mut self) -> &mut Edit<Actions, 16, 8, 0>;
-    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1>;
+    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 8, 1>;
     fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0>;
-    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1>;
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 8, 0, 1>;
 
     fn inc(&mut self) {
         match self.get_items() {
@@ -137,14 +139,15 @@ pub trait HistoryWidgetTrait {
 
 pub struct HistoryWidget {
     pub date: Edit<Actions, 16, 8, 0>,
-    time: Edit<Actions, 16, 0, 1>,
+    pub time: Edit<Actions, 16, 8, 1>,
     pub label: Label<Actions, 16, 0, 0>,
-    pub value: Label<Actions, 16, 10, 1>,
+    pub value: Label<Actions, 8, 0, 1>,
     pub items: DateTimeItems,
     datetime: PrimitiveDateTime,
     pub editable: bool,
     timestamp: u32,
     history_type: HistoryType,
+    first_render: bool,
 }
 
 impl HistoryWidgetTrait for HistoryWidget {
@@ -178,13 +181,13 @@ impl HistoryWidgetTrait for HistoryWidget {
     fn get_date_edit(&mut self) -> &mut Edit<Actions, 16, 8, 0> {
         &mut self.date
     }
-    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1> {
+    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 8, 1> {
         &mut self.time
     }
     fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0> {
         &mut self.label
     }
-    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1> {
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 8, 0, 1> {
         &mut self.value
     }
 }
@@ -199,38 +202,59 @@ impl HistoryWidget {
     pub fn new() -> Self {
         Self {
             date: Edit::<Actions, 16, 8, 0>::new(""),
-            time: Edit::<Actions, 16, 0, 1>::new(""),
+            time: Edit::<Actions, 16, 8, 1>::new(""),
             label: Label::<Actions, 16, 0, 0>::new("From"),
-            value: Label::<Actions, 16, 10, 1>::new(""),
+            value: Label::<Actions, 8, 0, 1>::new(""),
             items: DateTimeItems::None,
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
             editable: false,
             timestamp: 0,
             history_type: HistoryType::Hour,
+            first_render: true,
         }
     }
 }
 
 impl Widget<&App, Actions> for HistoryWidget {
-    fn invalidate(&mut self) {}
+    fn invalidate(&mut self) {
+        self.label.invalidate();
+        self.value.invalidate();
+        self.date.invalidate();
+        self.time.invalidate();
+        self.first_render = true;
+    }
 
     fn update(&mut self, state: &App) {
+        #[cfg(not(test))]
+        defmt::debug!("HistoryWidget::update called, editable={}", self.editable);
         if !self.editable {
             self.datetime = state.datetime;
         }
 
-        // Always update date/time to ensure blinking works
-        self.date.state.clear();
-        self.time.state.clear();
-        write!(
-            self.date,
-            "{:02}/{:02}/{:02}",
-            self.datetime.day(),
-            self.datetime.month() as u8,
-            self.datetime.year() - 2000
-        )
-        .ok();
-        write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
+        // Update date/time text ONLY when not in editable mode to prevent interfering with blinking
+        if !self.date.editable {
+            self.date.state.clear();
+            write!(
+                self.date,
+                "{:02}/{:02}/{:02}",
+                self.datetime.day(),
+                self.datetime.month() as u8,
+                self.datetime.year() - 2000
+            )
+            .ok();
+        }
+        if !self.time.editable {
+            self.time.state.clear();
+            write!(
+                self.time,
+                "{:>8}",
+                alloc::format!("{:02}:00:00", self.datetime.hour())
+            )
+            .ok();
+        }
+        #[cfg(not(test))]
+        defmt::debug!("HistoryWidget date.editable={}, date.invalidate={}, time.editable={}, time.invalidate={}",
+            self.date.editable, self.date.invalidate, self.time.editable, self.time.invalidate);
 
         // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
@@ -239,12 +263,22 @@ impl Widget<&App, Actions> for HistoryWidget {
             if self.value.state != value_str {
                 self.value.update(&value_str);
             }
+            #[cfg(not(test))]
+            defmt::debug!("HistoryWidget flow value: {}", flow);
         } else if self.value.state != "None" {
             self.value.update("None");
+            #[cfg(not(test))]
+            defmt::debug!("HistoryWidget flow value: None");
         }
     }
 
     fn event(&mut self, event: UiEvent) -> Option<Actions> {
+        #[cfg(not(test))]
+        defmt::info!(
+            "HistoryWidget::event, editable={}, event={}",
+            self.editable,
+            event
+        );
         if self.editable {
             match event {
                 UiEvent::Left => {
@@ -256,7 +290,17 @@ impl Widget<&App, Actions> for HistoryWidget {
                     Some(Actions::SetHistory(self.history_type, self.timestamp))
                 }
                 UiEvent::Enter => {
+                    #[cfg(not(test))]
+                    defmt::info!(
+                        "HistoryWidget: Enter pressed in editable mode, calling next_item()"
+                    );
                     self.next_item();
+                    #[cfg(not(test))]
+                    defmt::info!(
+                        "HistoryWidget: after next_item(), editable={}, items={:?}",
+                        self.editable,
+                        self.items
+                    );
                     None
                 }
                 _ => None,
@@ -264,7 +308,17 @@ impl Widget<&App, Actions> for HistoryWidget {
         } else {
             match event {
                 UiEvent::Enter => {
+                    #[cfg(not(test))]
+                    defmt::info!(
+                        "HistoryWidget: Enter pressed in non-editable mode, calling next_item()"
+                    );
                     self.next_item();
+                    #[cfg(not(test))]
+                    defmt::info!(
+                        "HistoryWidget: after next_item(), editable={}, items={:?}",
+                        self.editable,
+                        self.items
+                    );
                     None
                 }
                 UiEvent::Left => Some(Actions::Label),
@@ -275,23 +329,46 @@ impl Widget<&App, Actions> for HistoryWidget {
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
+        #[cfg(not(test))]
+        defmt::debug!(
+            "HistoryWidget::render called, editable={}, first_render={}",
+            self.editable,
+            self.first_render
+        );
+        if self.first_render {
+            display.clear();
+            self.first_render = false;
+        }
+        #[cfg(not(test))]
+        defmt::trace!("HistoryWidget: before render - date.editable={}, date.blink_state={}, date.invalidate={}",
+            self.date.editable, self.date.blink_state, self.date.invalidate);
+        #[cfg(not(test))]
+        defmt::trace!("HistoryWidget: before render - time.editable={}, time.blink_state={}, time.invalidate={}",
+            self.time.editable, self.time.blink_state, self.time.invalidate);
         self.label.render(display);
         self.value.render(display);
         self.date.render(display);
         self.time.render(display);
+        #[cfg(not(test))]
+        defmt::trace!("HistoryWidget: after render - date.editable={}, date.blink_state={}, date.invalidate={}",
+            self.date.editable, self.date.blink_state, self.date.invalidate);
+        #[cfg(not(test))]
+        defmt::trace!("HistoryWidget: after render - time.editable={}, time.blink_state={}, time.invalidate={}",
+            self.time.editable, self.time.blink_state, self.time.invalidate);
     }
 }
 
 pub struct DayHistoryWidget {
     pub date: Edit<Actions, 16, 8, 0>,
-    time: Edit<Actions, 16, 0, 1>,
+    pub time: Edit<Actions, 16, 8, 1>,
     pub label: Label<Actions, 16, 0, 0>,
-    pub value: Label<Actions, 16, 10, 1>,
+    pub value: Label<Actions, 8, 0, 1>,
     pub items: DateTimeItems,
     datetime: PrimitiveDateTime,
     pub editable: bool,
     timestamp: u32,
     history_type: HistoryType,
+    first_render: bool,
 }
 
 impl HistoryWidgetTrait for DayHistoryWidget {
@@ -325,13 +402,13 @@ impl HistoryWidgetTrait for DayHistoryWidget {
     fn get_date_edit(&mut self) -> &mut Edit<Actions, 16, 8, 0> {
         &mut self.date
     }
-    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1> {
+    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 8, 1> {
         &mut self.time
     }
     fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0> {
         &mut self.label
     }
-    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1> {
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 8, 0, 1> {
         &mut self.value
     }
 }
@@ -346,38 +423,54 @@ impl DayHistoryWidget {
     pub fn new() -> Self {
         Self {
             date: Edit::<Actions, 16, 8, 0>::new(""),
-            time: Edit::<Actions, 16, 0, 1>::new(""),
+            time: Edit::<Actions, 16, 8, 1>::new(""),
             label: Label::<Actions, 16, 0, 0>::new("From"),
-            value: Label::<Actions, 16, 10, 1>::new(""),
+            value: Label::<Actions, 8, 0, 1>::new(""),
             items: DateTimeItems::None,
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
             editable: false,
             timestamp: 0,
             history_type: HistoryType::Day,
+            first_render: true,
         }
     }
 }
 
 impl Widget<&App, Actions> for DayHistoryWidget {
-    fn invalidate(&mut self) {}
+    fn invalidate(&mut self) {
+        self.label.invalidate();
+        self.value.invalidate();
+        self.date.invalidate();
+        self.time.invalidate();
+        self.first_render = true;
+    }
 
     fn update(&mut self, state: &App) {
         if !self.editable {
             self.datetime = state.datetime;
         }
 
-        // Always update date/time to ensure blinking works
-        self.date.state.clear();
-        self.time.state.clear();
-        write!(
-            self.date,
-            "{:02}/{:02}/{:02}",
-            self.datetime.day(),
-            self.datetime.month() as u8,
-            self.datetime.year() - 2000
-        )
-        .ok();
-        write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
+        // Update date/time text ONLY when not in editable mode to prevent interfering with blinking
+        if !self.date.editable {
+            self.date.state.clear();
+            write!(
+                self.date,
+                "{:02}/{:02}/{:02}",
+                self.datetime.day(),
+                self.datetime.month() as u8,
+                self.datetime.year() - 2000
+            )
+            .ok();
+        }
+        if !self.time.editable {
+            self.time.state.clear();
+            write!(
+                self.time,
+                "{:>8}",
+                alloc::format!("{:02}:00:00", self.datetime.hour())
+            )
+            .ok();
+        }
 
         // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
@@ -422,6 +515,10 @@ impl Widget<&App, Actions> for DayHistoryWidget {
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
+        if self.first_render {
+            display.clear();
+            self.first_render = false;
+        }
         self.label.render(display);
         self.value.render(display);
         self.date.render(display);
@@ -431,14 +528,15 @@ impl Widget<&App, Actions> for DayHistoryWidget {
 
 pub struct MonthHistoryWidget {
     pub date: Edit<Actions, 16, 8, 0>,
-    time: Edit<Actions, 16, 0, 1>,
+    pub time: Edit<Actions, 16, 8, 1>,
     pub label: Label<Actions, 16, 0, 0>,
-    pub value: Label<Actions, 16, 10, 1>,
+    pub value: Label<Actions, 8, 0, 1>,
     pub items: DateTimeItems,
     datetime: PrimitiveDateTime,
     pub editable: bool,
     timestamp: u32,
     history_type: HistoryType,
+    first_render: bool,
 }
 
 impl HistoryWidgetTrait for MonthHistoryWidget {
@@ -472,13 +570,13 @@ impl HistoryWidgetTrait for MonthHistoryWidget {
     fn get_date_edit(&mut self) -> &mut Edit<Actions, 16, 8, 0> {
         &mut self.date
     }
-    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 0, 1> {
+    fn get_time_edit(&mut self) -> &mut Edit<Actions, 16, 8, 1> {
         &mut self.time
     }
     fn get_label_edit(&mut self) -> &mut Label<Actions, 16, 0, 0> {
         &mut self.label
     }
-    fn get_value_edit(&mut self) -> &mut Label<Actions, 16, 10, 1> {
+    fn get_value_edit(&mut self) -> &mut Label<Actions, 8, 0, 1> {
         &mut self.value
     }
 }
@@ -493,38 +591,54 @@ impl MonthHistoryWidget {
     pub fn new() -> Self {
         Self {
             date: Edit::<Actions, 16, 8, 0>::new(""),
-            time: Edit::<Actions, 16, 0, 1>::new(""),
+            time: Edit::<Actions, 16, 8, 1>::new(""),
             label: Label::<Actions, 16, 0, 0>::new("From"),
-            value: Label::<Actions, 16, 10, 1>::new(""),
+            value: Label::<Actions, 8, 0, 1>::new(""),
             items: DateTimeItems::None,
             datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
             editable: false,
             timestamp: 0,
             history_type: HistoryType::Month,
+            first_render: true,
         }
     }
 }
 
 impl Widget<&App, Actions> for MonthHistoryWidget {
-    fn invalidate(&mut self) {}
+    fn invalidate(&mut self) {
+        self.label.invalidate();
+        self.value.invalidate();
+        self.date.invalidate();
+        self.time.invalidate();
+        self.first_render = true;
+    }
 
     fn update(&mut self, state: &App) {
         if !self.editable {
             self.datetime = state.datetime;
         }
 
-        // Always update date/time to ensure blinking works
-        self.date.state.clear();
-        self.time.state.clear();
-        write!(
-            self.date,
-            "{:02}/{:02}/{:02}",
-            self.datetime.day(),
-            self.datetime.month() as u8,
-            self.datetime.year() - 2000
-        )
-        .ok();
-        write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
+        // Update date/time text ONLY when not in editable mode to prevent interfering with blinking
+        if !self.date.editable {
+            self.date.state.clear();
+            write!(
+                self.date,
+                "{:02}/{:02}/{:02}",
+                self.datetime.day(),
+                self.datetime.month() as u8,
+                self.datetime.year() - 2000
+            )
+            .ok();
+        }
+        if !self.time.editable {
+            self.time.state.clear();
+            write!(
+                self.time,
+                "{:>8}",
+                alloc::format!("{:02}:00:00", self.datetime.hour())
+            )
+            .ok();
+        }
 
         // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
@@ -569,6 +683,10 @@ impl Widget<&App, Actions> for MonthHistoryWidget {
     }
 
     fn render(&mut self, display: &mut impl CharacterDisplay) {
+        if self.first_render {
+            display.clear();
+            self.first_render = false;
+        }
         self.label.render(display);
         self.value.render(display);
         self.date.render(display);
@@ -694,7 +812,10 @@ impl DateTimeWidget {
 }
 
 impl Widget<PrimitiveDateTime, Actions> for DateTimeWidget {
-    fn invalidate(&mut self) {}
+    fn invalidate(&mut self) {
+        self.date.invalidate();
+        self.time.invalidate();
+    }
 
     fn update(&mut self, state: PrimitiveDateTime) {
         if !self.editable {
@@ -831,6 +952,8 @@ widget_mux! {
         widget.set_active(widget.active);
     },
     |widget: &mut Viewport, event: UiEvent| {
+        #[cfg(not(test))]
+        defmt::info!("Viewport::event - active: {}, event: {}", widget.active, event);
         let action = match widget.active {
             ViewportNode::Label => widget.label.event(event),
             ViewportNode::Label1 => widget.label1.event(event),
@@ -844,9 +967,42 @@ widget_mux! {
                 Actions::Label => widget.set_active(ViewportNode::Label),
                 Actions::Label1 => widget.set_active(ViewportNode::Label1),
                 Actions::DateTime => widget.set_active(ViewportNode::Datetime),
-                Actions::HourHistory => widget.set_active(ViewportNode::HourHistory),
-                Actions::DayHistory => widget.set_active(ViewportNode::DayHistory),
-                Actions::MonthHistory => widget.set_active(ViewportNode::MonthHistory),
+                Actions::HourHistory => {
+                    #[cfg(not(test))]
+                    defmt::info!("Switching to HourHistory widget");
+                    widget.set_active(ViewportNode::HourHistory);
+                    // Request history data for current timestamp
+                    let ts = widget.hour_history.get_timestamp();
+                    #[cfg(not(test))]
+                    defmt::info!("Current timestamp: {}", ts);
+                    if ts == 0 {
+                        let ts = widget.hour_history.get_datetime().assume_utc().unix_timestamp() as u32;
+                        widget.hour_history.set_timestamp(ts);
+                        #[cfg(not(test))]
+                        defmt::info!("Requesting history for timestamp: {}", ts);
+                        return Some(Actions::SetHistory(HistoryType::Hour, ts));
+                    }
+                },
+                Actions::DayHistory => {
+                    widget.set_active(ViewportNode::DayHistory);
+                    // Request history data for current timestamp
+                    let ts = widget.day_history.get_timestamp();
+                    if ts == 0 {
+                        let ts = widget.day_history.get_datetime().assume_utc().unix_timestamp() as u32;
+                        widget.day_history.set_timestamp(ts);
+                        return Some(Actions::SetHistory(HistoryType::Day, ts));
+                    }
+                },
+                Actions::MonthHistory => {
+                    widget.set_active(ViewportNode::MonthHistory);
+                    // Request history data for current timestamp
+                    let ts = widget.month_history.get_timestamp();
+                    if ts == 0 {
+                        let ts = widget.month_history.get_datetime().assume_utc().unix_timestamp() as u32;
+                        widget.month_history.set_timestamp(ts);
+                        return Some(Actions::SetHistory(HistoryType::Month, ts));
+                    }
+                },
                 _ => (),
             }
         }
@@ -857,6 +1013,14 @@ widget_mux! {
 impl Default for Viewport {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Viewport {
+    pub fn get_active(&self) -> ViewportNode {
+        #[cfg(not(test))]
+        defmt::info!("Viewport::get_active - current active: {:?}", self.active);
+        self.active
     }
 }
 
