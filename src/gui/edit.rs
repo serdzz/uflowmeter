@@ -88,7 +88,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
             self.blink_state = !self.blink_state;
             self.invalidate = true;
         }
-        
+
         if self.invalidate {
             display.reset_custom_chars();
             display.set_position(X, Y);

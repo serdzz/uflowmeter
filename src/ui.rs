@@ -218,7 +218,7 @@ impl Widget<&App, Actions> for HistoryWidget {
         if !self.editable {
             self.datetime = state.datetime;
         }
-        
+
         // Always update date/time to ensure blinking works
         self.date.state.clear();
         self.time.state.clear();
@@ -231,7 +231,7 @@ impl Widget<&App, Actions> for HistoryWidget {
         )
         .ok();
         write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
-        
+
         // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
             let mut value_str = alloc::string::String::new();
@@ -365,7 +365,7 @@ impl Widget<&App, Actions> for DayHistoryWidget {
         if !self.editable {
             self.datetime = state.datetime;
         }
-        
+
         // Always update date/time to ensure blinking works
         self.date.state.clear();
         self.time.state.clear();
@@ -378,7 +378,7 @@ impl Widget<&App, Actions> for DayHistoryWidget {
         )
         .ok();
         write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
-        
+
         // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
             let mut value_str = alloc::string::String::new();
@@ -512,7 +512,7 @@ impl Widget<&App, Actions> for MonthHistoryWidget {
         if !self.editable {
             self.datetime = state.datetime;
         }
-        
+
         // Always update date/time to ensure blinking works
         self.date.state.clear();
         self.time.state.clear();
@@ -525,7 +525,7 @@ impl Widget<&App, Actions> for MonthHistoryWidget {
         )
         .ok();
         write!(self.time, "{:02}:{:02}:{:02}", self.datetime.hour(), 0, 0).ok();
-        
+
         // Update value - only when changed to prevent flickering
         if let Some(flow) = state.history_state.flow {
             let mut value_str = alloc::string::String::new();

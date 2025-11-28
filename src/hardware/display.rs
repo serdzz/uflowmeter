@@ -12,7 +12,7 @@ pub struct Lcd {
     led: LcdLed,
     not_active: bool,
     loaded_chars: [bool; 8], // Отслеживаем загруженные пользовательские символы
-    cursor_col: u8, // Текущая позиция курсора
+    cursor_col: u8,          // Текущая позиция курсора
     cursor_row: u8,
 }
 
@@ -80,16 +80,16 @@ impl Lcd {
                 // Сохраняем текущую позицию курсора
                 let saved_col = self.cursor_col;
                 let saved_row = self.cursor_row;
-                
+
                 // Загружаем символ в CGRAM
                 self.lcd.upload_character(i as u8, pattern);
                 self.loaded_chars[i] = true;
-                
+
                 // Важно: после загрузки в CGRAM нужно вернуться к DDRAM
                 // Восстанавливаем позицию курсора на LCD
                 self.lcd.position(saved_col, saved_row);
                 // НЕ изменяем self.cursor_col и self.cursor_row - они уже корректны
-                
+
                 defmt::trace!("Loaded custom char in slot {} for Russian font", i);
                 return Some(i as u8);
             }
@@ -404,15 +404,16 @@ impl core::fmt::Write for Lcd {
             let ascii = self.convert_char(c);
             // Пишем один символ
             self.lcd.write(ascii);
-            
+
             // Обновляем позицию курсора
             self.cursor_col += 1;
-            if self.cursor_col >= 16 { // 16x2 LCD
+            if self.cursor_col >= 16 {
+                // 16x2 LCD
                 self.cursor_col = 0;
                 self.cursor_row = (self.cursor_row + 1) % 2;
             }
         }
-        
+
         Ok(())
     }
 }
