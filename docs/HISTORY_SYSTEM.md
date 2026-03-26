@@ -1,65 +1,65 @@
 # History System
 
-## Обзор
+## Overview
 
-Система истории предназначена для хранения и извлечения исторических данных о расходе воды за разные периоды времени. Данные хранятся в энергонезависимой памяти (EEPROM) в виде кольцевых буферов с фиксированными временными интервалами.
+The history system stores and retrieves historical flow data over different time periods. Data is persisted in non-volatile memory (EEPROM) as ring buffers with fixed time intervals.
 
-## Типы истории
+## History Types
 
 ```rust
 pub enum HistoryType {
-    Hour,   // Почасовая история
-    Day,    // Дневная история
-    Month,  // Месячная история
+    Hour,   // Hourly history
+    Day,    // Daily history
+    Month,  // Monthly history
 }
 ```
 
-### Параметры хранения
+### Storage Parameters
 
-| Тип | Интервал | Размер буфера | Период хранения |
-|-----|----------|---------------|-----------------|
-| Hour | 3600 сек (1 час) | 2160 записей | ~90 дней |
-| Day | 86400 сек (1 день) | 1116 записей | ~3 года |
-| Month | ~2592000 сек (~30 дней) | 120 записей | ~10 лет |
+| Type  | Interval              | Buffer size    | Retention  |
+|-------|-----------------------|----------------|------------|
+| Hour  | 3600 s (1 hour)       | 2160 records   | ~90 days   |
+| Day   | 86400 s (1 day)       | 1116 records   | ~3 years   |
+| Month | ~2592000 s (~30 days) | 120 records    | ~10 years  |
 
 ## AppRequest::SetHistory
 
-### Назначение
+### Purpose
 
-`AppRequest::SetHistory(history_type, timestamp)` - запрос на получение исторических данных о расходе за указанный период времени.
+`AppRequest::SetHistory(history_type, timestamp)` — requests historical flow data for a given time period.
 
-### Параметры
+### Parameters
 
 ```rust
 AppRequest::SetHistory(
-    history_type: HistoryType,  // Тип истории (Hour/Day/Month)
-    timestamp: u32              // Unix timestamp (секунды с 1970-01-01)
+    history_type: HistoryType,  // History type (Hour/Day/Month)
+    timestamp: u32              // Unix timestamp (seconds since 1970-01-01)
 )
 ```
 
-- **`history_type`** - определяет, из какого буфера извлекать данные
-- **`timestamp`** - временная метка для поиска записи (автоматически округляется до минут)
+- **`history_type`** — selects which ring buffer to read from
+- **`timestamp`** — the time to look up (automatically rounded to minutes)
 
-### Процесс обработки
+### Processing Flow
 
 ```
-1. UI Widget генерирует Actions::SetHistory
-   └─> Пользователь изменяет дату/время в History виджете
-   
-2. App::handle_event преобразует в AppRequest::SetHistory
-   └─> Маршрутизирует запрос в RTIC task
-   
-3. app_request task обрабатывает запрос
-   ├─> Определяет тип истории (Hour/Day/Month)
-   ├─> Блокирует доступ к ресурсам (app, history, storage)
-   ├─> Вызывает history.find(storage, timestamp)
-   └─> Обновляет app.history_state.flow
-   
-4. UI обновляется на следующем цикле
-   └─> Widget::update() читает app.history_state
+1. UI Widget generates Actions::SetHistory
+   └─> User changes date/time in the History widget
+
+2. App::handle_event converts to AppRequest::SetHistory
+   └─> Routes request to the RTIC task
+
+3. app_request task handles the request
+   ├─> Determines history type (Hour/Day/Month)
+   ├─> Acquires locks on resources (app, history, storage)
+   ├─> Calls history.find(storage, timestamp)
+   └─> Updates app.history_state.flow
+
+4. UI updates on the next cycle
+   └─> Widget::update() reads app.history_state
 ```
 
-## Реализация в main.rs
+## Implementation in main.rs
 
 ```rust
 #[task(capacity = 8, priority = 1, 
@@ -68,13 +68,13 @@ AppRequest::SetHistory(
 fn app_request(ctx: app_request::Context, req: AppRequest) {
     match req {
         AppRequest::SetHistory(history_type, timestamp) => {
-            defmt::info!("SetHistory");
+        defmt::info!("SetHistory");
             
             match history_type {
                 HistoryType::Hour => {
-                    // Блокировка ресурсов для атомарного доступа
+                    // Acquire locks for atomic resource access
                     (app, hour_history, storage).lock(|app, hour_history, storage| {
-                        // Поиск записи по timestamp
+                        // Search for record by timestamp
                         if let Ok(Some(flow)) = hour_history.find(storage, timestamp) {
                             app.history_state.flow = Some(flow as f32);
                         } else {
@@ -106,9 +106,9 @@ fn app_request(ctx: app_request::Context, req: AppRequest) {
 }
 ```
 
-## Структура RingStorage
+## RingStorage Structure
 
-### Определение
+### Definition
 
 ```rust
 pub struct RingStorage<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32> {
@@ -117,73 +117,73 @@ pub struct RingStorage<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE:
 
 #[bitfield]
 pub struct ServiceData {
-    pub size: u32,              // Количество записей в буфере
-    pub offset_of_last: u32,    // Индекс последней записи
-    pub time_of_last: u32,      // Timestamp последней записи
-    crc: u16,                   // Контрольная сумма
+    pub size: u32,              // Number of records in the buffer
+    pub offset_of_last: u32,    // Index of the last record
+    pub time_of_last: u32,      // Timestamp of the last record
+    crc: u16,                   // Checksum
 }
 ```
 
-### Параметры типа
+### Type Parameters
 
-- **`OFFSET`** - смещение в EEPROM (байты от начала страницы статистики)
-- **`SIZE`** - максимальное количество записей
-- **`ELEMENT_SIZE`** - интервал между записями (секунды)
+- **`OFFSET`** — byte offset in EEPROM (from the start of the statistics page)
+- **`SIZE`** — maximum number of records
+- **`ELEMENT_SIZE`** — interval between records (seconds)
 
-### Примеры инициализации
+### Instantiation Examples
 
 ```rust
-// Почасовая история: 2160 записей × 1 час
+// Hourly history: 2160 records × 1 hour
 type HourHistory = RingStorage<0, 2160, 3600>;
 
-// Дневная история: 1116 записей × 1 день
+// Daily history: 1116 records × 1 day
 type DayHistory = RingStorage<8640, 1116, 86400>;
 
-// Месячная история: 120 записей × ~30 дней
+// Monthly history: 120 records × ~30 days
 type MonthHistory = RingStorage<13104, 120, 2592000>;
 ```
 
-## Метод find()
+## The find() Method
 
-### Сигнатура
+### Signature
 
 ```rust
 pub fn find(&mut self, storage: &mut MyStorage, time: u32) 
     -> Result<Option<i32>>
 ```
 
-### Алгоритм
+### Algorithm
 
-1. **Нормализация timestamp**
+1. **Normalize timestamp**
    ```rust
-   let time = time - time % 60;  // Округление до минут
+   let time = time - time % 60;  // Round down to minutes
    ```
 
-2. **Проверка наличия данных**
+2. **Check if data exists**
    ```rust
    if self.data.size() == 0 {
-       return Ok(None);  // Нет записей
+       return Ok(None);  // No records
    }
    ```
 
-3. **Обратный обход кольцевого буфера**
+3. **Reverse scan of the ring buffer**
    ```rust
    let mut index = self.data.offset_of_last() as usize;
    for _ in 0..self.data.size() {
-       // Вычисление ожидаемого timestamp для текущего индекса
+       // Compute the expected timestamp for the current index
        let expected_time = self.data.time_of_last()
            - (self.data.size() - 1 - index as u32) * ELEMENT_SIZE as u32;
-       
+
        if expected_time == time {
-           // Найдена запись, читаем значение из EEPROM
+           // Record found, read value from EEPROM
            let offset = self.offset(index);
            let mut buf = [0_u8; size_of::<i32>()];
            storage.read(offset, &mut buf)?;
            let value = i32::from_le_bytes(buf);
            return Ok(Some(value));
        }
-       
-       // Переход к предыдущей записи (с wraparound)
+
+       // Move to the previous record (with wraparound)
        if index == 0 {
            index = SIZE as usize - 1;
        } else {
@@ -192,50 +192,34 @@ pub fn find(&mut self, storage: &mut MyStorage, time: u32)
    }
    ```
 
-4. **Результат**
-   - `Ok(Some(value))` - запись найдена
-   - `Ok(None)` - запись не найдена (нет данных за этот период)
-   - `Err(...)` - ошибка чтения из EEPROM
+4. **Result**
+   - `Ok(Some(value))` — record found
+   - `Ok(None)` — record not found (no data for this period)
+   - `Err(...)` — EEPROM read error
 
-### Временная сложность
+### Time Complexity
 
-- **O(n)** где n = количество записей в буфере
-- В худшем случае проверяется весь буфер
+- **O(n)** where n = number of records in the buffer
+- In the worst case the entire buffer is scanned
 
-## Пример использования в UI
+## Usage in UI
 
 ### HistoryWidget
 
 ```rust
-impl Widget<&App, Actions> for HistoryWidget {
+impl<K: HistoryKind> Widget<&App, Actions> for HistoryWidget<K> {
     fn event(&mut self, event: UiEvent) -> Option<Actions> {
         if self.editable {
             match event {
                 UiEvent::Right => {
-                    // Пользователь увеличивает дату/время
-                    self.inc();  // datetime += интервал
-                    
-                    // Пересчитываем timestamp
-                    self.timestamp = self.datetime
-                        .assume_utc()
-                        .unix_timestamp() as u32;
-                    
-                    // Запрашиваем данные из истории
-                    Some(Actions::SetHistory(
-                        self.history_type, 
-                        self.timestamp
-                    ))
+                    // User increments date/time
+                    self.inc();
+                    Some(Actions::SetHistory(K::history_type(), self.timestamp))
                 }
                 UiEvent::Left => {
-                    // Пользователь уменьшает дату/время
-                    self.dec();  // datetime -= интервал
-                    self.timestamp = self.datetime
-                        .assume_utc()
-                        .unix_timestamp() as u32;
-                    Some(Actions::SetHistory(
-                        self.history_type, 
-                        self.timestamp
-                    ))
+                    // User decrements date/time
+                    self.dec();
+                    Some(Actions::SetHistory(K::history_type(), self.timestamp))
                 }
                 _ => None,
             }
@@ -243,9 +227,9 @@ impl Widget<&App, Actions> for HistoryWidget {
             None
         }
     }
-    
+
     fn update(&mut self, state: &App) {
-        // Отображение результата запроса
+        // Display the query result
         if let Some(flow) = state.history_state.flow {
             write!(self.value, "{flow}").ok();
         } else {
@@ -255,72 +239,72 @@ impl Widget<&App, Actions> for HistoryWidget {
 }
 ```
 
-## Сценарии использования
+## Usage Scenarios
 
-### 1. Просмотр истории за конкретный час
-
-```
-Пользователь:
-1. Переходит на экран Hour History
-2. Нажимает Enter → входит в режим редактирования
-3. Изменяет дату/время кнопками Left/Right
-   
-Система:
-1. Widget генерирует Actions::SetHistory(Hour, timestamp)
-2. App преобразует в AppRequest::SetHistory(Hour, timestamp)
-3. RTIC task вызывает hour_history.find(storage, timestamp)
-4. Результат записывается в app.history_state.flow
-5. Widget отображает значение на дисплее
-```
-
-### 2. Навигация по дням
+### 1. View history for a specific hour
 
 ```
-Пользователь:
-1. Переходит на экран Day History
-2. Входит в режим редактирования
-3. Листает дни: Left (назад) / Right (вперед)
+User:
+1. Navigates to the Hour History screen
+2. Presses Enter → enters edit mode
+3. Adjusts date/time using Left/Right buttons
 
-Система:
-- При каждом нажатии:
-  - timestamp += 86400 (или -= 86400)
-  - Запрос SetHistory(Day, new_timestamp)
-  - Обновление отображения
+System:
+1. Widget generates Actions::SetHistory(Hour, timestamp)
+2. App converts to AppRequest::SetHistory(Hour, timestamp)
+3. RTIC task calls hour_history.find(storage, timestamp)
+4. Result is stored in app.history_state.flow
+5. Widget displays the value on the LCD
 ```
 
-### 3. Просмотр месячной статистики
+### 2. Browse by day
 
 ```
-Пользователь:
-1. Переходит на экран Month History
-2. Выбирает месяц/год
+User:
+1. Navigates to the Day History screen
+2. Enters edit mode
+3. Scrolls days: Left (back) / Right (forward)
 
-Система:
-- Интервал ~30 дней (2592000 секунд)
-- Меньше точность, больше период хранения
+System:
+- On each key press:
+  - timestamp += 86400 (or -= 86400)
+  - Request SetHistory(Day, new_timestamp)
+  - Display updates
 ```
 
-## Запись данных
+### 3. View monthly statistics
 
-Данные записываются автоматически в `app_request(AppRequest::Process)`:
+```
+User:
+1. Navigates to the Month History screen
+2. Selects month/year
+
+System:
+- Interval ~30 days (2592000 seconds)
+- Lower resolution, longer retention period
+```
+
+## Writing Data
+
+Data is written automatically in `app_request(AppRequest::Process)`:
 
 ```rust
 AppRequest::Process => {
-    // ... измерения ...
-    
-    // Каждую минуту (когда second < 5)
+    // ... measurements ...
+
+    // Every minute (when second < 5)
     if datetime.time().second() < 5 {
         let timestamp = datetime.as_utc().unix_timestamp();
-        
-        // Каждый час (minute == 0)
+
+        // Every hour (minute == 0)
         if datetime.time().minute() == 0 {
             hour_history.add(storage, hour_flow as i32, timestamp as u32);
-            
-            // Каждый день (hour == 0)
+
+            // Every day (hour == 0)
             if datetime.time().hour() == 0 {
                 day_history.add(storage, day_flow as i32, timestamp as u32);
-                
-                // Каждый месяц (day == 1)
+
+                // Every month (day == 1)
                 if datetime.date().day() == 1 {
                     month_history.add(storage, month_flow as i32, timestamp as u32);
                 }
@@ -330,147 +314,145 @@ AppRequest::Process => {
 }
 ```
 
-## Обработка ошибок
+## Error Handling
 
-### Возможные ошибки
+### Possible Errors
 
 ```rust
 pub enum Error {
-    NoRecords,       // Буфер пуст
-    Unitialized,     // Система не инициализирована
-    Storage,         // Ошибка EEPROM
-    WrongCrc,        // Неверная контрольная сумма
-    Spi(spi::Error), // Ошибка SPI
+    NoRecords,       // Buffer is empty
+    Unitialized,     // System not initialized
+    Storage,         // EEPROM error
+    WrongCrc,        // Bad checksum
+    Spi(spi::Error), // SPI error
 }
 ```
 
-### Обработка в UI
+### Handling in UI
 
 ```rust
 match hour_history.find(storage, timestamp) {
     Ok(Some(flow)) => {
-        // Данные найдены
+        // Data found
         app.history_state.flow = Some(flow as f32);
     }
     Ok(None) => {
-        // Нет данных за этот период
+        // No data for this period
         app.history_state.flow = None;
-        // UI отобразит "None"
+        // UI will display "None"
     }
     Err(e) => {
-        // Ошибка чтения
+        // Read error
         defmt::error!("History read error: {:?}", e);
         app.history_state.flow = None;
     }
 }
 ```
 
-## Память
+## Memory
 
-### Расчет размера на EEPROM
+### EEPROM Size Calculation
 
 ```rust
-const SIZE_ON_FLASH: usize = 
-    size_of::<u32>()           // Заголовок
-    + SIZE * size_of::<i32>()  // Данные (SIZE записей × 4 байта)
-    + size_of::<ServiceData>() // Метаданные (16 байт)
-    + size_of::<u16>();        // CRC (2 байта)
+const SIZE_ON_FLASH: usize =
+    size_of::<u32>()           // Header
+    + SIZE * size_of::<i32>()  // Data (SIZE records × 4 bytes)
+    + size_of::<ServiceData>() // Metadata (16 bytes)
+    + size_of::<u16>();        // CRC (2 bytes)
 ```
 
-### Примеры
+### Examples
 
-- **Hour History**: 4 + 2160×4 + 16 + 2 = **8662 байта**
-- **Day History**: 4 + 1116×4 + 16 + 2 = **4486 байт**
-- **Month History**: 4 + 120×4 + 16 + 2 = **502 байта**
+- **Hour History**: 4 + 2160×4 + 16 + 2 = **8662 bytes**
+- **Day History**: 4 + 1116×4 + 16 + 2 = **4486 bytes**
+- **Month History**: 4 + 120×4 + 16 + 2 = **502 bytes**
 
-**Итого**: ~13.7 КБ из доступных 128 КБ EEPROM
+**Total**: ~13.7 KB out of 128 KB available EEPROM
 
-## Кольцевой буфер
+## Ring Buffer Layout
 
-### Структура
+### Structure
 
 ```
 ┌───────────────────────────────────────────┐
-│ ServiceData (метаданные)                  │
+│ ServiceData (metadata)                    │
 │  - size: 100                              │
 │  - offset_of_last: 75                     │
 │  - time_of_last: 1700000000               │
 │  - crc: 0xABCD                            │
 ├───────────────────────────────────────────┤
-│ Data[0]: 1234   ← самая старая запись    │
+│ Data[0]: 1234   ← oldest record           │
 │ Data[1]: 2345                             │
 │ ...                                       │
-│ Data[75]: 9876  ← последняя запись        │
-│ Data[76]: (пусто)                         │
+│ Data[75]: 9876  ← latest record           │
+│ Data[76]: (empty)                         │
 │ ...                                       │
-│ Data[SIZE-1]: (пусто)                     │
+│ Data[SIZE-1]: (empty)                     │
 └───────────────────────────────────────────┘
 ```
 
-### Операции
+### Operations
 
-- **Запись новых данных**: перезапись самой старой записи
-- **Чтение**: обратный обход от последней записи
-- **Переполнение**: автоматический wraparound индекса
+- **Write new data**: overwrite the oldest record
+- **Read**: reverse scan from the last record
+- **Overflow**: automatic index wraparound
 
-## Тестирование
+## Testing
 
-### Unit тесты
+### Unit Tests
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_find_existing_record() {
         let mut storage = MockStorage::new();
         let mut history = RingStorage::<0, 100, 3600>::new(&mut storage).unwrap();
-        
-        // Добавляем тестовые данные
+
+        // Add test data
         history.add(&mut storage, 1234, 1700000000).ok();
-        
-        // Ищем запись
+
+        // Search for record
         let result = history.find(&mut storage, 1700000000);
         assert_eq!(result, Ok(Some(1234)));
     }
-    
+
     #[test]
     fn test_find_nonexistent_record() {
         let mut storage = MockStorage::new();
         let mut history = RingStorage::<0, 100, 3600>::new(&mut storage).unwrap();
-        
-        // Ищем несуществующую запись
+
+        // Search for non-existent record
         let result = history.find(&mut storage, 1700000000);
         assert_eq!(result, Ok(None));
     }
 }
 ```
 
-## Производительность
+## Performance
 
-- **Чтение из EEPROM**: ~1-2 мс на запись
-- **Поиск в буфере**: O(n), где n ≤ SIZE
-- **Worst case**: 2160 операций для Hour History
-- **Типичный случай**: несколько итераций (недавние данные)
+- **EEPROM read**: ~1–2 ms per record
+- **Buffer scan**: O(n), where n ≤ SIZE
+- **Worst case**: 2160 operations for Hour History
+- **Typical case**: a few iterations (recent data)
 
-## Оптимизации
+## Possible Optimizations
 
-### Возможные улучшения
+1. **Binary search** (requires sorted buffer)
+2. **Caching** recent queries
+3. **Date-range indexing**
+4. **Delta encoding** for data compression
 
-1. **Бинарный поиск** (требует sorted buffer)
-2. **Кеширование** последних запросов
-3. **Индексирование** по диапазонам дат
-4. **Сжатие** данных (дельта-кодирование)
+### Current Optimizations
 
-### Текущие оптимизации
+- Timestamp normalized to minutes (reduces variants)
+- Ring buffer (O(1) write)
+- CRC protection for metadata
+- Direct EEPROM access (no buffering)
 
-- Нормализация timestamp до минут (уменьшение вариантов)
-- Кольцевой буфер (O(1) запись)
-- CRC защита метаданных
-- Прямой доступ к EEPROM (без буферизации)
-
-## Диаграмма взаимодействия
+## Interaction Diagram
 
 ```
 ┌──────────┐  Left/Right  ┌──────────────┐
@@ -495,12 +477,12 @@ mod tests {
                           │ AppRequest   │
                           │ SetHistory() │
                           └──────┬───────┘
-                                 │ RTIC queue
+           │ RTIC task queue
                                  v
                           ┌──────────────┐
                           │ app_request  │
                           │    task      │
-                          └──────┬───────┘
+                          └──────────────┘
                                  │ lock resources
                                  v
             ┌────────────────────┼────────────────────┐
@@ -532,9 +514,9 @@ mod tests {
                         └──────────────┘
 ```
 
-## См. также
+## See Also
 
-- [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md) - общая архитектура UI
-- `src/history.rs` - реализация RingStorage
-- `src/apps.rs` - App state и Actions
-- `src/main.rs` - RTIC task app_request
+- [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md) — overall UI architecture
+- `src/history.rs` — RingStorage implementation
+- `src/apps.rs` — App state and Actions
+- `src/main.rs` — RTIC task app_request

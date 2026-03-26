@@ -4,12 +4,13 @@
 
 #[cfg(test)]
 mod ui_history_tests {
-    use crate::gui::{CharacterDisplay, UiEvent, Widget};
-    use crate::ui::{
-        DateTimeItems, DayHistoryWidget, HistoryType, HistoryWidget, HistoryWidgetTrait,
-        MonthHistoryWidget,
-    };
+    use crate::gui::{CharacterDisplay, DateTimeItems, HistoryType, UiEvent, Widget};
+    use crate::gui::history_widget::{DayKind, HistoryWidget as BaseHistoryWidget, HourKind, MonthKind};
     use crate::{Actions, App};
+
+    type HistoryWidget = BaseHistoryWidget<HourKind>;
+    type DayHistoryWidget = BaseHistoryWidget<DayKind>;
+    type MonthHistoryWidget = BaseHistoryWidget<MonthKind>;
     use alloc::string::String;
     use core::fmt::Write;
     use time::macros::{date, time};

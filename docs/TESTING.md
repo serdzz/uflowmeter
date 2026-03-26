@@ -1,38 +1,54 @@
-# Тестирование проекта uFlowmeter
+# uFlowmeter Project Testing
 
-## Структура проекта
+## Project Structure
 
-Проект состоит из двух крейтов:
+The project consists of two crates:
 
 1. **Library crate** (`src/lib.rs`):
-   - `history_lib` - библиотека для работы с историей
-   - `hardware` - модули для работы с железом (только для embedded)
-   - Тесты: `history_lib_tests.rs`
+   - `history_lib` — ring buffer history library
+   - `hardware` — hardware drivers (embedded only)
+   - Tests: `history_lib_tests.rs`, `history_tests.rs`, `tests.rs`, `ui_history_tests.rs`, `ui_logic_tests.rs`
 
 2. **Binary crate** (`src/main.rs`):
-   - `ui` - пользовательский интерфейс
-   - `apps` - логика приложения
-   - `gui` - GUI компоненты
-   - `hardware`, `history`, `options` - модули для embedded
-   - Требует embedded зависимости (`hal`, RTIC, etc.)
+   - `ui` — user interface (Viewport, LabelScreen, LabelsWidget)
+   - `apps` — application logic (App, Actions, AppRequest)
+   - `gui` — GUI components
+   - `hardware`, `history`, `options` — embedded modules
+   - Requires embedded dependencies (`hal`, RTIC, etc.)
 
-## Запуск тестов
+## Running Tests
 
-### Основные тесты (library crate)
+### All Tests (library crate)
 
 ```bash
 make test
 ```
 
-или
+or manually:
 
 ```bash
-cargo test --lib --release
+sed -i.bak '/^target = /d' .cargo/config.toml && \
+cargo test --lib --release && \
+mv .cargo/config.toml.bak .cargo/config.toml
 ```
 
-Запускает тесты из `src/history_lib_tests.rs` и `src/ui_logic_tests.rs`:
+The Makefile temporarily removes the embedded target from `.cargo/config.toml`, runs tests on the host platform, then restores the config.
 
-**History tests (11):**
+### Specific Test Modules
+
+```bash
+cargo test --lib history_lib_tests
+cargo test --lib history_tests
+cargo test --lib tests
+cargo test --lib ui_history_tests
+cargo test --lib ui_logic_tests
+```
+
+## Test Suite Overview (192 tests)
+
+Runs tests from `src/history_lib_tests.rs`, `src/history_tests.rs`, `src/tests.rs`, `src/ui_history_tests.rs`, and `src/ui_logic_tests.rs`:
+
+**History lib tests (11):**
 - ✅ `test_advance_offset_wrapping`
 - ✅ `test_first_stored_timestamp_empty`
 - ✅ `test_first_stored_timestamp_with_data`
@@ -58,71 +74,39 @@ cargo test --lib --release
 - ✅ `test_time_masks_complete`
 - ✅ `test_date_decrement_timestamp`
 
-## Почему тесты из ui.rs не запускаются?
+## Why Tests Run on the Host Platform
 
-Тесты в `src/ui.rs` (строки 823-877) **не запускаются** через `make test`, потому что:
+The Makefile removes the embedded target from `.cargo/config.toml` before running tests. Without the target specification, Cargo compiles for the host (x86_64 / aarch64). This works because:
 
-### Причины:
+1. `no_std` is gated by `#![cfg_attr(not(test), no_std)]` — tests compile with `std`
+2. Embedded-specific modules (`hardware`, `stm32l1xx_hal`) are guarded by `#[cfg(not(test))]`
+3. Core logic (GUI, history, UI widgets) has no HAL dependencies
 
-1. **Модуль `ui` только в binary crate**
-   - `ui` объявлен в `src/main.rs`, но не в `src/lib.rs`
-   - `cargo test --lib` тестирует только library crate
+## Build and Code Checks
 
-2. **Embedded зависимости**
-   - `ui` использует типы из `hal` (STM32 HAL)
-   - Требует `Actions`, `App`, `CharacterDisplay`, `Edit`, `Label`
-   - Эти типы не компилируются для host target (x86_64/aarch64)
-
-3. **no_std окружение**
-   - Проект использует `#![no_std]` для embedded
-   - Тесты требуют `std` на host
-   - Условная компиляция `#![cfg_attr(not(test), no_std)]` помогает, но не решает проблему с embedded типами
-
-### Решение: Документационные тесты
-
-Тесты в `src/ui.rs` служат для:
-- ✅ Документирования корректности реализации
-- ✅ Проверки логики вручную (при необходимости)
-- ✅ Демонстрации правильных значений масок и timestamp
-
-Чтобы запустить их, нужно:
-1. Создать моки для embedded типов
-2. Вынести логику в отдельный модуль без embedded зависимостей
-3. Или запускать тесты на целевой платформе (не практично)
-
-## Сборка и проверка кода
-
-### Проверка компиляции
+### Compilation Check
 ```bash
-cargo check --target thumbv7m-none-eabi
+cargo check --release
 ```
 
-### Сборка релиза
+### Release Build
 ```bash
-cargo build --release --target thumbv7m-none-eabi
+cargo build --release
 ```
 
-### Clippy (проверка стиля)
+### Clippy
 ```bash
-cargo clippy --target thumbv7m-none-eabi -- -D warnings
+make clippy
 ```
 
-### Размер бинарника
+### Binary Size
 ```bash
 arm-none-eabi-size target/thumbv7m-none-eabi/release/uflowmeter
 ```
 
-## Итоги
+## Summary
 
-- ✅ **22 теста** (11 history + 11 UI logic) работают и проходят
-- ✅ **Embedded код** компилируется без ошибок
-- ✅ **Clippy** проходит без warnings
-- ✅ **Размер**: 60996 байт (оптимизировано)
-- ✅ **UI logic тесты** - теперь выполняются автоматически!
-
-## Дополнительно
-
-Для добавления executable тестов для UI логики рекомендуется:
-1. Вынести чистую логику (без embedded типов) в отдельные функции
-2. Создать integration tests в `tests/` с моками
-3. Использовать feature flags для разделения embedded и test кода
+- ✅ **192 tests** — all passing
+- ✅ **Embedded build** — compiles without errors
+- ✅ **Clippy** — no warnings
+- ✅ **No hardware required** — all tests use mocks

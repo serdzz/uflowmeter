@@ -1,31 +1,31 @@
 # UI Architecture
 
-## Обзор
+## Overview
 
-UI система построена на паттерне однонаправленного потока данных с разделением состояния и представления. Архитектура оптимизирована для встраиваемых систем (`no_std`) и символьных дисплеев (16x2 LCD).
+The UI system is built on a unidirectional data flow pattern with separation of state and presentation. The architecture is optimized for embedded systems (`no_std`) and character displays (16x2 LCD).
 
-## Базовые компоненты
+## Core Components
 
 ### Widget Trait
 
-Основной интерфейс для всех UI элементов:
+The primary interface for all UI elements:
 
 ```rust
 pub trait Widget<S, A> {
-    fn invalidate(&mut self);              // Пометить для перерисовки
-    fn update(&mut self, state: S);        // Обновить из состояния приложения
-    fn render(&mut self, display: ...);    // Отрисовать на дисплей
-    fn event(&mut self, e: UiEvent) -> Option<A>; // Обработать событие
+    fn invalidate(&mut self);              // Mark for re-render
+    fn update(&mut self, state: S);        // Sync from application state
+    fn render(&mut self, display: ...);    // Draw to display
+    fn event(&mut self, e: UiEvent) -> Option<A>; // Handle input event
 }
 ```
 
-**Параметры типа:**
-- `S` - тип состояния приложения (обычно `&App`)
-- `A` - тип действий (обычно `Actions`)
+**Type parameters:**
+- `S` — application state type (typically `&App`)
+- `A` — action type (typically `Actions`)
 
 ### CharacterDisplay Trait
 
-Абстракция для символьных дисплеев:
+Abstraction for character displays:
 
 ```rust
 pub trait CharacterDisplay: core::fmt::Write {
@@ -36,15 +36,15 @@ pub trait CharacterDisplay: core::fmt::Write {
 }
 ```
 
-### Примитивные виджеты
+### Primitive Widgets
 
-Расположены в `src/gui/`:
+Located in `src/gui/`:
 
-- **`Label`** - статический текст с поддержкой форматирования
-- **`Edit`** - редактируемое текстовое поле с поддержкой мигания
-- **`EditBox`** - текстовое поле с курсором
+- **`Label`** — static text with formatting support
+- **`Edit`** — editable text field with blinking support
+- **`EditBox`** — text field with cursor
 
-### События
+### Events
 
 ```rust
 pub enum UiEvent {
@@ -57,11 +57,11 @@ pub enum UiEvent {
 }
 ```
 
-## Макросы для композиции виджетов
+## Widget Composition Macros
 
 ### widget_group!
 
-Создает виджет-контейнер, где **все дочерние виджеты отображаются одновременно**:
+Creates a widget container where **all child widgets are rendered simultaneously**:
 
 ```rust
 widget_group!(
@@ -71,91 +71,95 @@ widget_group!(
         edit: Edit<Actions, 16, 8, 1>;
     },
     |view, state: &App| {
-        // Функция обновления
+        // Update function
         view.label.update(state);
         view.edit.update(state);
     },
     |view, event: UiEvent| -> Option<Actions> {
-        // Обработка событий
+        // Event handling
         view.edit.event(event)
     }
 )
 ```
 
-**Использование:**
-- Группировка связанных виджетов
-- Составные экраны с несколькими элементами
-- Все виджеты рендерятся при каждом вызове `render()`
+**Usage:**
+- Group related widgets
+- Composite screens with multiple elements
+- All widgets are rendered on every `render()` call
 
 ### widget_mux!
 
-Создает мультиплексор виджетов, где **отображается только один активный**:
+Creates a widget multiplexer where **only the active widget is rendered**:
 
 ```rust
 widget_mux!(
     Viewport<&App, Actions>,
-    ViewportNode::Label,  // активный виджет по умолчанию
+    ViewportNode::Label,  // default active widget
     {
         label: LabelWidget;
         datetime: DateTimeWidget;
-        hour_history: HistoryWidget;
+        hour_history: HistoryWidget<HourKind>;
+        day_history: HistoryWidget<DayKind>;
+        month_history: HistoryWidget<MonthKind>;
     },
     |viewport, state: &App| {
-        // Обновление всех виджетов
         viewport.label.update(state);
-        viewport.datetime.update(state);
+        viewport.datetime.update(state.datetime);
         viewport.hour_history.update(state);
+        viewport.day_history.update(state);
+        viewport.month_history.update(state);
     },
     |viewport, event: UiEvent| -> Option<Actions> {
-        // Маршрутизация событий к активному виджету
         match viewport.active {
             ViewportNode::Label => viewport.label.event(event),
             ViewportNode::Datetime => viewport.datetime.event(event),
             ViewportNode::HourHistory => viewport.hour_history.event(event),
+            ViewportNode::DayHistory => viewport.day_history.event(event),
+            ViewportNode::MonthHistory => viewport.month_history.event(event),
         }
     }
 )
 ```
 
-**Автоматически генерируется:**
-- Enum `ViewportNode` с вариантами для каждого виджета
-- Метод `set_active(node: ViewportNode)` для переключения
-- Логика рендеринга только активного виджета
+**Auto-generated:**
+- Enum `ViewportNode` with a variant per widget
+- Method `set_active(node: ViewportNode)` for switching
+- Rendering logic for only the active widget
 
-**Использование:**
-- Навигация между экранами
-- Режимы работы (просмотр/редактирование)
-- Экономия ресурсов (рендерится только видимый экран)
+**Usage:**
+- Navigation between screens
+- Modes (view / edit)
+- Resource efficiency (only the visible screen is rendered)
 
-## Архитектура приложения
+## Application Architecture
 
 ### App State
 
-Центральное состояние приложения (`src/apps.rs`):
+Central application state (`src/apps.rs`):
 
 ```rust
 pub struct App {
     pub datetime: PrimitiveDateTime,
-    pub active_widget: ViewportNode,     // текущий активный экран
-    pub flow: f32,                       // текущий расход
-    pub hour_flow: f32,                  // часовой расход
-    pub day_flow: f32,                   // дневной расход
-    pub month_flow: f32,                 // месячный расход
-    pub history_state: HistoryState,     // состояние истории
+    pub active_widget: ViewportNode,     // currently active screen
+    pub flow: f32,                       // current flow rate
+    pub hour_flow: f32,                  // hourly accumulator
+    pub day_flow: f32,                   // daily accumulator
+    pub month_flow: f32,                 // monthly accumulator
+    pub history_state: HistoryState,     // history query state
     // ...
 }
 
 impl App {
-    pub fn handle_event(&mut self, action: Option<Actions>) 
+    pub fn handle_event(&mut self, action: Option<Actions>)
         -> Option<AppRequest> {
-        // Преобразование действий в системные запросы
+        // Convert actions into system requests
     }
 }
 ```
 
 ### Actions
 
-Типизированные действия пользователя:
+Typed user actions:
 
 ```rust
 pub enum Actions {
@@ -173,67 +177,67 @@ pub enum Actions {
 
 ### AppRequest
 
-Запросы к системным компонентам:
+Requests to system components:
 
 ```rust
 pub enum AppRequest {
-    Process,                              // Запустить измерение
-    LcdLed(bool),                        // Управление подсветкой
-    SetDateTime(PrimitiveDateTime),      // Установить время
-    SetHistory(HistoryType, u32),        // Запросить историю
-    DeepSleep,                           // Перейти в сон
+    Process,                              // Trigger measurement
+    LcdLed(bool),                        // Control backlight
+    SetDateTime(PrimitiveDateTime),      // Set RTC time
+    SetHistory(HistoryType, u32),        // Query history
+    DeepSleep,                           // Enter low-power sleep
 }
 ```
 
-## Поток данных
+## Data Flow
 
-Однонаправленный поток обработки:
+Unidirectional processing pipeline:
 
 ```
 ┌─────────────┐
-│   События   │  Нажатия кнопок (Up/Down/Left/Right/Enter/Back)
-│  (Кнопки)   │
-└──────┬──────┘
+│   Events    │  Button presses (Up/Down/Left/Right/Enter/Back)
+│  (Buttons)  │
+└──────┤──────┘
        │
        v
 ┌─────────────────┐
-│ Widget::event() │  Обработка в активном виджете
-└──────┬──────────┘
+│ Widget::event() │  Processed by the active widget
+└──────┤──────────┘
        │
        v
 ┌─────────────┐
-│   Actions   │  Типизированное действие
-└──────┬──────┘
+│   Actions   │  Typed action value
+└──────┤──────┘
        │
        v
 ┌──────────────────────┐
-│ App::handle_event()  │  Бизнес-логика приложения
-└──────┬───────────────┘
+│ App::handle_event()  │  Application business logic
+└──────┤───────────────┘
        │
        v
 ┌─────────────┐
-│ AppRequest  │  Запрос к системе (RTC, EEPROM, измерения)
-└──────┬──────┘
+│ AppRequest  │  Request to system (RTC, EEPROM, measurement)
+└──────┤──────┘
        │
        v
 ┌──────────────┐
-│   Система    │  Выполнение операций (RTC, EEPROM, TDC7200)
-└──────┬───────┘
+│   System    │  Execute operations (RTC, EEPROM, TDC7200)
+└──────┤───────┘
        │
        v
 ┌──────────────┐
-│  App State   │  Обновление состояния
-└──────┬───────┘
+│  App State   │  State updated
+└──────┤───────┘
        │
        v
 ┌──────────────────┐
-│ Widget::update() │  Синхронизация с состоянием
-└──────┬───────────┘
+│ Widget::update() │  Sync with state
+└──────┤───────────┘
        │
        v
 ┌──────────────────┐
-│ Widget::render() │  Отрисовка на дисплей
-└──────┬───────────┘
+│ Widget::render() │  Draw to display
+└──────┤───────────┘
        │
        v
 ┌─────────────┐
@@ -241,130 +245,74 @@ pub enum AppRequest {
 └─────────────┘
 ```
 
-## Пример: History Widget
+## Example: History Widget
 
-Полный пример виджета для просмотра истории (`src/ui.rs`):
+Generic widget for browsing history (`src/gui/history_widget.rs`).
+
+The type parameter `K: HistoryKind` determines the history type and navigation:
 
 ```rust
-pub struct HistoryWidget {
-    date: Edit<Actions, 16, 8, 0>,      // Поле даты
-    time: Edit<Actions, 16, 0, 1>,      // Поле времени
-    label: Edit<Actions, 16, 0, 0>,     // Метка "From"
-    value: Edit<Actions, 16, 10, 1>,    // Значение расхода
-    items: DateTimeItems,                // Текущее редактируемое поле
-    datetime: PrimitiveDateTime,         // Дата/время
-    editable: bool,                      // Режим редактирования
-    timestamp: u32,                      // Unix timestamp
-    history_type: HistoryType,           // Тип истории (Hour/Day/Month)
+/// Marker trait — defines the history type and screen navigation
+pub trait HistoryKind {
+    fn history_type() -> HistoryType;
+    fn nav_left() -> Actions;
+    fn nav_right() -> Actions;
 }
 
-impl Widget<&App, Actions> for HistoryWidget {
-    fn invalidate(&mut self) {}
-    
-    fn update(&mut self, state: &App) {
-        // Синхронизация с состоянием приложения
-        if !self.editable {
-            self.datetime = state.datetime;
-        }
-        
-        // Очистка буферов
-        self.date.state.clear();
-        self.time.state.clear();
-        self.value.state.clear();
-        
-        // Форматирование данных
-        write!(
-            self.date,
-            "{:02}/{:02}/{:02}",
-            self.datetime.day(),
-            self.datetime.month() as u8,
-            self.datetime.year() - 2000
-        ).ok();
-        
-        write!(
-            self.time, 
-            "{:02}:{:02}:{:02}", 
-            self.datetime.hour(), 
-            0, 
-            0
-        ).ok();
-        
-        if let Some(flow) = state.history_state.flow {
-            write!(self.value, "{flow}").ok();
-        } else {
-            write!(self.value, "None").ok();
-        }
-    }
-    
-    fn event(&mut self, event: UiEvent) -> Option<Actions> {
-        if self.editable {
-            // Режим редактирования
-            match event {
-                UiEvent::Left => {
-                    self.dec();  // Уменьшить значение
-                    Some(Actions::SetHistory(self.history_type, self.timestamp))
-                }
-                UiEvent::Right => {
-                    self.inc();  // Увеличить значение
-                    Some(Actions::SetHistory(self.history_type, self.timestamp))
-                }
-                UiEvent::Enter => {
-                    self.next_item();  // Следующее поле
-                    None
-                }
-                _ => None,
-            }
-        } else {
-            // Режим навигации
-            match event {
-                UiEvent::Enter => {
-                    self.next_item();  // Войти в режим редактирования
-                    None
-                }
-                UiEvent::Left => Some(Actions::Label),
-                UiEvent::Right => Some(Actions::DayHistory),
-                _ => None,
-            }
-        }
-    }
-    
-    fn render(&mut self, display: &mut impl CharacterDisplay) {
-        self.date.render(display);
-        self.label.render(display);
-        self.value.render(display);
-        self.time.render(display);
-    }
+pub struct HourKind;   // Hour: Left=Label, Right=DayHistory
+pub struct DayKind;    // Day:  Left=HourHistory, Right=MonthHistory
+pub struct MonthKind;  // Month: Left=DayHistory, Right=Label
+
+/// Single widget for all three history screens
+pub struct HistoryWidget<K: HistoryKind> {
+    pub date: Edit<Actions, 16, 8, 0>,
+    pub time: Edit<Actions, 16, 8, 1>,
+    pub label: Label<Actions, 16, 0, 0>,
+    pub value: Label<Actions, 8, 0, 1>,
+    pub items: DateTimeItems,
+    pub editable: bool,
+    // private: datetime, timestamp, first_render, _kind
 }
 ```
 
-## Ключевые принципы
+Usage in `widget_mux!`:
+
+```rust
+hour_history: HistoryWidget<HourKind>;
+day_history:  HistoryWidget<DayKind>;
+month_history: HistoryWidget<MonthKind>;
+```
+
+Public methods: `get_datetime`, `get_timestamp`, `set_timestamp`, `get_items`, `set_items`, `set_datetime`, `get_editable`, `set_editable`, `get_history_type`, `inc`, `dec`, `next_item`.
+
+## Key Principles
 
 ### 1. State Separation
 
-Состояние хранится в `App`, виджеты только отображают и генерируют действия:
+State lives in `App`; widgets only render and emit actions:
 
 ```rust
-// ✅ Правильно - состояние в App
+// ✅ Correct — state in App
 pub struct App {
     pub datetime: PrimitiveDateTime,
 }
 
 pub struct DateTimeWidget {
-    edit: Edit<...>,  // только UI элементы
+    edit: Edit<...>,  // UI elements only
 }
 
-// ❌ Неправильно - дублирование состояния
+// ❌ Wrong — duplicated state
 pub struct DateTimeWidget {
-    datetime: PrimitiveDateTime,  // не нужно!
+    datetime: PrimitiveDateTime,  // unnecessary!
 }
 ```
 
 ### 2. Action-based Communication
 
-События преобразуются в типизированные действия:
+Events are converted into typed actions:
 
 ```rust
-// ✅ Правильно - типизированные действия
+// ✅ Correct — typed actions
 fn event(&mut self, event: UiEvent) -> Option<Actions> {
     match event {
         UiEvent::Enter => Some(Actions::SetDateTime(self.datetime)),
@@ -372,59 +320,64 @@ fn event(&mut self, event: UiEvent) -> Option<Actions> {
     }
 }
 
-// ❌ Неправильно - прямое изменение состояния
+// ❌ Wrong — direct state mutation
 fn event(&mut self, event: UiEvent, app: &mut App) {
-    app.datetime = self.datetime;  // нарушает архитектуру!
+    app.datetime = self.datetime;  // breaks the architecture!
 }
 ```
 
 ### 3. Composability
 
-Сложные UI строятся из простых виджетов:
+Complex UI is built from simple widgets:
 
 ```rust
-// Примитивы
+// Primitives
 Edit + Label + EditBox
 
-// Композиция через widget_group!
-HistoryWidget = Edit (date) + Edit (time) + Edit (label) + Edit (value)
+// Behavioral widgets
+DateTimeWidget (src/gui/date_time_widget.rs)
+HistoryWidget<K> (src/gui/history_widget.rs)
 
-// Навигация через widget_mux!
+// Screens via widget_group!
+LabelScreen = Label + Label
+LabelsWidget = Label + Edit
+
+// Navigation via widget_mux!
 Viewport = Label | DateTime | HourHistory | DayHistory | MonthHistory
 ```
 
 ### 4. No Allocation
 
-Работа без динамической аллокации памяти:
+Zero dynamic memory allocation:
 
 ```rust
-// Фиксированные буферы
+// Fixed-size buffers
 pub struct Edit<A, const N: usize, const COL: u8, const ROW: u8> {
     state: String<N>,  // heapless::String
 }
 
-// Запись через форматирование
+// Write via format macros
 write!(self.edit, "{:02}:{:02}", hour, minute).ok();
 ```
 
 ### 5. Character Display Optimization
 
-Оптимизация для символьных дисплеев 16x2:
+Optimized for 16x2 character LCD displays:
 
 ```rust
-// Позиционирование
-Edit<Actions, 16, 8, 0>  // 16 символов, колонка 8, строка 0
+// Positioning
+Edit<Actions, 16, 8, 0>  // 16 chars, column 8, row 0
 
-// Мигание маски (для редактирования)
-edit.blink_mask(0x03);    // Мигают последние 2 символа (биты 0-1)
-edit.blink_mask(0xc0);    // Мигают первые 2 символа (биты 6-7)
+// Blink mask (for editing)
+edit.blink_mask(0x03);    // Last 2 chars blink (bits 0-1)
+edit.blink_mask(0xc0);    // First 2 chars blink (bits 6-7)
 ```
 
-## Расширение системы
+## Extending the System
 
-### Добавление нового виджета
+### Adding a New Widget
 
-1. **Создать структуру виджета:**
+1. **Define the widget struct:**
 
 ```rust
 pub struct MyWidget {
@@ -434,24 +387,24 @@ pub struct MyWidget {
 }
 ```
 
-2. **Реализовать Widget trait:**
+2. **Implement the Widget trait:**
 
 ```rust
 impl Widget<&App, Actions> for MyWidget {
     fn invalidate(&mut self) {}
-    
+
     fn update(&mut self, state: &App) {
         self.value.state.clear();
         write!(self.value, "{}", state.some_value).ok();
     }
-    
+
     fn event(&mut self, event: UiEvent) -> Option<Actions> {
         match event {
             UiEvent::Enter => Some(Actions::MyAction),
             _ => None,
         }
     }
-    
+
     fn render(&mut self, display: &mut impl CharacterDisplay) {
         self.label.render(display);
         self.value.render(display);
@@ -459,7 +412,7 @@ impl Widget<&App, Actions> for MyWidget {
 }
 ```
 
-3. **Добавить в Viewport:**
+3. **Add to Viewport:**
 
 ```rust
 widget_mux!(
@@ -467,16 +420,16 @@ widget_mux!(
     ViewportNode::Label,
     {
         label: LabelWidget;
-        my_widget: MyWidget;  // <-- добавить
+        my_widget: MyWidget;  // <-- add here
     },
     update_fn,
     event_fn
 )
 ```
 
-### Добавление нового действия
+### Adding a New Action
 
-1. **Расширить enum Actions:**
+1. **Extend the Actions enum:**
 
 ```rust
 pub enum Actions {
@@ -485,11 +438,11 @@ pub enum Actions {
 }
 ```
 
-2. **Обработать в App::handle_event:**
+2. **Handle in App::handle_event:**
 
 ```rust
 impl App {
-    pub fn handle_event(&mut self, action: Option<Actions>) 
+    pub fn handle_event(&mut self, action: Option<Actions>)
         -> Option<AppRequest> {
         match action {
             Some(Actions::MyNewAction(value)) => {
@@ -502,9 +455,9 @@ impl App {
 }
 ```
 
-## Тестирование
+## Testing
 
-UI логика тестируется через mock дисплеи:
+UI logic is tested using mock displays:
 
 ```rust
 #[cfg(test)]
@@ -533,24 +486,37 @@ mod tests {
 }
 ```
 
-## Производительность
+## Performance
 
-- **Update**: O(n) где n - количество виджетов в группе/мультиплексоре
-- **Render**: O(1) для mux (только активный), O(n) для group
-- **Event**: O(1) - прямая маршрутизация к активному виджету
-- **Memory**: Zero allocation, все буферы статические
+- **Update**: O(n) where n = number of widgets in group/mux
+- **Render**: O(1) for mux (active only), O(n) for group
+- **Event**: O(1) — direct routing to the active widget
+- **Memory**: zero allocation, all buffers are static
 
-## Файловая структура
+## File Structure
 
 ```
 src/
-├── gui/                    # Базовые GUI компоненты
-│   ├── mod.rs             # Widget trait, UiEvent, CharacterDisplay
-│   ├── label.rs           # Label виджет
-│   ├── edit.rs            # Edit виджет
-│   ├── editbox.rs         # EditBox виджет
-│   └── macros.rs          # widget_group!, widget_mux!
-├── apps.rs                # App state, Actions, AppRequest
-├── ui.rs                  # Составные виджеты (HistoryWidget, etc)
-└── main.rs                # Интеграция с RTIC
+├── gui/                          # GUI components
+│   ├── mod.rs                   # Widget, UiEvent, CharacterDisplay; re-exports DateTimeItems, HistoryType
+│   ├── label.rs                 # Label widget
+│   ├── edit.rs                  # Edit widget
+│   ├── editbox.rs               # EditBox widget
+│   ├── macros.rs                # widget_group!, widget_mux!
+│   ├── date_time_widget.rs      # DateTimeWidget + DateTimeItems
+│   └── history_widget.rs        # HistoryWidget<K>, HistoryKind, HourKind/DayKind/MonthKind, HistoryType
+├── apps.rs                      # App state, Actions, AppRequest
+├── ui.rs                        # Viewport (widget_mux), LabelScreen, LabelsWidget
+└── main.rs                      # RTIC integration
 ```
+
+### Type Locations
+
+| Type | File |
+|---|---|
+| `DateTimeItems` | `gui/date_time_widget.rs` (re-exported as `gui::DateTimeItems`) |
+| `HistoryType` | `gui/history_widget.rs` (re-exported as `gui::HistoryType`) |
+| `DateTimeWidget` | `gui/date_time_widget.rs` |
+| `HistoryWidget<K>` | `gui/history_widget.rs` |
+| `HistoryKind`, `HourKind`, `DayKind`, `MonthKind` | `gui/history_widget.rs` |
+| `Actions`, `App`, `AppRequest` | `apps.rs` |

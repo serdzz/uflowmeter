@@ -1,4 +1,5 @@
-use crate::ui::{HistoryType, ViewportNode};
+use crate::gui::HistoryType;
+use crate::ui::ViewportNode;
 use alloc::string::String;
 use time::{
     macros::{date, time},

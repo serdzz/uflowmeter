@@ -1,89 +1,83 @@
-# Исправление расчета timestamp в HistoryWidgetTrait
+# Timestamp Calculation Fix in HistoryWidget
 
-## Проблема
+## Problem
 
-В методах `inc()` и `dec()` трейта `HistoryWidgetTrait` использовался неправильный расчет timestamp:
+The `inc()` and `dec()` methods of `HistoryWidget` used incorrect timestamp calculation:
 
 ```rust
 self.set_timestamp(self.get_datetime().assume_utc().unix_timestamp() as u32 % 60);
 ```
 
-### Почему это было неправильно:
+### Why this was wrong
 
-Оператор `% 60` (остаток от деления на 60) давал значение только в диапазоне 0-59, что:
+The `% 60` operator (remainder after dividing by 60) produced values only in the range 0–59:
 
-1. **Для Hour History**: Давал только секунды (0-59) вместо полного timestamp часа ❌
-2. **Для Day History**: Полностью терял информацию о дне ❌  
-3. **Для Month History**: Полностью терял информацию о месяце ❌
+1. **For Hour History**: Only seconds (0–59) instead of the full hour timestamp ❌
+2. **For Day History**: All day information was lost ❌
+3. **For Month History**: All month information was lost ❌
 
-## Решение
+## Fix
 
-Удалено `% 60` из расчета:
+Removed `% 60` from the calculation:
 
 ```rust
-self.set_timestamp(self.get_datetime().assume_utc().unix_timestamp() as u32);
+self.timestamp = self.datetime.assume_utc().unix_timestamp() as u32;
 ```
 
-Теперь `timestamp` содержит полный Unix timestamp (количество секунд с 1970-01-01), что корректно для всех типов истории.
+`timestamp` now contains the full Unix timestamp (seconds since 1970-01-01), correct for all history types.
 
-## Проверка blink_mask
+## Blink Mask Verification
 
-Также была проведена проверка корректности `blink_mask` в методе `next_item()`:
+The `blink_mask` values in `next_item()` were also verified:
 
-### Формат времени: `"HH:MM:SS"` (8 символов)
+### Time format: `"HH:MM:SS"` (8 characters)
 
-| Элемент  | Позиции | Биты в маске | Маска  | Значение |
-|----------|---------|--------------|--------|----------|
-| Секунды  | 6-7     | 0-1          | 0x03   | ✓ Верно  |
-| Минуты   | 3-4     | 3-4          | 0x18   | ✓ Верно  |
-| Часы     | 0-1     | 6-7          | 0xc0   | ✓ Верно  |
+| Component | Positions | Mask bits | Mask   | Status    |
+|-----------|-----------|-----------|--------|-----------|
+| Seconds   | 6–7       | 0–1       | `0x03` | ✓ Correct |
+| Minutes   | 3–4       | 3–4       | `0x18` | ✓ Correct |
+| Hours     | 0–1       | 6–7       | `0xc0` | ✓ Correct |
 
-### Формат даты: `"DD/MM/YY"` (8 символов)
+### Date format: `"DD/MM/YY"` (8 characters)
 
-| Элемент | Позиции | Биты в маске | Маска  | Значение |
-|---------|---------|--------------|--------|----------|
-| День    | 0-1     | 6-7          | 0xc0   | ✓ Верно  |
-| Месяц   | 3-4     | 3-4          | 0x18   | ✓ Верно  |
-| Год     | 6-7     | 0-1          | 0x03   | ✓ Верно  |
+| Component | Positions | Mask bits | Mask   | Status    |
+|-----------|-----------|-----------|--------|-----------|
+| Day       | 0–1       | 6–7       | `0xc0` | ✓ Correct |
+| Month     | 3–4       | 3–4       | `0x18` | ✓ Correct |
+| Year      | 6–7       | 0–1       | `0x03` | ✓ Correct |
 
-### Логика маскирования
+### Mask logic
 
-В `src/gui/edit.rs:107`:
+In `src/gui/edit.rs`:
 ```rust
 if self.blink_mask.get_bit(LEN - i - 1)
 ```
 
-Для `LEN=8`:
-- Символ в позиции 0 → бит 7
-- Символ в позиции 1 → бит 6
-- Символ в позиции 6 → бит 1
-- Символ в позиции 7 → бит 0
+For `LEN=8`:
+- Character at position 0 → bit 7
+- Character at position 1 → bit 6
+- Character at position 6 → bit 1
+- Character at position 7 → bit 0
 
-**Вывод**: Все маски `blink_mask` реализованы правильно! ✓
+**Conclusion**: All `blink_mask` values are implemented correctly. ✓
 
-## Результаты
+## Results
 
-- ✅ Код компилируется без ошибок
-- ✅ Clippy проходит без предупреждений
-- ✅ Размер бинарника: 60996 байт (даже немного уменьшился на 16 байт)
-- ✅ Все blink_mask маски корректны
+- ✅ Code compiles without errors
+- ✅ Clippy passes without warnings
+- ✅ Binary size: 60996 bytes
+- ✅ All blink masks are correct
 
-## Файлы изменены
+## Files Changed
 
-- `src/ui.rs` (строки 73 и 100): Удалено `% 60` из расчета timestamp
-- `src/ui.rs` (строки 823-877): Добавлены unit tests для проверки
+- `src/ui.rs` (lines 73 and 100): Removed `% 60` from timestamp calculation
+- `src/ui.rs`: Added unit tests for verification
 
-## Тесты
+## Tests
 
-Добавлены unit tests в `src/ui.rs` (строки 823-877):
+Unit tests added in `src/ui.rs`:
 
-- `test_blink_masks_correct()` - проверка корректности масок
-- `test_timestamp_full_value()` - проверка полного Unix timestamp
-- `test_hour_increment_timestamp()` - проверка инкремента часа (должно быть +3600)
-- `test_day_increment_timestamp()` - проверка инкремента дня (должно быть +86400)
-
-**Примечание**: Эти тесты не запускаются через `make test` или `cargo test --lib`, так как:
-1. Модуль `ui` находится только в `src/main.rs` (бинарный крейт)
-2. `ui` зависит от embedded типов (`hal`, `Actions`, `App`, etc.)
-3. Embedded зависимости не компилируются для host target
-4. Тесты служат для документации и могут быть запущены вручную на host при наличии моков
+- `test_blink_masks_correct()` — verifies blink mask values
+- `test_timestamp_full_value()` — verifies full Unix timestamp
+- `test_hour_increment_timestamp()` — hour increment should be +3600
+- `test_day_increment_timestamp()` — day increment should be +86400

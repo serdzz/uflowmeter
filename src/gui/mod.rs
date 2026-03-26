@@ -4,12 +4,16 @@ mod editbox;
 mod empty;
 mod label;
 mod macros;
+pub mod date_time_widget;
+pub mod history_widget;
 
 pub use edit::*;
 //pub use editbox::*;
 //pub use empty::*;
 pub use label::*;
 //pub use macros::*;
+pub use date_time_widget::DateTimeItems;
+pub use history_widget::HistoryType;
 
 #[allow(dead_code)]
 #[cfg_attr(not(test), derive(defmt::Format))]
