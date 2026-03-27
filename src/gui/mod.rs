@@ -1,11 +1,11 @@
 #![allow(dead_code)]
+pub mod date_time_widget;
 mod edit;
 mod editbox;
 mod empty;
+pub mod history_widget;
 mod label;
 mod macros;
-pub mod date_time_widget;
-pub mod history_widget;
 
 pub use edit::*;
 //pub use editbox::*;

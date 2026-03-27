@@ -4,8 +4,10 @@
 
 #[cfg(test)]
 mod ui_history_tests {
+    use crate::gui::history_widget::{
+        DayKind, HistoryWidget as BaseHistoryWidget, HourKind, MonthKind,
+    };
     use crate::gui::{CharacterDisplay, DateTimeItems, HistoryType, UiEvent, Widget};
-    use crate::gui::history_widget::{DayKind, HistoryWidget as BaseHistoryWidget, HourKind, MonthKind};
     use crate::{Actions, App};
 
     type HistoryWidget = BaseHistoryWidget<HourKind>;

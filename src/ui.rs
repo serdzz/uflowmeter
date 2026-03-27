@@ -1,11 +1,11 @@
-use crate::gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 use crate::gui::date_time_widget::DateTimeWidget;
 use crate::gui::history_widget::{DayKind, HistoryWidget, HourKind, MonthKind};
+use crate::gui::HistoryType;
+use crate::gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 use crate::Actions;
 use crate::App;
 use crate::{widget_group, widget_mux};
 use core::fmt::Write;
-use crate::gui::HistoryType;
 
 widget_group!(
     LabelScreen<&App,Actions>,

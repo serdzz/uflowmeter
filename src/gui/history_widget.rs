@@ -1,5 +1,5 @@
-use crate::gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 use crate::gui::date_time_widget::DateTimeItems;
+use crate::gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 
 #[cfg_attr(not(test), derive(defmt::Format))]
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
@@ -9,8 +9,8 @@ pub enum HistoryType {
     Day,
     Month,
 }
-use crate::App;
 use crate::Actions;
+use crate::App;
 use core::fmt::Write;
 use core::marker::PhantomData;
 use time::{
@@ -29,21 +29,39 @@ pub struct DayKind;
 pub struct MonthKind;
 
 impl HistoryKind for HourKind {
-    fn history_type() -> HistoryType { HistoryType::Hour }
-    fn nav_left() -> Actions { Actions::Label }
-    fn nav_right() -> Actions { Actions::DayHistory }
+    fn history_type() -> HistoryType {
+        HistoryType::Hour
+    }
+    fn nav_left() -> Actions {
+        Actions::Label
+    }
+    fn nav_right() -> Actions {
+        Actions::DayHistory
+    }
 }
 
 impl HistoryKind for DayKind {
-    fn history_type() -> HistoryType { HistoryType::Day }
-    fn nav_left() -> Actions { Actions::HourHistory }
-    fn nav_right() -> Actions { Actions::MonthHistory }
+    fn history_type() -> HistoryType {
+        HistoryType::Day
+    }
+    fn nav_left() -> Actions {
+        Actions::HourHistory
+    }
+    fn nav_right() -> Actions {
+        Actions::MonthHistory
+    }
 }
 
 impl HistoryKind for MonthKind {
-    fn history_type() -> HistoryType { HistoryType::Month }
-    fn nav_left() -> Actions { Actions::DayHistory }
-    fn nav_right() -> Actions { Actions::Label }
+    fn history_type() -> HistoryType {
+        HistoryType::Month
+    }
+    fn nav_left() -> Actions {
+        Actions::DayHistory
+    }
+    fn nav_right() -> Actions {
+        Actions::Label
+    }
 }
 
 pub struct HistoryWidget<K: HistoryKind> {
