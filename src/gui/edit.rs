@@ -125,7 +125,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
                 }
             }
             write!(display, "{}", state).unwrap();
-            display.finish_line(LEN, self.state.len() + X as usize);
+            display.finish_line(LEN, self.state.len());
         }
     }
 }

@@ -32,6 +32,9 @@ pub trait CharacterDisplay: core::fmt::Write {
     fn clear(&mut self);
     fn reset_custom_chars(&mut self);
     fn finish_line(&mut self, width: usize, len: usize) {
+        if len >= width {
+            return;
+        }
         let remaining = width - len;
         for _ in 0..remaining {
             self.write_str(" ").unwrap();

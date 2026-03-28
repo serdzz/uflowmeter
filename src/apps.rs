@@ -38,7 +38,7 @@ pub struct HistoryState {
 
 pub struct App {
     pub text: &'static str,
-    pub num: u8,
+    pub num: u64,
     pub label_title: &'static str,
     pub label_value: String,
     pub datetime: PrimitiveDateTime,
