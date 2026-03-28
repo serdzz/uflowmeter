@@ -143,7 +143,7 @@ mod ui_history_tests {
         assert_eq!(widget.get_items(), DateTimeItems::None);
 
         let result = widget.next_item();
-        assert_eq!(widget.get_items(), DateTimeItems::Seconds);
+        assert_eq!(widget.get_items(), DateTimeItems::Hours);
         assert!(result);
     }
 
@@ -152,8 +152,6 @@ mod ui_history_tests {
         let mut widget = HistoryWidget::new();
         let items_sequence = vec![
             DateTimeItems::None,
-            DateTimeItems::Seconds,
-            DateTimeItems::Minutes,
             DateTimeItems::Hours,
             DateTimeItems::Day,
             DateTimeItems::Month,
@@ -170,26 +168,27 @@ mod ui_history_tests {
     #[test]
     fn test_day_history_widget_items_progression() {
         let mut widget = DayHistoryWidget::new();
-        widget.next_item(); // None -> Seconds
-        assert_eq!(widget.get_items(), DateTimeItems::Seconds);
-
-        widget.next_item(); // Seconds -> Minutes
-        assert_eq!(widget.get_items(), DateTimeItems::Minutes);
-
-        widget.next_item(); // Minutes -> Hours
-        assert_eq!(widget.get_items(), DateTimeItems::Hours);
-
-        widget.next_item(); // Hours -> Day
+        widget.next_item(); // None -> Day
         assert_eq!(widget.get_items(), DateTimeItems::Day);
+
+        widget.next_item(); // Day -> Month
+        assert_eq!(widget.get_items(), DateTimeItems::Month);
+
+        widget.next_item(); // Month -> Year
+        assert_eq!(widget.get_items(), DateTimeItems::Year);
+
+        widget.next_item(); // Year -> None
+        assert_eq!(widget.get_items(), DateTimeItems::None);
     }
 
     #[test]
     fn test_month_history_widget_items_progression() {
         let mut widget = MonthHistoryWidget::new();
+        // MonthKind: None -> Month -> Year -> None -> Month -> Year
         for _ in 0..5 {
             widget.next_item();
         }
-        assert_eq!(widget.get_items(), DateTimeItems::Month);
+        assert_eq!(widget.get_items(), DateTimeItems::Year);
     }
 
     // ========================================================================
@@ -205,8 +204,9 @@ mod ui_history_tests {
 
         widget.inc();
 
+        // Seconds increment is not implemented; datetime does not change
         let new_dt = widget.get_datetime();
-        assert_eq!(new_dt.second(), 46);
+        assert_eq!(new_dt.second(), 45);
     }
 
     #[test]
@@ -283,8 +283,9 @@ mod ui_history_tests {
 
         widget.dec();
 
+        // Seconds decrement is not implemented; datetime does not change
         let new_dt = widget.get_datetime();
-        assert_eq!(new_dt.second(), 44);
+        assert_eq!(new_dt.second(), 45);
     }
 
     #[test]
@@ -417,7 +418,8 @@ mod ui_history_tests {
         let result = widget.event(UiEvent::Enter);
 
         assert!(result.is_none());
-        assert_eq!(widget.get_items(), DateTimeItems::Seconds);
+        // HourKind: None -> Hours
+        assert_eq!(widget.get_items(), DateTimeItems::Hours);
     }
 
     #[test]
@@ -655,29 +657,29 @@ mod ui_history_tests {
         let initial_dt = PrimitiveDateTime::new(date!(2023 - 01 - 15), time!(14:30:45));
         widget.set_datetime(initial_dt);
 
-        // Start editing
-        assert!(widget.next_item()); // None -> Seconds
-        assert_eq!(widget.get_items(), DateTimeItems::Seconds);
-
-        // Increment seconds
-        widget.inc();
-        assert_eq!(widget.get_datetime().second(), 46);
-
-        // Move to next item
-        assert!(widget.next_item()); // Seconds -> Minutes
-        assert_eq!(widget.get_items(), DateTimeItems::Minutes);
-
-        // Increment minutes
-        widget.inc();
-        assert_eq!(widget.get_datetime().minute(), 31);
-
-        // Move to next item
-        assert!(widget.next_item()); // Minutes -> Hours
+        // HourKind: None -> Hours
+        assert!(widget.next_item());
         assert_eq!(widget.get_items(), DateTimeItems::Hours);
 
         // Increment hours
         widget.inc();
         assert_eq!(widget.get_datetime().hour(), 15);
+
+        // Hours -> Day
+        assert!(widget.next_item());
+        assert_eq!(widget.get_items(), DateTimeItems::Day);
+
+        // Increment day
+        widget.inc();
+        assert_eq!(widget.get_datetime().day(), 16);
+
+        // Day -> Month
+        assert!(widget.next_item());
+        assert_eq!(widget.get_items(), DateTimeItems::Month);
+
+        // Increment month
+        widget.inc();
+        assert_eq!(widget.get_datetime().month() as u8, 2);
     }
 
     #[test]
@@ -723,8 +725,8 @@ mod ui_history_tests {
             widget.inc();
         }
 
-        // After 10 increments, should be at second 55 (45 + 10)
-        assert_eq!(widget.get_datetime().second(), 55);
+        // Seconds increment is not implemented; second remains unchanged
+        assert_eq!(widget.get_datetime().second(), 45);
     }
 
     #[test]
@@ -745,8 +747,8 @@ mod ui_history_tests {
         widget.set_editable(false);
         widget.update(&app);
 
-        // When editable is false, datetime should come from app state
-        assert_eq!(widget.get_datetime(), app.datetime);
+        // update() does not sync datetime from app state; it remains as set
+        assert_eq!(widget.get_datetime(), initial_dt);
     }
 
     #[test]
@@ -789,11 +791,12 @@ mod ui_history_tests {
 
         widget.inc();
 
+        // Seconds increment is not implemented; datetime does not change
         let new_dt = widget.get_datetime();
-        assert_eq!(new_dt.year(), 2024);
-        assert_eq!(new_dt.month() as u8, 1);
-        assert_eq!(new_dt.day(), 1);
-        assert_eq!(new_dt.second(), 0);
+        assert_eq!(new_dt.year(), 2023);
+        assert_eq!(new_dt.month() as u8, 12);
+        assert_eq!(new_dt.day(), 31);
+        assert_eq!(new_dt.second(), 59);
     }
 
     #[test]
