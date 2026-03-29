@@ -248,7 +248,8 @@ impl<K: HistoryKind> Widget<&App, Actions> for HistoryWidget<K> {
     fn update(&mut self, state: &App) {
         #[cfg(not(test))]
         defmt::debug!("HistoryWidget::update called, editable={}", self.editable);
-
+        self.date.state.clear();
+        self.time.state.clear();
         let date_str = alloc::format!(
             "{:02}/{:02}/{:02}",
             if K::history_type() == HistoryType::Month {

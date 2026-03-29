@@ -25,6 +25,7 @@ use hal::exti::ExtiExt;
 use hal::gpio::AltMode;
 use hal::mco::*;
 use hal::prelude::*;
+use hal::pwr::PwrExt;
 use hal::rcc::Config;
 use hal::rtc::{Event, Rtc};
 use rand_core::{RngCore, SeedableRng};
@@ -281,9 +282,13 @@ mod app {
             .unwrap();
         defmt::info!("rtc init");
 
+
+        //rtc.enable_wakeup(5);
+        //rtc.listen(&mut p.EXTI, Event::Wakeup);
         rtc.enable_wakeup(5);
         rtc.listen(&mut p.EXTI, Event::Wakeup);
-
+        // Clear any stale pending flags before entering STOP the first time
+        rtc.unpend(Event::Wakeup);
         let mut exti = ExtiExt::new(p.EXTI);
 
         rcc.apb2enr.modify(|_, w| w.syscfgen().set_bit());
@@ -306,7 +311,7 @@ mod app {
         //     defmt::info!("{}", s.as_str());
         // }
 
-        let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
+        let power = Power::new(gpio_power, rcc, p.PWR.constrain(), cx.core.SCB);
         app_request::spawn(AppRequest::DeepSleep).ok();
 
         defmt::info!("init end");

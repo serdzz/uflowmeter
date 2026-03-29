@@ -1,16 +1,19 @@
 #![allow(warnings)]
 #![allow(dead_code)]
 use super::gpio_power::*;
+use defmt::info;
 use crate::app::*;
 use defmt_rtt as _;
 use hal::mco::*;
+use hal::pwr::StopModeConfig;
+use hal::rcc::SysClkSource;
 use systick_monotonic::{fugit::Duration, fugit::ExtU64};
 
 pub struct Power {
     gpio_power: GpioPower,
     rcc: hal::rcc::Rcc,
-    pwr: hal::stm32::PWR,
-    scb: hal::stm32::SCB,
+    pwr: hal::pwr::Pwr,
+    scb: cortex_m::peripheral::SCB,
     sleep: bool,
     active_mode: u64,
 }
@@ -21,8 +24,8 @@ impl Power {
     pub fn new(
         gpio_power: GpioPower,
         rcc: hal::rcc::Rcc,
-        pwr: hal::stm32::PWR,
-        scb: hal::stm32::SCB,
+        pwr: hal::pwr::Pwr,
+        scb: cortex_m::peripheral::SCB,
     ) -> Self {
         Self {
             gpio_power,
@@ -42,12 +45,12 @@ impl Power {
     }
 
     pub fn is_active(&mut self) -> bool {
-        if monotonics::now().ticks() - self.active_mode >= Self::IDLE_TIMEOUT {
-            //&& !self.sleep {
-            //     defmt::trace!("is_active -- faslse");
+        if self.sleep {
             return false;
         }
-        //   defmt::trace!("is_active -- true");
+        if monotonics::now().ticks() - self.active_mode >= Self::IDLE_TIMEOUT {
+            return false;
+        }
         true
     }
 
@@ -63,25 +66,11 @@ impl Power {
             f();
             #[cfg(feature = "low_power")]
             {
-                self.pwr.cr.modify(|_, w| {
-                    w.fwu()
-                        .set_bit()
-                        .ulp()
-                        .set_bit()
-                        .pvde()
-                        .clear_bit()
-                        .pdds()
-                        .clear_bit()
-                        .lpsdsr()
-                        .set_bit()
-                        .cwuf()
-                        .set_bit()
-                });
-                while self.pwr.csr.read().wuf().bit_is_set() {}
+                let stop_config = StopModeConfig::ultra_low_power();
+                self.pwr.stop_mode(stop_config, &mut self.scb);
                 self.gpio_power.down();
-                self.scb.set_sleepdeep();
             }
-            rtic::export::wfi();
+            // WFI is handled by RTIC idle (outside any lock)
         }
     }
 
@@ -92,13 +81,29 @@ impl Power {
             defmt::info!("-- Exit sleep mode --");
             #[cfg(feature = "low_power")]
             {
+                info!(
+                    "Clock after STOP (before reconfig): {}",
+                    match self.rcc.get_sysclk_source() {
+                        SysClkSource::HSI => "HSI",
+                        SysClkSource::HSE => "HSE",
+                        SysClkSource::PLL => "PLL",
+                        SysClkSource::MSI => "MSI",
+                    }
+                );
                 self.scb.clear_sleepdeep();
+                self.rcc.reconfigure_after_stop();
                 self.gpio_power.up();
-                self.rcc.update();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
-                // ADC HSI Enable
-                self.rcc.cr.write(|w| w.hsion().set_bit());
-                while self.rcc.cr.read().hsirdy().bit_is_clear() {}
+                info!(
+                    "--- Wakeup | Clock: {} ({} MHz) ---",
+                    match self.rcc.get_sysclk_source() {
+                        SysClkSource::HSI => "HSI",
+                        SysClkSource::HSE => "HSE",
+                        SysClkSource::PLL => "PLL",
+                        SysClkSource::MSI => "MSI",
+                    },
+                    self.rcc.clocks.sys_clk().0 / 1_000_000,
+                );
             }
         }
         ret
