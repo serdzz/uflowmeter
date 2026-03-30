@@ -37,7 +37,6 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Label<A,
     }
 
     fn update(&mut self, state: &str) {
-        self.state.clear();
         if self.state != state {
             self.state = String::from(state);
             //defmt::info!("update {}", self.state.as_str());

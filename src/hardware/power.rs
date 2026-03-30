@@ -1,8 +1,8 @@
 #![allow(warnings)]
 #![allow(dead_code)]
 use super::gpio_power::*;
-use defmt::info;
 use crate::app::*;
+use defmt::info;
 use defmt_rtt as _;
 use hal::mco::*;
 use hal::pwr::StopModeConfig;

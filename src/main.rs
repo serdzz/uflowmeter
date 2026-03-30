@@ -282,7 +282,6 @@ mod app {
             .unwrap();
         defmt::info!("rtc init");
 
-
         //rtc.enable_wakeup(5);
         //rtc.listen(&mut p.EXTI, Event::Wakeup);
         rtc.enable_wakeup(5);
