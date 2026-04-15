@@ -559,4 +559,11 @@ mod app {
             }
         }
     }
+
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
+        loop {
+            cortex_m::asm::wfi();
+        }
+    }
 }
