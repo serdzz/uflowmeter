@@ -81,7 +81,7 @@ widget_mux! {
     },
     |widget: &mut Viewport, event: UiEvent| {
         #[cfg(not(test))]
-        defmt::info!("Viewport::event - active: {}, event: {}", widget.active, event);
+        defmt::debug!("Viewport::event - active: {}, event: {}", widget.active, event);
         let action = match widget.active {
             ViewportNode::Label => widget.label.event(event),
             ViewportNode::Label1 => widget.label1.event(event),
@@ -147,7 +147,7 @@ impl Default for Viewport {
 impl Viewport {
     pub fn get_active(&self) -> ViewportNode {
         #[cfg(not(test))]
-        defmt::info!("Viewport::get_active - current active: {:?}", self.active);
+        defmt::debug!("Viewport::get_active - current active: {:?}", self.active);
         self.active
     }
 }

@@ -100,7 +100,7 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
                 self.blink = 0;
                 self.blink_state = !self.blink_state;
                 #[cfg(not(test))]
-                defmt::info!(
+                defmt::trace!(
                     "Edit::render TOGGLED blink_state to {}, blink_mask={:08b}",
                     self.blink_state,
                     self.blink_mask

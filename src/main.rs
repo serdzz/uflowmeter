@@ -121,24 +121,24 @@ mod app {
                 .dbg_stop()
                 .set_bit()
                 .dbg_standby()
-                .set_bit()
+             .set_bit()
         });
 
         let mut rcc = p.RCC.freeze(Config::pll(
-            hal::rcc::PLLSource::HSE(8.mhz()),
-            hal::rcc::PLLMul::Mul6,
-            hal::rcc::PLLDiv::Div3,
+            hal::rcc::PLLSource::HSE(24.mhz()),
+            hal::rcc::PLLMul::Mul4,
+            hal::rcc::PLLDiv::Div4,
         ));
         defmt::info!("rcc freeze");
         rcc.enable_power();
-        //let mut pwr = p.PWR;
+        // let mut pwr = p.PWR;
         //let mut backup_domain = rcc.bkp.constrain(p.BKP, &mut pwr);
 
         defmt::info!("enable_power");
         let mut rtc = Rtc::new(p.RTC, &mut p.PWR);
 
         defmt::info!("rtc");
-        let mono = Systick::new(cx.core.SYST, 16_000_000);
+        let mono = Systick::new(cx.core.SYST, 24_000_000);
 
         defmt::info!("mono");
 
@@ -310,7 +310,7 @@ mod app {
         //     defmt::info!("{}", s.as_str());
         // }
 
-        let power = Power::new(gpio_power, rcc, p.PWR.constrain(), cx.core.SCB);
+        let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
         app_request::spawn(AppRequest::DeepSleep).ok();
 
         defmt::info!("init end");
@@ -517,7 +517,7 @@ mod app {
                 rtc.lock(|rtc| rtc.set_datetime(&dt).ok());
             }
             AppRequest::DeepSleep => {
-                defmt::info!("DeepSleep");
+                defmt::debug!("DeepSleep");
                 (power, lcd).lock(|power, lcd| {
                     power.enter_sleep(|| {
                         // #[cfg(not(feature = "swd"))]
