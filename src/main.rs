@@ -15,6 +15,7 @@ mod history;
 mod modbus;
 mod modbus_handler;
 mod options;
+mod shell;
 mod ui;
 
 use apps::*;
@@ -102,6 +103,7 @@ mod app {
         serial: hal::serial::Serial<hal::stm32::USART1>,
         modbus_rx_buf: heapless::Vec<u8, 256>,
         modbus_last_rx: u64,
+        shell_line_buf: heapless::Vec<u8, 80>,
         options: Options,
         tdc1000: Tdc1000Dev,
         tdc7200: Tdc7200Dev,
@@ -360,6 +362,7 @@ mod app {
                 serial,
                 modbus_rx_buf: heapless::Vec::new(),
                 modbus_last_rx: 0,
+                shell_line_buf: heapless::Vec::new(),
                 options: opt,
                 tdc1000,
                 tdc7200,
@@ -622,29 +625,111 @@ mod app {
         }
     }
 
-    /// USART1 RX interrupt — receives Modbus RTU bytes
-    #[task(binds = USART1, priority = 3, shared = [serial, modbus_rx_buf, modbus_last_rx])]
+    /// USART1 RX interrupt — receives bytes for Modbus RTU or Shell
+    #[task(binds = USART1, priority = 3, shared = [serial, modbus_rx_buf, modbus_last_rx, shell_line_buf])]
     fn usart1_irq(ctx: usart1_irq::Context) {
-        let (mut serial, mut modbus_rx_buf, mut modbus_last_rx) =
-            (ctx.shared.serial, ctx.shared.modbus_rx_buf, ctx.shared.modbus_last_rx);
+        let (mut serial, mut modbus_rx_buf, mut modbus_last_rx, mut shell_line_buf) = (
+            ctx.shared.serial, ctx.shared.modbus_rx_buf, ctx.shared.modbus_last_rx, ctx.shared.shell_line_buf,
+        );
         serial.lock(|serial| {
             while let Ok(byte) = serial.read() {
-                modbus_rx_buf.lock(|buf| {
-                    if buf.len() >= 255 {
-                        buf.clear();
-                    }
-                    if buf.push(byte).is_err() {
-                        buf.clear();
-                    }
-                });
+                // If byte is printable ASCII or newline, try shell line buffer
+                if byte == b'\n' || byte == b'\r' {
+                    // End of line — try shell command
+                    shell_line_buf.lock(|buf| {
+                        if !buf.is_empty() {
+                            // Check if this looks like a shell command
+                            let is_shell = buf.iter().all(|&b| b.is_ascii());
+                            if is_shell {
+                                shell_cmd::spawn().ok();
+                            } else {
+                                // Not a shell command — move to Modbus buffer
+                                modbus_rx_buf.lock(|mbuf| {
+                                    for &b in buf.iter() {
+                                        let _ = mbuf.push(b);
+                                    }
+                                });
+                                buf.clear();
+                            }
+                        }
+                    });
+                } else if byte.is_ascii() && byte >= b' ' {
+                    // Printable ASCII — accumulate in shell line buffer
+                    shell_line_buf.lock(|buf| {
+                        if buf.push(byte).is_err() {
+                            buf.clear(); // overflow, reset
+                        }
+                    });
+                } else {
+                    // Binary byte — Modbus mode, clear shell buffer if any
+                    shell_line_buf.lock(|buf| buf.clear());
+                    modbus_rx_buf.lock(|mbuf| {
+                        if mbuf.len() >= 255 {
+                            mbuf.clear();
+                        }
+                        if mbuf.push(byte).is_err() {
+                            mbuf.clear();
+                        }
+                    });
+                }
             }
         });
         modbus_last_rx.lock(|last| *last = monotonics::now().ticks());
 
-        // Check if we received enough for a minimum Modbus frame and spawn processing
+        // Check if we have enough for a Modbus frame
         let len = modbus_rx_buf.lock(|buf| buf.len());
         if len >= 8 {
             modbus_poll::spawn().ok();
+        }
+    }
+
+    /// Process shell command from USART1 line buffer
+    #[task(priority = 1, shared = [serial, shell_line_buf])]
+    fn shell_cmd(ctx: shell_cmd::Context) {
+        let (mut serial, mut shell_line_buf) = (ctx.shared.serial, ctx.shared.shell_line_buf);
+
+        // Take the line buffer contents
+        let line = shell_line_buf.lock(|buf| {
+            let l = buf.clone();
+            buf.clear();
+            l
+        });
+
+        if line.is_empty() {
+            return;
+        }
+
+        // Try shell command
+        match shell::process_line(&line) {
+            shell::ShellResult::Ok(response) => {
+                serial.lock(|serial| {
+                    for byte in response.as_bytes().iter() {
+                        nb::block!(serial.write(*byte)).ok();
+                    }
+                    // Send prompt
+                    nb::block!(serial.write(b'>')).ok();
+                    nb::block!(serial.write(b' ')).ok();
+                    nb::block!(serial.flush()).ok();
+                });
+            }
+            shell::ShellResult::Error(msg) => {
+                serial.lock(|serial| {
+                    for byte in b"Error: " {
+                        nb::block!(serial.write(*byte)).ok();
+                    }
+                    for byte in msg.as_bytes() {
+                        nb::block!(serial.write(*byte)).ok();
+                    }
+                    nb::block!(serial.write(b'\r')).ok();
+                    nb::block!(serial.write(b'\n')).ok();
+                    nb::block!(serial.write(b'>')).ok();
+                    nb::block!(serial.write(b' ')).ok();
+                    nb::block!(serial.flush()).ok();
+                });
+            }
+            shell::ShellResult::NotAShellCommand => {
+                // Not a shell command — ignore (Modbus handles binary separately)
+            }
         }
     }
 

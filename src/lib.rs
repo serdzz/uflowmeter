@@ -42,6 +42,7 @@ pub mod history;
 pub mod modbus;
 pub mod modbus_handler;
 pub mod options;
+pub mod shell;
 
 #[cfg(test)]
 mod history_lib_tests;
