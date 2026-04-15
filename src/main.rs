@@ -12,6 +12,8 @@ mod apps;
 mod gui;
 mod hardware;
 mod history;
+mod modbus;
+mod modbus_handler;
 mod options;
 mod ui;
 
@@ -94,6 +96,11 @@ mod app {
         storage: MyStorage,
         app: App,
         ui: Viewport,
+        modbus_handler: modbus_handler::ModbusHandler,
+        serial: hal::serial::Serial<hal::stm32::USART1>,
+        modbus_rx_buf: heapless::Vec<u8, 256>,
+        modbus_last_rx: u64,
+        options: Options,
     }
 
     #[local]
@@ -264,6 +271,7 @@ mod app {
                 panic!("USART1 init failed")
             });
 
+        serial.listen(hal::serial::Event::Rxne); // Enable RX interrupt for Modbus
         writeln!(serial, "Hello world\r").ok();
         block!(serial.flush()).ok();
 
@@ -324,6 +332,11 @@ mod app {
                 storage,
                 app: App::default(),
                 ui: Viewport::default(),
+                modbus_handler: modbus_handler::ModbusHandler::new(1), // Slave address 1
+                serial,
+                modbus_rx_buf: heapless::Vec::new(),
+                modbus_last_rx: 0,
+                options: opt,
             },
             Local {
                 keyboard,
@@ -565,6 +578,93 @@ mod app {
                 };
             }
         }
+    }
+
+    /// USART1 RX interrupt — receives Modbus RTU bytes
+    #[task(binds = USART1, priority = 3, shared = [serial, modbus_rx_buf, modbus_last_rx])]
+    fn usart1_irq(ctx: usart1_irq::Context) {
+        let (mut serial, mut modbus_rx_buf, mut modbus_last_rx) =
+            (ctx.shared.serial, ctx.shared.modbus_rx_buf, ctx.shared.modbus_last_rx);
+        serial.lock(|serial| {
+            while let Ok(byte) = serial.read() {
+                modbus_rx_buf.lock(|buf| {
+                    if buf.len() >= 255 {
+                        buf.clear();
+                    }
+                    if buf.push(byte).is_err() {
+                        buf.clear();
+                    }
+                });
+            }
+        });
+        modbus_last_rx.lock(|last| *last = monotonics::now().ticks());
+
+        // Check if we received enough for a minimum Modbus frame and spawn processing
+        let len = modbus_rx_buf.lock(|buf| buf.len());
+        if len >= 8 {
+            modbus_poll::spawn().ok();
+        }
+    }
+
+    /// Process complete Modbus RTU frame after 3.5-char silence
+    #[task(priority = 1, shared = [serial, modbus_handler, app, options, storage, hour_history, day_history, month_history, modbus_rx_buf, modbus_last_rx])]
+    fn modbus_poll(mut ctx: modbus_poll::Context) {
+        let mut modbus_last_rx = ctx.shared.modbus_last_rx;
+        let now = monotonics::now().ticks();
+        let last = modbus_last_rx.lock(|l| *l);
+        if now - last < 1 {
+            modbus_poll::spawn_after(1_u64.millis()).ok();
+            return;
+        }
+
+        let frame = ctx.shared.modbus_rx_buf.lock(|buf| {
+            let f = buf.clone();
+            buf.clear();
+            f
+        });
+
+        if frame.is_empty() {
+            return;
+        }
+
+        let (
+            modbus_handler, app, options, storage, hour_history, day_history, month_history, mut serial
+        ) = (
+            ctx.shared.modbus_handler,
+            ctx.shared.app,
+            ctx.shared.options,
+            ctx.shared.storage,
+            ctx.shared.hour_history,
+            ctx.shared.day_history,
+            ctx.shared.month_history,
+            ctx.shared.serial,
+        );
+
+        (modbus_handler, options, app, storage, hour_history, day_history, month_history).lock(
+            |modbus_handler, options, app, storage, hour_history, day_history, month_history| {
+                let result = modbus_handler.handle_request(
+                    &frame,
+                    options,
+                    storage,
+                    app.flow,
+                    app.hour_flow,
+                    app.day_flow,
+                    app.month_flow,
+                    hour_history,
+                    day_history,
+                    month_history,
+                );
+
+                if let Ok(response) = result {
+                    serial.lock(|serial| {
+                        for byte in response.iter() {
+                            nb::block!(serial.write(*byte)).ok();
+                        }
+                        nb::block!(serial.flush()).ok();
+                    });
+                }
+            },
+        );
     }
 
     #[idle(local = [iwdg])]
