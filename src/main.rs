@@ -30,7 +30,6 @@ use hal::rcc::Config;
 use hal::rtc::{Event, Rtc};
 use rand_core::{RngCore, SeedableRng};
 use rand_pcg::Pcg32;
-//se hal::rtc::RestoredOrNewRtc::{New, Restored};
 use hal::serial;
 use hal::serial::SerialExt;
 use hal::spi;
@@ -50,7 +49,6 @@ use time::{
     PrimitiveDateTime,
 };
 use ui::*;
-//use crate::alloc::string::ToString;
 
 impl CharacterDisplay for hardware::Lcd {
     fn set_position(&mut self, col: u8, row: u8) {
@@ -131,9 +129,6 @@ mod app {
         ));
         defmt::info!("rcc freeze");
         rcc.enable_power();
-        // let mut pwr = p.PWR;
-        //let mut backup_domain = rcc.bkp.constrain(p.BKP, &mut pwr);
-
         defmt::info!("enable_power");
         let mut rtc = Rtc::new(p.RTC, &mut p.PWR);
 
@@ -183,9 +178,6 @@ mod app {
         } = hardware::Pins::new(p.GPIOA, p.GPIOB, p.GPIOC, p.GPIOD, p.GPIOH);
 
         let _ = osc_en;
-        //let _ = tdc1000_en;
-        //let _ = tdc1000_cs;
-        //let _ = tdc1000_res;
         let _ = tdc7200_en;
         let _ = tdc7200_cs;
         let _ = tdc7200_int;
@@ -219,39 +211,37 @@ mod app {
         );
         let bus = shared_bus_rtic::new!(spi, BusType);
         defmt::info!("e25x");
-        let eeprom25x = Eeprom25x::new(bus.acquire(), memory_en, memory_wp, memory_hold).unwrap();
+        let eeprom25x = Eeprom25x::new(bus.acquire(), memory_en, memory_wp, memory_hold)
+            .unwrap_or_else(|_| {
+                defmt::error!("EEPROM init failed");
+                panic!("EEPROM init failed")
+            });
 
         let mut storage = microchip_eeprom_25lcxx::Storage::new(eeprom25x);
 
-        let mut opt = Options::load(&mut storage).unwrap();
+        let mut opt = Options::load(&mut storage).unwrap_or_else(|_e| {
+            defmt::error!("Options load failed");
+            Options::default()
+        });
         let reg = [
             0x31_u8, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0, 0, 0, 0, 0, 0,
         ];
 
         opt.set_tdc7200_regs(u128::from_le_bytes(reg));
-        // opt.set_k11(k11 as u3u128::from_be_bytes(reg));2);
-        // defmt::info!("k11: {:x}", k11);
         defmt::info!("opt: {:x}", opt.into_bytes());
-        //opt.save(&mut storage);
 
         let mut tdc1000 = TDC1000::new(bus.acquire(), tdc1000_cs, tdc1000_res, tdc1000_en);
-        // let mut data = [0u8; 16];
         let mut cfg = Config0::default();
         cfg.set_num_tx(31);
         cfg.set_tx_freq_div(FrequencyDividerForTx::Div16);
         let bytes = cfg.into_bytes();
         tdc1000.set_config0(cfg).ok();
         defmt::info!("tdc1000_regs: {:x}", bytes);
-        // storage.read(254, &mut data).unwrap();
-        // defmt::info!("read before: {:x}", data);
-
-        // let mut data = [11u8, 12u8, 13u8, 14u8];
-        // storage.write(254, &mut data).unwrap();
-
-        // let mut data = [0u8; 256];
-        // storage.read(0, &mut data).unwrap();
-        // defmt::info!("read after: {:x}", data);
-        let mut asd = HourHistory::new(&mut storage).unwrap();
+        let mut asd = HourHistory::new(&mut storage).unwrap_or_else(|_e| {
+            defmt::error!("HourHistory init failed");
+            // Return default empty history — will start fresh
+            HourHistory { data: ServiceData::default() }
+        });
         defmt::info!(
             "read data.size: {:?} {:?} {:?}",
             asd.data.size(),
@@ -259,18 +249,21 @@ mod app {
             asd.last_stored_timestamp()
         );
 
-        rs_power_en.set_low().unwrap();
+        rs_power_en.set_low().ok();
 
         let mut serial = p
             .USART1
             .usart(
                 (tx, rx),
-                serial::Config::default().baudrate(hal::time::Bps(112500)),
+                serial::Config::default().baudrate(hal::time::Bps(115200)),
                 &mut rcc,
             )
-            .unwrap();
+            .unwrap_or_else(|_e| {
+                defmt::error!("USART1 init failed");
+                panic!("USART1 init failed")
+            });
 
-        writeln!(serial, "Hello world\r").unwrap();
+        writeln!(serial, "Hello world\r").ok();
         block!(serial.flush()).ok();
 
         defmt::info!("{}", compile_time::datetime_str!());
@@ -278,12 +271,11 @@ mod app {
         let datetime = compile_time::datetime!().saturating_add(Duration::HOUR * 2);
         let asd = datetime.unix_timestamp();
         defmt::info!("unix_timestamp {}", asd);
-        rtc.set_datetime(&PrimitiveDateTime::new(datetime.date(), datetime.time()))
-            .unwrap();
+        if let Err(_e) = rtc.set_datetime(&PrimitiveDateTime::new(datetime.date(), datetime.time())) {
+            defmt::error!("RTC set datetime failed");
+        }
         defmt::info!("rtc init");
 
-        //rtc.enable_wakeup(5);
-        //rtc.listen(&mut p.EXTI, Event::Wakeup);
         rtc.enable_wakeup(5);
         rtc.listen(&mut p.EXTI, Event::Wakeup);
         // Clear any stale pending flags before entering STOP the first time
@@ -302,14 +294,6 @@ mod app {
         let mut ui_timer = p.TIM3.timer(10.hz(), &mut rcc);
         ui_timer.listen();
 
-        // let mut a =
-        //     alloc::collections::BTreeMap::<alloc::string::String, alloc::string::String>::new();
-        // a.insert("key".to_string(), "ыаывафыва".to_string());
-        // let val = a.get("key");
-        // if let Some(s) = val {
-        //     defmt::info!("{}", s.as_str());
-        // }
-
         let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
         app_request::spawn(AppRequest::DeepSleep).ok();
 
@@ -319,9 +303,18 @@ mod app {
                 power,
                 rtc,
                 lcd,
-                hour_history: HourHistory::new(&mut storage).unwrap(),
-                day_history: DayHistory::new(&mut storage).unwrap(),
-                month_history: MonthHistory::new(&mut storage).unwrap(),
+                hour_history: HourHistory::new(&mut storage).unwrap_or_else(|_e| {
+                    defmt::error!("HourHistory init");
+                    HourHistory { data: ServiceData::default() }
+                }),
+                day_history: DayHistory::new(&mut storage).unwrap_or_else(|_e| {
+                    defmt::error!("DayHistory init");
+                    DayHistory { data: ServiceData::default() }
+                }),
+                month_history: MonthHistory::new(&mut storage).unwrap_or_else(|_e| {
+                    defmt::error!("MonthHistory init");
+                    MonthHistory { data: ServiceData::default() }
+                }),
                 storage,
                 app: App::default(),
                 ui: Viewport::default(),
@@ -419,7 +412,13 @@ mod app {
                 ui.get_active();
                 ui.render(lcd);
             });
-            let chan_val: u16 = ctx.local.adc.read(ctx.local.photo_r).unwrap();
+            let chan_val: u16 = match ctx.local.adc.read(ctx.local.photo_r) {
+                Ok(v) => v,
+                Err(_) => {
+                    // ADC read failed — assume light is present to keep LED on
+                    1000u16
+                }
+            };
             if chan_val < 500 && *ctx.local.led {
                 *ctx.local.led = false;
                 app_request::spawn(AppRequest::LcdLed(*ctx.local.led)).ok();
@@ -561,14 +560,3 @@ mod app {
         }
     }
 }
-
-// fn crc(data: &mut [u8], seed: u16) -> u16 {
-//     let mut crc = seed;
-//     for i in data {
-//         let c = *i as u16;
-//         let mut x = (crc >> 8) ^ c;
-//         x ^= x >> 4;
-//         crc = (crc << 8) ^ (x << 12) ^ (x << 5) ^ (x);
-//     }
-//     crc
-// }

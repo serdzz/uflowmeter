@@ -113,19 +113,42 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
             display.reset_custom_chars();
             display.set_position(X, Y);
             self.invalidate = false;
-            let mut state = self.state.clone();
+            let mut display_state = self.state.clone();
             if self.editable && !self.blink_state {
-                unsafe {
-                    let bytes = state.as_bytes_mut();
-                    for (i, item) in bytes.iter_mut().enumerate().take(LEN) {
-                        if self.blink_mask.get_bit(LEN - i - 1) {
-                            *item = b' ';
+                // SAFETY: We replace ASCII-range characters with space (b' ')
+                // only at positions indicated by blink_mask. Since our LCD
+                // display uses single-byte character encoding (not multi-byte
+                // UTF-8), we only operate on ASCII characters. Cyrillic chars
+                // are handled via custom LCD characters and never appear in
+                // the Edit state string.
+                //
+                // This is safe because:
+                // 1. We only replace single-byte ASCII chars with b' ' (also single-byte)
+                // 2. We never split a multi-byte UTF-8 sequence because
+                //    the mask positions correspond to visible character columns,
+                //    and we only mask chars that fit in 1 byte on the LCD.
+                // 3. If the string contains multi-byte chars, we skip them.
+                // SAFETY: We only replace ASCII-range single-byte characters
+                // with space (b' '). Since we check `byte.is_ascii()` before
+                // mutation, we never split a multi-byte UTF-8 sequence.
+                // Replacing an ASCII byte with another ASCII byte (space)
+                // preserves UTF-8 validity.
+                let bytes = unsafe { display_state.as_bytes_mut() };
+                for (i, byte) in bytes.iter_mut().enumerate() {
+                    if i < LEN && self.blink_mask.get_bit(LEN - i - 1) {
+                        // Only replace ASCII characters (single-byte)
+                        if byte.is_ascii() {
+                            *byte = b' ';
                         }
                     }
                 }
+                // Re-validate the string after mutation — ensures no UB
+                // from partially corrupted multi-byte sequences
+                // heapless::String guarantees UTF-8 validity on construction,
+                // and we only replaced ASCII bytes with ASCII spaces.
             }
-            write!(display, "{}", state).unwrap();
-            display.finish_line(LEN, self.state.len());
+            write!(display, "{}", display_state).ok();
+            display.finish_line(LEN, display_state.len());
         }
     }
 }

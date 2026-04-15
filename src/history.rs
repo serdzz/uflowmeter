@@ -139,6 +139,10 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
         self.data.time_of_last()
     }
 
+    /// Maximum number of gap-fill entries per add() call.
+    /// Prevents excessive EEPROM writes when device was offline for a long time.
+    const MAX_GAP_FILL: i32 = 24;
+
     pub fn add<S: Storage>(&mut self, storage: &mut S, val: i32, time: u32) -> Result<()> {
         let mut time = time;
         time -= time % 60;
@@ -149,8 +153,15 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
             let mut delta = (time - self.data.time_of_last()) as i32;
             if delta > 0 {
                 if delta / ELEMENT_SIZE >= SIZE {
+                    // Gap too large — reset buffer and start fresh
                     self.data.set_size(0);
                     self.data.set_offset_of_last(0);
+                    self.write_value(storage, val, time)?;
+                    self.write_service_data(storage)?;
+                } else if delta / ELEMENT_SIZE > Self::MAX_GAP_FILL {
+                    // Gap exceeds MAX_GAP_FILL — skip fill, just write current value
+                    // and update service data without filling gaps
+                    defmt::warn!("Gap too large ({} periods), skipping gap fill", delta / ELEMENT_SIZE);
                     self.write_value(storage, val, time)?;
                     self.write_service_data(storage)?;
                 } else {

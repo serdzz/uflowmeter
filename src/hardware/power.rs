@@ -5,7 +5,6 @@ use crate::app::*;
 use defmt::info;
 use defmt_rtt as _;
 use hal::mco::*;
-use hal::pwr::StopModeConfig;
 use hal::rcc::SysClkSource;
 use systick_monotonic::{fugit::Duration, fugit::ExtU64};
 
@@ -81,12 +80,12 @@ impl Power {
                         .set_bit()
                 });
                 while self.pwr.csr.read().wuf().bit_is_set() {}
-                // let stop_config = StopModeConfig::ultra_low_power();
-                // self.pwr.stop_mode(stop_config, &mut self.scb);
                 self.gpio_power.down();
                 self.scb.set_sleepdeep();
             }
-            rtic::export::wfi();
+            // Use cortex_m WFI directly instead of rtic::export::wfi()
+            // which is an internal API and may break on version updates
+            cortex_m::asm::wfi();
             // WFI is handled by RTIC idle (outside any lock)
         }
     }
@@ -102,18 +101,12 @@ impl Power {
                     defmt::Debug2Format( & self.rcc.get_sysclk_source()),
                 );
                 self.scb.clear_sleepdeep();
-                // self.rcc.reconfigure_after_stop();
                 self.gpio_power.up();
                 self.rcc.update();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
                 // ADC HSI Enable
                 self.rcc.cr.write(|w| w.hsion().set_bit());
                 while self.rcc.cr.read().hsirdy().bit_is_clear() {}
-
-                // self.scb.clear_sleepdeep();
-                // self.rcc.reconfigure_after_stop();
-                // self.gpio_power.up();
-                // self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
                 info!(
                     "--- Wakeup | Clock: {} ({} MHz) ---",
                     defmt::Debug2Format( &self.rcc.get_sysclk_source()),

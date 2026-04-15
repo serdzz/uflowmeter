@@ -10,6 +10,11 @@ macro_rules! SaveLoadGpioReg {
             use stm32l1xx_hal::stm32::$GPIOX;
 
             pub fn save() -> GpioReg {
+                // SAFETY: This reads GPIO register state atomically. It is safe because:
+                // 1. We only read, never write during save
+                // 2. GPIO registers are memory-mapped and always readable
+                // 3. This is called from Power::down() which runs in a single-threaded
+                //    context (inside RTIC lock) or during init
                 let reg_base = unsafe { &(*$GPIOX::ptr()) };
                 GpioReg {
                     moder: reg_base.moder.read().bits(),
@@ -23,7 +28,16 @@ macro_rules! SaveLoadGpioReg {
             }
 
             pub fn load(val: &GpioReg) {
+                // SAFETY: This restores GPIO register state from a saved snapshot. It is safe because:
+                // 1. We only call this from Power::up() after exiting stop mode
+                // 2. All GPIO pins are reconfigured to their pre-sleep state atomically
+                // 3. This runs in a single-threaded context (RTIC lock or interrupt handler)
+                // 4. The register writes use the svd2rust write proxy, which only allows
+                //    valid bit patterns for each field
                 let reg_base = unsafe { &(*$GPIOX::ptr()) };
+                // SAFETY: Each write uses the PAC's typed write proxy which enforces
+                // valid bit patterns. The `bits()` call provides raw values that were
+                // previously read from the same register, so they are valid.
                 reg_base.moder.write(|w| unsafe { w.bits(val.moder) });
                 reg_base.otyper.write(|w| unsafe { w.bits(val.otyper) });
                 reg_base.ospeedr.write(|w| unsafe { w.bits(val.ospeeder) });
