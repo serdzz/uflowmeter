@@ -12,6 +12,7 @@ mod apps;
 mod gui;
 mod hardware;
 mod history;
+mod mbus;
 mod modbus;
 mod modbus_handler;
 mod options;
@@ -107,6 +108,7 @@ mod app {
         options: Options,
         tdc1000: Tdc1000Dev,
         tdc7200: Tdc7200Dev,
+        comm_mode: options::CommType,
     }
 
     #[local]
@@ -366,6 +368,7 @@ mod app {
                 options: opt,
                 tdc1000,
                 tdc7200,
+                comm_mode: options::CommType::from_u8(opt.comm_type()),
             },
             Local {
                 keyboard,

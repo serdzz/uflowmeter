@@ -6,6 +6,37 @@ use modular_bitfield::prelude::*;
 #[cfg(not(test))]
 use super::hal;
 
+/// Communication type — determines which protocol runs on USART1
+/// Matches C++ Configuration::CommType
+#[cfg_attr(not(test), derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CommType {
+    /// No communication
+    None = 0,
+    /// M-Bus (periodic datagram transmission)
+    MBus = 1,
+    /// Modbus RTU slave
+    ModBus = 2,
+    /// Analog output (not UART-based)
+    Analog = 3,
+}
+
+impl CommType {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            1 => CommType::MBus,
+            2 => CommType::ModBus,
+            3 => CommType::Analog,
+            _ => CommType::None,
+        }
+    }
+
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
 #[bitfield]
 #[derive(Debug, Clone, Copy)]
 pub struct Options {

@@ -40,6 +40,7 @@ pub mod hardware {
 pub mod history;
 pub mod modbus;
 pub mod modbus_handler;
+pub mod mbus;
 pub mod options;
 pub mod shell;
 
