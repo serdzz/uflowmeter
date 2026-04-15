@@ -104,6 +104,7 @@ mod app {
         handle: Option<__rtic_internal_app_request_MonoTimer_SpawnHandle>,
         adc: hal::adc::Adc,
         photo_r: PhotoR,
+        iwdg: hal::watchdog::IndependedWatchdog,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -295,6 +296,11 @@ mod app {
         ui_timer.listen();
 
         let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
+
+        // IWDG: 5-second timeout — if main loop hangs, device resets
+        let mut iwdg = p.IWDG.watchdog();
+        iwdg.start(1_u32.hz()); // 1 Hz = ~5s timeout with default LSI prescaler
+        defmt::info!("IWDG started");
         app_request::spawn(AppRequest::DeepSleep).ok();
 
         defmt::info!("init end");
@@ -326,6 +332,7 @@ mod app {
                 handle: None,
                 adc,
                 photo_r,
+                iwdg,
             },
             init::Monotonics(mono),
         )
@@ -560,9 +567,11 @@ mod app {
         }
     }
 
-    #[idle]
-    fn idle(_: idle::Context) -> ! {
+    #[idle(local = [iwdg])]
+    fn idle(cx: idle::Context) -> ! {
+        let iwdg = cx.local.iwdg;
         loop {
+            iwdg.feed();
             cortex_m::asm::wfi();
         }
     }
