@@ -2,10 +2,10 @@
 
 ## System Overview
 
-The uFlowmeter is an embedded ultrasonic flow measurement system built on STM32F103 microcontroller using Rust. It measures fluid flow using transit-time-of-flight (TOF) method with TDC1000/TDC7200 chipset.
+The uFlowmeter is an embedded ultrasonic flow measurement system built on STM32L151 microcontroller using Rust. It measures fluid flow using transit-time-of-flight (TOF) method with TDC1000/TDC7200 chipset.
 
 ### Hardware Components
-- **MCU**: STM32F103 (Cortex-M3)
+- **MCU**: STM32L151 (Cortex-M3)
 - **AFE**: TDC1000 analog front-end for ultrasonic transducer excitation
 - **TDC**: TDC7200 time-to-digital converter for precise TOF measurement
 - **Display**: LCD 1602 character display
@@ -15,7 +15,7 @@ The uFlowmeter is an embedded ultrasonic flow measurement system built on STM32F
 ### System Diagram
 ```
 ┌─────────────────────────────────────────────────────┐
-│              STM32F103 Application                  │
+│              STM32L151 Application                  │
 │  ┌──────────────────────────────────────────────┐  │
 │  │           Main Control Loop                  │  │
 │  │  - Bidirectional TOF measurement             │  │
@@ -404,4 +404,4 @@ INFO  Updated uptime: 12345 seconds
 - TDC1000 Datasheet: [TI Product Page](https://www.ti.com/product/TDC1000)
 - TDC7200 Datasheet: [TI Product Page](https://www.ti.com/product/TDC7200)
 - Transit-Time Flow Measurement: [Wikipedia](https://en.wikipedia.org/wiki/Ultrasonic_flow_meter)
-- STM32F103 Reference Manual: [STMicroelectronics](https://www.st.com/en/microcontrollers-microprocessors/stm32f103.html)
+- STM32L151 Reference Manual: [STMicroelectronics](https://www.st.com/en/microcontrollers-microprocessors/stm32f103.html)
