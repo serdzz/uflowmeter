@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![cfg_attr(not(test), no_std)]
 
 #[cfg(not(test))]

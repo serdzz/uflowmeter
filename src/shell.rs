@@ -18,6 +18,7 @@
 use heapless::Vec;
 use heapless::String;
 
+#[allow(dead_code)]
 const MAX_LINE: usize = 80;
 
 /// Shell command result

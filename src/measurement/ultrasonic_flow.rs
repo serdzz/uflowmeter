@@ -73,6 +73,7 @@ pub struct FlowResult {
 }
 
 /// Ultrasonic flow measurement system
+#[allow(dead_code)]
 pub struct UltrasonicFlowMeter<SPI, CS, RESET, EN> {
     config: FlowMeterConfig,
     spi: SPI,
