@@ -68,6 +68,7 @@ impl CharacterDisplay for hardware::Lcd {
 
 type BusType = spi::Spi<hal::stm32::SPI2, (SpiSck, SpiMiso, SpiMosi)>;
 type MyStorage = Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>;
+type Tdc1000Dev = TDC1000<SharedBus<BusType>, Tdc1000Cs, Tdc1000Res, Tdc1000En>;
 type HourHistory = RingStorage<0, 2160, 3600>;
 type DayHistory = RingStorage<{ HourHistory::SIZE_ON_FLASH }, { 31 * 12 * 3 }, { 3600 * 24 }>;
 type MonthHistory = RingStorage<
@@ -101,6 +102,7 @@ mod app {
         modbus_rx_buf: heapless::Vec<u8, 256>,
         modbus_last_rx: u64,
         options: Options,
+        tdc1000: Tdc1000Dev,
     }
 
     #[local]
@@ -337,6 +339,7 @@ mod app {
                 modbus_rx_buf: heapless::Vec::new(),
                 modbus_last_rx: 0,
                 options: opt,
+                tdc1000,
             },
             Local {
                 keyboard,
@@ -449,13 +452,14 @@ mod app {
         }
     }
 
-    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc,app , hour_history, day_history, month_history, storage])]
+    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc, app, tdc1000, hour_history, day_history, month_history, storage])]
     fn app_request(ctx: app_request::Context, req: AppRequest) {
         let app_request::SharedResources {
             power,
             mut lcd,
             mut rtc,
             mut app,
+            mut tdc1000,
             hour_history,
             day_history,
             month_history,
@@ -465,9 +469,24 @@ mod app {
             AppRequest::Process => {
                 defmt::info!("Process");
                 let datetime = rtc.lock(|rtc| rtc.get_datetime());
+
+                // Trigger real measurement via TDC1000
+                let flow = tdc1000.lock(|tdc| {
+                    // Set channel 1 (downstream) and start measurement
+                    // TDC1000 sends ultrasonic pulses on selected channel
+                    if let Err(_e) = tdc.set_channel(false) {
+                        defmt::error!("TDC1000 set_channel failed");
+                    }
+                    // Clear any previous error flags
+                    let _ = tdc.clear_error_flags();
+                    // TODO: Read TDC7200 measurement results when TDC7200 ISR is connected
+                    // TDC7200 INT pin will signal completion — for now return 0.0
+                    // until TDC7200 driver is integrated into RTIC
+                    0.0f32
+                });
+
                 let (hour_flow, day_flow, month_flow) = app.lock(|app| {
-                    let mut rng = Pcg32::seed_from_u64(monotonics::now().ticks());
-                    app.flow = rng.next_u32() as f32 / 1_000_000.0;
+                    app.flow = flow;
                     defmt::info!("flow: {}", app.flow);
                     app.hour_flow += app.flow;
                     app.day_flow += app.flow;
