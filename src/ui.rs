@@ -23,7 +23,7 @@ use core::fmt::Write;
 #[cfg_attr(not(test), derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenId {
-    // Main menu (16 items matching C++)
+    // Main menu (14 items matching C++)
     HourConsumption,
     DayConsumption,
     TotalVolume,
@@ -36,10 +36,8 @@ pub enum ScreenId {
     Bootloader,
     CommType,
     SlaveAddress,
-    AnalogMax,
     Muster,
     Negative,
-    DayStart,
     // User menu (2 items)
     Channel1,
     Channel2,
@@ -215,8 +213,6 @@ pub struct MenuController {
     pub negative: EditBoxState,
     pub sensor_type: EditBoxState,
     pub slave_address: EditNumberState,
-    pub analog_max: EditNumberState,
-    pub day_start: EditNumberState,
     pub datetime_item: DateTimeEditItem,
     pub pattern: PatternState,
     /// Idle counter for auto-hide (C++ IDLE_TIMEOUT)
@@ -245,10 +241,8 @@ impl MenuController {
         main_menu.add(ScreenId::Bootloader);
         main_menu.add(ScreenId::CommType);
         main_menu.add(ScreenId::SlaveAddress);
-        main_menu.add(ScreenId::AnalogMax);
         main_menu.add(ScreenId::Muster);
         main_menu.add(ScreenId::Negative);
-        main_menu.add(ScreenId::DayStart);
 
         // Build user menu — matches C++ init_user()
         let mut user_menu = MenuList::new();
@@ -280,18 +274,6 @@ impl MenuController {
                 max: 250,
                 editable: false,
             },
-            analog_max: EditNumberState {
-                value: 0,
-                min: 0,
-                max: 255,
-                editable: false,
-            },
-            day_start: EditNumberState {
-                value: 0,
-                min: 0,
-                max: 23,
-                editable: false,
-            },
             datetime_item: DateTimeEditItem::default(),
             pattern: PatternState::default(),
             idle_counter: 0,
@@ -299,15 +281,12 @@ impl MenuController {
     }
 
     /// Check if a screen is enabled (for List navigation skipping).
-    /// C++ disables slave_address when comm_type is None, etc.
+    /// C++ disables slave_address when comm_type is None.
     #[allow(dead_code)]
     fn is_enabled(&self, screen: ScreenId) -> bool {
         match screen {
             ScreenId::SlaveAddress => {
                 self.comm_type.cursor != 0 // not ВЫКЛ
-            }
-            ScreenId::AnalogMax => {
-                self.comm_type.cursor == 3 // Выход 4-20mA
             }
             _ => true,
         }
@@ -374,10 +353,8 @@ impl MenuController {
             ScreenId::Bootloader => "Обновить ПО",
             ScreenId::CommType => "Тип связи",
             ScreenId::SlaveAddress => "Адрес",
-            ScreenId::AnalogMax => "Выход 4-20mA Max",
             ScreenId::Muster => "Поверка",
             ScreenId::Negative => "Реверс",
-            ScreenId::DayStart => "Начало суток",
             ScreenId::Channel1 => "01         луч 1",
             ScreenId::Channel2 => "02         луч 2",
             ScreenId::SensorType => "Датчик",
@@ -430,9 +407,6 @@ impl MenuController {
             ScreenId::SlaveAddress => {
                 write!(s, "{}", self.slave_address.value).ok();
             }
-            ScreenId::AnalogMax => {
-                write!(s, "{}", self.analog_max.value).ok();
-            }
             ScreenId::Muster => {
                 let idx = self.muster.cursor as usize;
                 if idx < ON_OFF.len() {
@@ -444,9 +418,6 @@ impl MenuController {
                 if idx < ON_OFF.len() {
                     let _ = s.push_str(ON_OFF[idx]);
                 }
-            }
-            ScreenId::DayStart => {
-                write!(s, "{}", self.day_start.value).ok();
             }
             ScreenId::Channel1 | ScreenId::Channel2 => {
                 // Channel status — "работает" / "отсутствует"
@@ -509,7 +480,6 @@ impl MenuController {
                 self.current_list_mut().next_enabled(|s: ScreenId| {
                     match s {
                         ScreenId::SlaveAddress => comm_cursor != 0,
-                        ScreenId::AnalogMax => comm_cursor == 3,
                         _ => true,
                     }
                 });
@@ -519,7 +489,6 @@ impl MenuController {
                 self.current_list_mut().prev_enabled(|s: ScreenId| {
                     match s {
                         ScreenId::SlaveAddress => comm_cursor != 0,
-                        ScreenId::AnalogMax => comm_cursor == 3,
                         _ => true,
                     }
                 });
@@ -585,12 +554,6 @@ impl MenuController {
             ScreenId::SlaveAddress => MenuController::editnumber_key_event(&mut self.slave_address, event, |v| {
                 AppRequest::SetAddress(v)
             }),
-            ScreenId::AnalogMax => MenuController::editnumber_key_event(&mut self.analog_max, event, |_v| {
-                AppRequest::Process
-            }),
-            ScreenId::DayStart => MenuController::editnumber_key_event(&mut self.day_start, event, |_v| {
-                AppRequest::Process
-            }),
 
             // ── History screens: Enter starts date navigation ──
             ScreenId::HourHistory => self.history_key_event(event, HistoryType::Hour),
@@ -642,7 +605,7 @@ impl MenuController {
         }
     }
 
-    // ─── EditNumber key handler (shared for SlaveAddress, AnalogMax, DayStart) ──
+    // ─── EditNumber key handler (shared for SlaveAddress) ──
     fn editnumber_key_event(
         state: &mut EditNumberState,
         event: UiEvent,
@@ -752,15 +715,17 @@ impl MenuController {
     }
 
     // ─── Version secret pattern ──
-    /// C++ pattern: Enter,Enter,Enter,Up,Up,Down → Manufacture key
-    /// The pattern keys (including Up/Down) are consumed by this screen.
+    /// C++ pattern: Enter,None,Enter,None,Enter,None,Up,None,Up,None,Down,None,Down
+    /// Rust: without key-release events, pattern is Enter,Enter,Enter,Up,Up,Down,Down
+    /// The pattern keys are consumed by this screen to prevent List navigation.
     fn version_key_event(&mut self, event: UiEvent) -> Option<AppRequest> {
-        const PATTERN: [UiEvent; 6] = [
+        const PATTERN: [UiEvent; 7] = [
             UiEvent::Enter,
             UiEvent::Enter,
             UiEvent::Enter,
             UiEvent::Up,
             UiEvent::Up,
+            UiEvent::Down,
             UiEvent::Down,
         ];
 
@@ -941,6 +906,8 @@ mod tests {
         let result = ctrl.key_event(UiEvent::Up, &app);
         assert!(result.is_some());
         let result = ctrl.key_event(UiEvent::Up, &app);
+        assert!(result.is_some());
+        let result = ctrl.key_event(UiEvent::Down, &app);
         assert!(result.is_some());
         let result = ctrl.key_event(UiEvent::Down, &app);
         assert_eq!(result, Some(AppRequest::EnterCalibration));
