@@ -15,41 +15,46 @@ build:
 	cargo build --release
 
 test:
-	@echo "Running tests with host target..."
-	@sed -i.bak '/^target = /d' .cargo/config.toml && \
-	cargo test --lib --release && \
-	mv .cargo/config.toml.bak .cargo/config.toml || \
-	(mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
+	@echo "Running tests on host..."
+	@cp .cargo/config.toml .cargo/config.toml.bak && \
+	sed '/^target = /d' .cargo/config.toml.bak > .cargo/config.toml && \
+	cargo test --lib --release || \
+	(mv .cargo/config.toml.bak .cargo/config.toml && exit 1); \
+	mv .cargo/config.toml.bak .cargo/config.toml
 
 clippy:
-	@echo "Running clippy with host target..."
-	@sed -i.bak '/^target = /d' .cargo/config.toml && \
-	cargo clippy --lib --release -- -D warnings && \
-	mv .cargo/config.toml.bak .cargo/config.toml || \
-	(mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
+	@echo "Running clippy on host..."
+	@cp .cargo/config.toml .cargo/config.toml.bak && \
+	sed '/^target = /d' .cargo/config.toml.bak > .cargo/config.toml && \
+	cargo clippy --lib --release -- -D warnings || \
+	(mv .cargo/config.toml.bak .cargo/config.toml && exit 1); \
+	mv .cargo/config.toml.bak .cargo/config.toml
 
 test-modbus:
 	@echo "Running Modbus unit tests..."
-	@sed -i.bak '/^target = /d' .cargo/config.toml && \
-	cargo test --lib modbus --release -- --test-threads=1 && \
-	mv .cargo/config.toml.bak .cargo/config.toml || \
-	(mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
+	@cp .cargo/config.toml .cargo/config.toml.bak && \
+	sed '/^target = /d' .cargo/config.toml.bak > .cargo/config.toml && \
+	cargo test --lib modbus --release -- --test-threads=1 || \
+	(mv .cargo/config.toml.bak .cargo/config.toml && exit 1); \
+	mv .cargo/config.toml.bak .cargo/config.toml
 
 test-modbus-verbose:
-	@echo "Running Modbus unit tests with verbose output..."
-	@sed -i.bak '/^target = /d' .cargo/config.toml && \
-	cargo test --lib modbus --release -- --test-threads=1 --nocapture && \
-	mv .cargo/config.toml.bak .cargo/config.toml || \
-	(mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
+	@echo "Running Modbus unit tests (verbose)..."
+	@cp .cargo/config.toml .cargo/config.toml.bak && \
+	sed '/^target = /d' .cargo/config.toml.bak > .cargo/config.toml && \
+	cargo test --lib modbus --release -- --test-threads=1 --nocapture || \
+	(mv .cargo/config.toml.bak .cargo/config.toml && exit 1); \
+	mv .cargo/config.toml.bak .cargo/config.toml
 
 test-release: test
 
 ui-examples:
 	@echo "Running UI examples on host..."
-	@sed -i.bak '/^target = /d' .cargo/config.toml && \
-	cargo run --example ui_examples --release && \
-	mv .cargo/config.toml.bak .cargo/config.toml || \
-	(mv .cargo/config.toml.bak .cargo/config.toml; exit 1)
+	@cp .cargo/config.toml .cargo/config.toml.bak && \
+	sed '/^target = /d' .cargo/config.toml.bak > .cargo/config.toml && \
+	cargo run --example ui_examples --release || \
+	(mv .cargo/config.toml.bak .cargo/config.toml && exit 1); \
+	mv .cargo/config.toml.bak .cargo/config.toml
 
 clean:
 	cargo clean
