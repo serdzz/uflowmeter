@@ -69,6 +69,7 @@ impl CharacterDisplay for hardware::Lcd {
 type BusType = spi::Spi<hal::stm32::SPI2, (SpiSck, SpiMiso, SpiMosi)>;
 type MyStorage = Storage<SharedBus<BusType>, MemoryEn, MemoryWp, MemoryHold>;
 type Tdc1000Dev = TDC1000<SharedBus<BusType>, Tdc1000Cs, Tdc1000Res, Tdc1000En>;
+type Tdc7200Dev = Tdc7200<SharedBus<BusType>, Tdc7200Cs>;
 type HourHistory = RingStorage<0, 2160, 3600>;
 type DayHistory = RingStorage<{ HourHistory::SIZE_ON_FLASH }, { 31 * 12 * 3 }, { 3600 * 24 }>;
 type MonthHistory = RingStorage<
@@ -103,6 +104,7 @@ mod app {
         modbus_last_rx: u64,
         options: Options,
         tdc1000: Tdc1000Dev,
+        tdc7200: Tdc7200Dev,
     }
 
     #[local]
@@ -188,8 +190,8 @@ mod app {
         } = hardware::Pins::new(p.GPIOA, p.GPIOB, p.GPIOC, p.GPIOD, p.GPIOH);
 
         let _ = osc_en;
-        let _ = tdc7200_en;
-        let _ = tdc7200_cs;
+        let mut tdc7200_en = tdc7200_en;
+        let tdc7200_cs = tdc7200_cs;
         let _ = tdc7200_int;
         let _ = sw_en;
         let _ = sw_a0;
@@ -247,6 +249,24 @@ mod app {
         let bytes = cfg.into_bytes();
         tdc1000.set_config0(cfg).ok();
         defmt::info!("tdc1000_regs: {:x}", bytes);
+
+        // Initialize TDC7200
+        let mut tdc7200 = Tdc7200::new(bus.acquire(), tdc7200_cs);
+        tdc7200_en.set_high().ok(); // Enable TDC7200
+        tdc7200.reset().ok();
+        tdc7200.init(
+            hardware::tdc7200::Config1::MEASUREMENT_MODE_1 | hardware::tdc7200::Config1::START_MEASUREMENT | hardware::tdc7200::Config1::SCLK_DIVIDER_1,
+            hardware::tdc7200::Config2::CLOCK_IN_EN | hardware::tdc7200::Config2::CALIBRATION_MODE_CONT | hardware::tdc7200::Config2::CALIBRATION_FREQ_4MHZ | hardware::tdc7200::Config2::NUM_STOP_1,
+            hardware::tdc7200::MainControl::empty(),
+        ).ok();
+        // Enable measurement complete interrupt
+        tdc7200.set_interrupt_mask(
+            hardware::tdc7200::InterruptStatus::MEASUREMENT_COMPLETE.bits()
+                | hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW.bits()
+                | hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR.bits(),
+        ).ok();
+        defmt::info!("TDC7200 initialized");
+
         let mut asd = HourHistory::new(&mut storage).unwrap_or_else(|_e| {
             defmt::error!("HourHistory init failed");
             // Return default empty history — will start fresh
@@ -299,6 +319,8 @@ mod app {
         exti.listen_gpio(&mut p.SYSCFG, 1, 7, TriggerEdge::Falling);
         exti.listen_gpio(&mut p.SYSCFG, 1, 8, TriggerEdge::Falling);
         exti.listen_gpio(&mut p.SYSCFG, 1, 9, TriggerEdge::Falling);
+        // TDC7200 INT on PB0 (falling edge)
+        exti.listen_gpio(&mut p.SYSCFG, 1, 0, TriggerEdge::Falling);
 
         let mut timer = p.TIM2.timer(20.hz(), &mut rcc);
         timer.listen();
@@ -340,6 +362,7 @@ mod app {
                 modbus_last_rx: 0,
                 options: opt,
                 tdc1000,
+                tdc7200,
             },
             Local {
                 keyboard,
@@ -684,6 +707,75 @@ mod app {
                 }
             },
         );
+    }
+
+    /// TDC7200 INT interrupt on PB0 (EXTI0)
+    /// Signals that a measurement is complete
+    #[task(binds = EXTI0, priority = 4, shared = [tdc7200])]
+    fn tdc7200_irq(ctx: tdc7200_irq::Context) {
+        // Clear EXTI pending bit for line 0
+        ExtiExt::unpend(0);
+
+        let mut tdc7200 = ctx.shared.tdc7200;
+        tdc7200.lock(|tdc| {
+            // Read interrupt status to determine what happened
+            match tdc.get_interrupt_status() {
+                Ok(status) => {
+                    if status.contains(hardware::tdc7200::InterruptStatus::MEASUREMENT_COMPLETE) {
+                        defmt::info!("TDC7200 measurement complete");
+                        tdc7200_result::spawn().ok();
+                    }
+                    if status.contains(hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR) {
+                        defmt::warn!("TDC7200 timeout error");
+                    }
+                    if status.contains(hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW) {
+                        defmt::warn!("TDC7200 coarse counter overflow");
+                    }
+                    let _ = tdc.clear_interrupt_status(status);
+                }
+                Err(_) => {
+                    defmt::error!("TDC7200 SPI read failed");
+                }
+            }
+        });
+    }
+
+    /// Read TDC7200 measurement results and calculate flow
+    #[task(priority = 2, shared = [tdc7200, app])]
+    fn tdc7200_result(ctx: tdc7200_result::Context) {
+        let (mut tdc7200, mut app) = (
+            ctx.shared.tdc7200,
+            ctx.shared.app,
+        );
+
+        tdc7200.lock(|tdc| {
+            // Read measurement results
+            let m1 = tdc.get_measurement1();
+            let m2 = tdc.get_measurement2();
+            let ref_clk = tdc.get_reference_clock_counter();
+
+            match (m1, m2, ref_clk) {
+                (Ok(m1_val), Ok(m2_val), Ok(ref_val)) => {
+                    defmt::info!(
+                        "TDC7200: m1={}, m2={}, ref={}",
+                        m1_val,
+                        m2_val,
+                        ref_val
+                    );
+                    // TODO: Calculate actual flow from TDC measurements
+                    // For now, store raw values and mark measurement as done
+                    // The flow calculation requires calibration data from Options
+                    // and the physical formula: v = L²/(2*m1) * (1/m2 - 1/m1)
+                    // where L = distance between transducers
+                    app.lock(|app| {
+                        app.flow = 0.0; // Placeholder until calculation is implemented
+                    });
+                }
+                _ => {
+                    defmt::error!("TDC7200 read failed");
+                }
+            }
+        });
     }
 
     #[idle(local = [iwdg])]

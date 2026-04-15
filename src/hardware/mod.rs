@@ -5,7 +5,7 @@ mod keyboard;
 mod pins;
 mod power;
 mod tdc1000;
-mod tdc7200;
+pub mod tdc7200;
 
 pub use display::*;
 pub use gpio_power::*;
