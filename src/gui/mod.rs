@@ -27,7 +27,7 @@ pub use history_widget::HistoryType;
 
 #[allow(dead_code)]
 #[cfg_attr(not(test), derive(defmt::Format))]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UiEvent {
     Up,
     Down,

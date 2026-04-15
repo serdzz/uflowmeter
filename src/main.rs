@@ -100,7 +100,7 @@ mod app {
         month_history: MonthHistory,
         storage: MyStorage,
         app: App,
-        ui: Viewport,
+        ui: MenuController,
         modbus_handler: modbus_handler::ModbusHandler,
         serial: hal::serial::Serial<hal::stm32::USART1>,
         modbus_rx_buf: heapless::Vec<u8, 256>,
@@ -360,7 +360,7 @@ mod app {
                 }),
                 storage,
                 app: App::default(),
-                ui: Viewport::default(),
+                ui: MenuController::new(),
                 modbus_handler: modbus_handler::ModbusHandler::new(1), // Slave address 1
                 serial,
                 modbus_rx_buf: heapless::Vec::new(),
@@ -422,7 +422,9 @@ mod app {
             let event = ctx.local.keyboard.read_ui_keys();
             (app, lcd, ui).lock(|app, lcd, ui| {
                 if let Some(event) = event {
-                    app.handle_event(ui.event(event)).map(app_request::spawn);
+                    if let Some(req) = ui.event(event, app) {
+                        app_request::spawn(req).ok();
+                    }
                 }
 
                 if lcd.init() {
@@ -431,7 +433,7 @@ mod app {
                 }
                 ui.update(app);
                 ui.get_active();
-                ui.render(lcd);
+                ui.render(app, lcd);
             });
             if event.is_some() {
                 if let Some(h) = ctx.local.handle.take() {
@@ -463,7 +465,7 @@ mod app {
                 }
                 ui.update(app);
                 ui.get_active();
-                ui.render(lcd);
+                ui.render(app, lcd);
             });
             let chan_val: u16 = match ctx.local.adc.read(ctx.local.photo_r) {
                 Ok(v) => v,
@@ -625,6 +627,34 @@ mod app {
                         });
                     }
                 };
+            }
+            AppRequest::SetCommType(_idx) => {
+                defmt::info!("SetCommType");
+                // TODO: save to config, update communication mode
+            }
+            AppRequest::SetAddress(_addr) => {
+                defmt::info!("SetAddress");
+                // TODO: save to config, update slave address
+            }
+            AppRequest::SetMuster(_on) => {
+                defmt::info!("SetMuster");
+                // TODO: enable/disable muster mode
+            }
+            AppRequest::SetNegative(_on) => {
+                defmt::info!("SetNegative");
+                // TODO: enable/disable negative values
+            }
+            AppRequest::ExitShell => {
+                defmt::info!("ExitShell");
+                // TODO: exit shell mode
+            }
+            AppRequest::SystemReset => {
+                defmt::info!("SystemReset");
+                // TODO: NVIC_SystemReset()
+            }
+            AppRequest::EnterCalibration => {
+                defmt::info!("EnterCalibration");
+                // TODO: switch to calibration menu + shell
             }
         }
     }

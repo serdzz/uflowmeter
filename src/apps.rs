@@ -1,10 +1,5 @@
 use crate::gui::HistoryType;
-use crate::ui::ViewportNode;
-use alloc::string::String;
-use time::{
-    macros::{date, time},
-    PrimitiveDateTime,
-};
+use time::PrimitiveDateTime;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Actions {
@@ -20,13 +15,20 @@ pub enum Actions {
     MonthHistory,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum AppRequest {
     Process,
     LcdLed(bool),
     SetDateTime(PrimitiveDateTime),
     SetHistory(HistoryType, u32),
     DeepSleep,
+    SetCommType(u8),
+    SetAddress(u8),
+    SetMuster(bool),
+    SetNegative(bool),
+    ExitShell,
+    SystemReset,
+    EnterCalibration,
 }
 
 #[derive(Debug, Default)]
@@ -40,9 +42,8 @@ pub struct App {
     pub text: &'static str,
     pub num: u64,
     pub label_title: &'static str,
-    pub label_value: String,
+    pub label_value: alloc::string::String,
     pub datetime: PrimitiveDateTime,
-    pub active_widget: ViewportNode,
     pub flow: f32,
     pub hour_flow: f32,
     pub day_flow: f32,
@@ -56,9 +57,8 @@ impl App {
             text: "Привет",
             num: 34,
             label_title: "Uptime",
-            label_value: String::from("123456"),
-            datetime: PrimitiveDateTime::new(date!(2023 - 01 - 01), time!(00:00:00)),
-            active_widget: ViewportNode::Label,
+            label_value: alloc::string::String::from("123456"),
+            datetime: time::macros::datetime!(2023-01-01 00:00:00),
             flow: 0.0,
             hour_flow: 0.0,
             day_flow: 0.0,
@@ -71,24 +71,7 @@ impl App {
         }
     }
 
-    pub fn handle_event(&mut self, action: Option<Actions>) -> Option<AppRequest> {
-        if let Some(action) = action {
-            match action {
-                Actions::ActionA => {
-                    self.num = self.num.wrapping_sub(1);
-                    return None;
-                }
-                Actions::ActionB => {
-                    self.num = self.num.wrapping_add(1);
-                    return None;
-                }
-                Actions::SetDateTime(dt) => return Some(AppRequest::SetDateTime(dt)),
-                Actions::SetHistory(t, datetime) => {
-                    return Some(AppRequest::SetHistory(t, datetime))
-                }
-                _ => return None,
-            }
-        }
+    pub fn handle_event(&mut self, _action: Option<Actions>) -> Option<AppRequest> {
         None
     }
 }
