@@ -14,6 +14,7 @@ static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
 extern crate stm32l1xx_hal as hal;
 
 pub mod apps;
+pub mod calibration;
 pub mod gui;
 pub mod history_lib;
 pub mod measurement;

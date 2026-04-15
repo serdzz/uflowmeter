@@ -9,6 +9,7 @@ extern crate alloc;
 extern crate stm32l1xx_hal as hal;
 
 mod apps;
+mod calibration;
 mod gui;
 mod hardware;
 mod history;
