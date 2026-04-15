@@ -1,16 +1,26 @@
 #![allow(dead_code)]
+pub mod button;
+pub mod clickable_label;
 pub mod date_time_widget;
 mod edit;
+mod edit_number;
 mod editbox;
 mod empty;
 pub mod history_widget;
-mod label;
+pub mod label;
+pub mod list;
+pub mod live_meter;
 mod macros;
 
+pub use button::*;
+pub use clickable_label::*;
 pub use edit::*;
+pub use edit_number::*;
 //pub use editbox::*;
 //pub use empty::*;
 pub use label::*;
+pub use list::*;
+pub use live_meter::*;
 //pub use macros::*;
 pub use date_time_widget::DateTimeItems;
 pub use history_widget::HistoryType;
