@@ -143,8 +143,7 @@ impl Calculator {
 
 /// Auto-zero calibration: measure 10 samples with no flow to determine dTOF0
 /// Returns the zero offset for both channels
-pub fn auto_zero(
-    measure_fn: impl Fn() -> (i32, i32), // (delta_ch0, delta_ch1) in ns
+pub fn auto_zero(measure_fn: impl Fn() -> (i32, i32), // (delta_ch0, delta_ch1) in ns
 ) -> [f32; 2] {
     let mut delta: [i32; 2] = [0, 0];
 
@@ -154,18 +153,15 @@ pub fn auto_zero(
         delta[1] += d1;
     }
 
-    [
-        delta[0] as f32 / 10_000.0,
-        delta[1] as f32 / 10_000.0,
-    ]
+    [delta[0] as f32 / 10_000.0, delta[1] as f32 / 10_000.0]
 }
 
 /// Auto-calibration for a specific coefficient (1-3)
 /// Takes 10 measurements with known reference flow (vet in m³/h)
 /// Returns updated CalibData for the given coefficient index
 pub fn auto_calibrate(
-    _coef_no: u8,   // 1, 2, or 3 (reserved for logging)
-    vet: f32,       // reference flow m³/h
+    _coef_no: u8,                      // 1, 2, or 3 (reserved for logging)
+    vet: f32,                          // reference flow m³/h
     measure_fn: impl Fn() -> [f32; 2], // [vm_raw_ch0, vm_raw_ch1]
 ) -> [CalibData; 2] {
     let mut vm_raw: [f32; 2] = [0.0, 0.0];

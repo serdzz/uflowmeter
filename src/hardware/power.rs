@@ -98,7 +98,7 @@ impl Power {
             {
                 info!(
                     "Clock after STOP (before reconfig): {}",
-                    defmt::Debug2Format( & self.rcc.get_sysclk_source()),
+                    defmt::Debug2Format(&self.rcc.get_sysclk_source()),
                 );
                 self.scb.clear_sleepdeep();
                 self.gpio_power.up();
@@ -109,7 +109,7 @@ impl Power {
                 while self.rcc.cr.read().hsirdy().bit_is_clear() {}
                 info!(
                     "--- Wakeup | Clock: {} ({} MHz) ---",
-                    defmt::Debug2Format( &self.rcc.get_sysclk_source()),
+                    defmt::Debug2Format(&self.rcc.get_sysclk_source()),
                     self.rcc.clocks.sys_clk().0 / 1_000_000,
                 );
             }

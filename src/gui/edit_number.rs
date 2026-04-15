@@ -21,9 +21,7 @@ pub struct EditNumber<A, T: Copy + PartialOrd + core::fmt::Display, const LEN: u
     _phantom: PhantomData<A>,
 }
 
-impl<A, T: Copy + PartialOrd + core::fmt::Display, const LEN: usize>
-    EditNumber<A, T, LEN>
-{
+impl<A, T: Copy + PartialOrd + core::fmt::Display, const LEN: usize> EditNumber<A, T, LEN> {
     pub fn new(min: T, max: T) -> Self {
         Self {
             value: min,
@@ -139,7 +137,7 @@ impl<A, const LEN: usize> Widget<A, A> for EditNumber<A, u8, LEN> {
                     self.editable = false;
                     self.invalidate = true;
                     // Return on_change result when exiting edit mode
-                    self.on_change.and_then(|f| Some(f(self.value)))
+                    self.on_change.map(|f| f(self.value))
                 } else {
                     self.editable = true;
                     self.invalidate = true;

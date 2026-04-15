@@ -40,7 +40,7 @@ impl<A: Clone> Widget<A, A> for Button<A> {
 
     fn event(&mut self, e: UiEvent) -> Option<A> {
         match e {
-            UiEvent::Enter => self.on_press.and_then(|f| Some(f())),
+            UiEvent::Enter => self.on_press.map(|f| f()),
             _ => None,
         }
     }

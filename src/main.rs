@@ -33,8 +33,6 @@ use hal::prelude::*;
 use hal::pwr::PwrExt;
 use hal::rcc::Config;
 use hal::rtc::{Event, Rtc};
-use rand_core::{RngCore, SeedableRng};
-use rand_pcg::Pcg32;
 use hal::serial;
 use hal::serial::SerialExt;
 use hal::spi;
@@ -45,6 +43,8 @@ use microchip_eeprom_25lcxx::*;
 use nb::block;
 use options::*;
 use panic_probe as _;
+use rand_core::{RngCore, SeedableRng};
+use rand_pcg::Pcg32;
 use rtic::app;
 use shared_bus_rtic::SharedBus;
 use systick_monotonic::{fugit::ExtU64, Systick};
@@ -136,7 +136,7 @@ mod app {
                 .dbg_stop()
                 .set_bit()
                 .dbg_standby()
-             .set_bit()
+                .set_bit()
         });
 
         let mut rcc = p.RCC.freeze(Config::pll(
@@ -196,7 +196,7 @@ mod app {
 
         let _ = osc_en;
         let mut tdc7200_en = tdc7200_en;
-        let tdc7200_cs = tdc7200_cs;
+        let _ = tdc7200_cs;
         let _ = tdc7200_int;
         let _ = sw_en;
         let _ = sw_a0;
@@ -259,23 +259,34 @@ mod app {
         let mut tdc7200 = Tdc7200::new(bus.acquire(), tdc7200_cs);
         tdc7200_en.set_high().ok(); // Enable TDC7200
         tdc7200.reset().ok();
-        tdc7200.init(
-            hardware::tdc7200::Config1::MEASUREMENT_MODE_1 | hardware::tdc7200::Config1::START_MEASUREMENT | hardware::tdc7200::Config1::SCLK_DIVIDER_1,
-            hardware::tdc7200::Config2::CLOCK_IN_EN | hardware::tdc7200::Config2::CALIBRATION_MODE_CONT | hardware::tdc7200::Config2::CALIBRATION_FREQ_4MHZ | hardware::tdc7200::Config2::NUM_STOP_1,
-            hardware::tdc7200::MainControl::empty(),
-        ).ok();
+        tdc7200
+            .init(
+                hardware::tdc7200::Config1::MEASUREMENT_MODE_1
+                    | hardware::tdc7200::Config1::START_MEASUREMENT
+                    | hardware::tdc7200::Config1::SCLK_DIVIDER_1,
+                hardware::tdc7200::Config2::CLOCK_IN_EN
+                    | hardware::tdc7200::Config2::CALIBRATION_MODE_CONT
+                    | hardware::tdc7200::Config2::CALIBRATION_FREQ_4MHZ
+                    | hardware::tdc7200::Config2::NUM_STOP_1,
+                hardware::tdc7200::MainControl::empty(),
+            )
+            .ok();
         // Enable measurement complete interrupt
-        tdc7200.set_interrupt_mask(
-            hardware::tdc7200::InterruptStatus::MEASUREMENT_COMPLETE.bits()
-                | hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW.bits()
-                | hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR.bits(),
-        ).ok();
+        tdc7200
+            .set_interrupt_mask(
+                hardware::tdc7200::InterruptStatus::MEASUREMENT_COMPLETE.bits()
+                    | hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW.bits()
+                    | hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR.bits(),
+            )
+            .ok();
         defmt::info!("TDC7200 initialized");
 
         let mut asd = HourHistory::new(&mut storage).unwrap_or_else(|_e| {
             defmt::error!("HourHistory init failed");
             // Return default empty history — will start fresh
-            HourHistory { data: ServiceData::default() }
+            HourHistory {
+                data: ServiceData::default(),
+            }
         });
         defmt::info!(
             "read data.size: {:?} {:?} {:?}",
@@ -307,7 +318,8 @@ mod app {
         let datetime = compile_time::datetime!().saturating_add(Duration::HOUR * 2);
         let asd = datetime.unix_timestamp();
         defmt::info!("unix_timestamp {}", asd);
-        if let Err(_e) = rtc.set_datetime(&PrimitiveDateTime::new(datetime.date(), datetime.time())) {
+        if let Err(_e) = rtc.set_datetime(&PrimitiveDateTime::new(datetime.date(), datetime.time()))
+        {
             defmt::error!("RTC set datetime failed");
         }
         defmt::info!("rtc init");
@@ -348,15 +360,21 @@ mod app {
                 lcd,
                 hour_history: HourHistory::new(&mut storage).unwrap_or_else(|_e| {
                     defmt::error!("HourHistory init");
-                    HourHistory { data: ServiceData::default() }
+                    HourHistory {
+                        data: ServiceData::default(),
+                    }
                 }),
                 day_history: DayHistory::new(&mut storage).unwrap_or_else(|_e| {
                     defmt::error!("DayHistory init");
-                    DayHistory { data: ServiceData::default() }
+                    DayHistory {
+                        data: ServiceData::default(),
+                    }
                 }),
                 month_history: MonthHistory::new(&mut storage).unwrap_or_else(|_e| {
                     defmt::error!("MonthHistory init");
-                    MonthHistory { data: ServiceData::default() }
+                    MonthHistory {
+                        data: ServiceData::default(),
+                    }
                 }),
                 storage,
                 app: App::default(),
@@ -467,13 +485,7 @@ mod app {
                 ui.get_active();
                 ui.render(app, lcd);
             });
-            let chan_val: u16 = match ctx.local.adc.read(ctx.local.photo_r) {
-                Ok(v) => v,
-                Err(_) => {
-                    // ADC read failed — assume light is present to keep LED on
-                    1000u16
-                }
-            };
+            let chan_val: u16 = ctx.local.adc.read(ctx.local.photo_r).unwrap_or(1000u16);
             if chan_val < 500 && *ctx.local.led {
                 *ctx.local.led = false;
                 app_request::spawn(AppRequest::LcdLed(*ctx.local.led)).ok();
@@ -663,7 +675,10 @@ mod app {
     #[task(binds = USART1, priority = 3, shared = [serial, modbus_rx_buf, modbus_last_rx, shell_line_buf])]
     fn usart1_irq(ctx: usart1_irq::Context) {
         let (mut serial, mut modbus_rx_buf, mut modbus_last_rx, mut shell_line_buf) = (
-            ctx.shared.serial, ctx.shared.modbus_rx_buf, ctx.shared.modbus_last_rx, ctx.shared.shell_line_buf,
+            ctx.shared.serial,
+            ctx.shared.modbus_rx_buf,
+            ctx.shared.modbus_last_rx,
+            ctx.shared.shell_line_buf,
         );
         serial.lock(|serial| {
             while let Ok(byte) = serial.read() {
@@ -789,7 +804,14 @@ mod app {
         }
 
         let (
-            modbus_handler, app, options, storage, hour_history, day_history, month_history, mut serial
+            modbus_handler,
+            app,
+            options,
+            storage,
+            hour_history,
+            day_history,
+            month_history,
+            mut serial,
         ) = (
             ctx.shared.modbus_handler,
             ctx.shared.app,
@@ -801,31 +823,46 @@ mod app {
             ctx.shared.serial,
         );
 
-        (modbus_handler, options, app, storage, hour_history, day_history, month_history).lock(
-            |modbus_handler, options, app, storage, hour_history, day_history, month_history| {
-                let result = modbus_handler.handle_request(
-                    &frame,
-                    options,
-                    storage,
-                    app.flow,
-                    app.hour_flow,
-                    app.day_flow,
-                    app.month_flow,
-                    hour_history,
-                    day_history,
-                    month_history,
-                );
+        (
+            modbus_handler,
+            options,
+            app,
+            storage,
+            hour_history,
+            day_history,
+            month_history,
+        )
+            .lock(
+                |modbus_handler,
+                 options,
+                 app,
+                 storage,
+                 hour_history,
+                 day_history,
+                 month_history| {
+                    let result = modbus_handler.handle_request(
+                        &frame,
+                        options,
+                        storage,
+                        app.flow,
+                        app.hour_flow,
+                        app.day_flow,
+                        app.month_flow,
+                        hour_history,
+                        day_history,
+                        month_history,
+                    );
 
-                if let Ok(response) = result {
-                    serial.lock(|serial| {
-                        for byte in response.iter() {
-                            nb::block!(serial.write(*byte)).ok();
-                        }
-                        nb::block!(serial.flush()).ok();
-                    });
-                }
-            },
-        );
+                    if let Ok(response) = result {
+                        serial.lock(|serial| {
+                            for byte in response.iter() {
+                                nb::block!(serial.write(*byte)).ok();
+                            }
+                            nb::block!(serial.flush()).ok();
+                        });
+                    }
+                },
+            );
     }
 
     /// TDC7200 INT interrupt on PB0 (EXTI0)
@@ -847,7 +884,8 @@ mod app {
                     if status.contains(hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR) {
                         defmt::warn!("TDC7200 timeout error");
                     }
-                    if status.contains(hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW) {
+                    if status.contains(hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW)
+                    {
                         defmt::warn!("TDC7200 coarse counter overflow");
                     }
                     let _ = tdc.clear_interrupt_status(status);
@@ -862,10 +900,7 @@ mod app {
     /// Read TDC7200 measurement results and calculate flow
     #[task(priority = 2, shared = [tdc7200, app])]
     fn tdc7200_result(ctx: tdc7200_result::Context) {
-        let (mut tdc7200, mut app) = (
-            ctx.shared.tdc7200,
-            ctx.shared.app,
-        );
+        let (mut tdc7200, mut app) = (ctx.shared.tdc7200, ctx.shared.app);
 
         tdc7200.lock(|tdc| {
             // Read measurement results
@@ -875,12 +910,7 @@ mod app {
 
             match (m1, m2, ref_clk) {
                 (Ok(m1_val), Ok(m2_val), Ok(ref_val)) => {
-                    defmt::info!(
-                        "TDC7200: m1={}, m2={}, ref={}",
-                        m1_val,
-                        m2_val,
-                        ref_val
-                    );
+                    defmt::info!("TDC7200: m1={}, m2={}, ref={}", m1_val, m2_val, ref_val);
                     // TODO: Calculate actual flow from TDC measurements
                     // For now, store raw values and mark measurement as done
                     // The flow calculation requires calibration data from Options

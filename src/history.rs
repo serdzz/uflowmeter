@@ -161,7 +161,10 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
                 } else if delta / ELEMENT_SIZE > Self::MAX_GAP_FILL {
                     // Gap exceeds MAX_GAP_FILL — skip fill, just write current value
                     // and update service data without filling gaps
-                    defmt::warn!("Gap too large ({} periods), skipping gap fill", delta / ELEMENT_SIZE);
+                    defmt::warn!(
+                        "Gap too large ({} periods), skipping gap fill",
+                        delta / ELEMENT_SIZE
+                    );
                     self.write_value(storage, val, time)?;
                     self.write_service_data(storage)?;
                 } else {

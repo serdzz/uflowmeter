@@ -74,6 +74,12 @@ pub struct MenuList {
     index: usize,
 }
 
+impl Default for MenuList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MenuList {
     pub fn new() -> Self {
         Self {
@@ -138,22 +144,13 @@ impl MenuList {
 
 // ─── Editable state for screens that need it ─────────────────────────
 /// State for EditBox-like screens (comm type, muster, negative, sensor, day start)
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct EditBoxState {
     pub cursor: u8,
     pub editable: bool,
 }
 
-impl Default for EditBoxState {
-    fn default() -> Self {
-        Self {
-            cursor: 0,
-            editable: false,
-        }
-    }
-}
-
-/// State for EditNumber-like screens (slave address, analog max)
+/// State for EditNumber-like screens (slave address)
 #[derive(Debug, Clone, Copy)]
 pub struct EditNumberState {
     pub value: u8,
@@ -174,8 +171,9 @@ impl Default for EditNumberState {
 }
 
 /// State for DateTime editing
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateTimeEditItem {
+    #[default]
     None,
     Seconds,
     Minutes,
@@ -183,12 +181,6 @@ pub enum DateTimeEditItem {
     Day,
     Month,
     Year,
-}
-
-impl Default for DateTimeEditItem {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Pattern for ClickableLabel (version screen secret pattern)
@@ -384,7 +376,7 @@ impl MenuController {
                 if let Some(flow) = app.history_state.flow {
                     write!(s, "{:.3}", flow).ok();
                 } else {
-                    let _ = s.push_str("None");
+                    s.push_str("None");
                 }
             }
             ScreenId::DateTime => {
@@ -401,7 +393,7 @@ impl MenuController {
             ScreenId::CommType => {
                 let idx = self.comm_type.cursor as usize;
                 if idx < COMM_TYPES.len() {
-                    let _ = s.push_str(COMM_TYPES[idx]);
+                    s.push_str(COMM_TYPES[idx]);
                 }
             }
             ScreenId::SlaveAddress => {
@@ -410,23 +402,23 @@ impl MenuController {
             ScreenId::Muster => {
                 let idx = self.muster.cursor as usize;
                 if idx < ON_OFF.len() {
-                    let _ = s.push_str(ON_OFF[idx]);
+                    s.push_str(ON_OFF[idx]);
                 }
             }
             ScreenId::Negative => {
                 let idx = self.negative.cursor as usize;
                 if idx < ON_OFF.len() {
-                    let _ = s.push_str(ON_OFF[idx]);
+                    s.push_str(ON_OFF[idx]);
                 }
             }
             ScreenId::Channel1 | ScreenId::Channel2 => {
                 // Channel status — "работает" / "отсутствует"
-                let _ = s.push_str("отсутствует");
+                s.push_str("отсутствует");
             }
             ScreenId::SensorType => {
                 let idx = self.sensor_type.cursor as usize;
                 if idx < SENSOR_TYPES.len() {
-                    let _ = s.push_str(SENSOR_TYPES[idx]);
+                    s.push_str(SENSOR_TYPES[idx]);
                 }
             }
             ScreenId::SerialNumber => {
@@ -477,20 +469,16 @@ impl MenuController {
         let comm_cursor = self.comm_type.cursor;
         match event {
             UiEvent::Up => {
-                self.current_list_mut().next_enabled(|s: ScreenId| {
-                    match s {
-                        ScreenId::SlaveAddress => comm_cursor != 0,
-                        _ => true,
-                    }
+                self.current_list_mut().next_enabled(|s: ScreenId| match s {
+                    ScreenId::SlaveAddress => comm_cursor != 0,
+                    _ => true,
                 });
                 None
             }
             UiEvent::Down => {
-                self.current_list_mut().prev_enabled(|s: ScreenId| {
-                    match s {
-                        ScreenId::SlaveAddress => comm_cursor != 0,
-                        _ => true,
-                    }
+                self.current_list_mut().prev_enabled(|s: ScreenId| match s {
+                    ScreenId::SlaveAddress => comm_cursor != 0,
+                    _ => true,
                 });
                 None
             }
@@ -534,15 +522,21 @@ impl MenuController {
             }
 
             // ── EditBox screens: Left/Right cycle items, Enter toggles edit ──
-            ScreenId::CommType => MenuController::editbox_key_event(&mut self.comm_type, 4, event, |idx| {
-                AppRequest::SetCommType(idx)
-            }),
-            ScreenId::Muster => MenuController::editbox_key_event(&mut self.muster, 2, event, |idx| {
-                AppRequest::SetMuster(idx > 0)
-            }),
-            ScreenId::Negative => MenuController::editbox_key_event(&mut self.negative, 2, event, |idx| {
-                AppRequest::SetNegative(idx > 0)
-            }),
+            ScreenId::CommType => {
+                MenuController::editbox_key_event(&mut self.comm_type, 4, event, |idx| {
+                    AppRequest::SetCommType(idx)
+                })
+            }
+            ScreenId::Muster => {
+                MenuController::editbox_key_event(&mut self.muster, 2, event, |idx| {
+                    AppRequest::SetMuster(idx > 0)
+                })
+            }
+            ScreenId::Negative => {
+                MenuController::editbox_key_event(&mut self.negative, 2, event, |idx| {
+                    AppRequest::SetNegative(idx > 0)
+                })
+            }
             ScreenId::SensorType => {
                 MenuController::editbox_key_event(&mut self.sensor_type, 5, event, |_idx| {
                     // TODO: Calculator::init(sensor_type)
@@ -551,9 +545,11 @@ impl MenuController {
             }
 
             // ── EditNumber screens: Left/Right change value, Enter toggles edit ──
-            ScreenId::SlaveAddress => MenuController::editnumber_key_event(&mut self.slave_address, event, |v| {
-                AppRequest::SetAddress(v)
-            }),
+            ScreenId::SlaveAddress => {
+                MenuController::editnumber_key_event(&mut self.slave_address, event, |v| {
+                    AppRequest::SetAddress(v)
+                })
+            }
 
             // ── History screens: Enter starts date navigation ──
             ScreenId::HourHistory => self.history_key_event(event, HistoryType::Hour),
@@ -1032,7 +1028,7 @@ mod tests {
         assert!(!ctrl.tick_idle()); // 3→2
         assert!(!ctrl.tick_idle()); // 2→1
         assert!(!ctrl.tick_idle()); // 1→0
-        assert!(ctrl.tick_idle());  // 0 → auto-hide
+        assert!(ctrl.tick_idle()); // 0 → auto-hide
     }
 
     #[test]
@@ -1041,7 +1037,11 @@ mod tests {
         // Every screen should have a non-empty title
         for i in 0..ctrl.main_menu.count {
             let title = ctrl.title(ctrl.main_menu.items[i]);
-            assert!(!title.is_empty(), "Screen {:?} has empty title", ctrl.main_menu.items[i]);
+            assert!(
+                !title.is_empty(),
+                "Screen {:?} has empty title",
+                ctrl.main_menu.items[i]
+            );
         }
     }
 }

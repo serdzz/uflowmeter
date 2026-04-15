@@ -15,13 +15,14 @@
 //!   get_calibration    — dump calibration data
 //!   help               — list commands
 
-use heapless::Vec;
 use heapless::String;
+use heapless::Vec;
 
 #[allow(dead_code)]
 const MAX_LINE: usize = 80;
 
 /// Shell command result
+#[allow(clippy::large_enum_variant)]
 pub enum ShellResult {
     /// Command recognized and processed, response in String
     Ok(String<256>),
@@ -84,8 +85,7 @@ pub fn process_line(line: &[u8]) -> ShellResult {
 // ─── Commands ────────────────────────────────────────────────────────
 
 fn help_text() -> String<256> {
-    lit(
-        "Commands:\r\n\
+    lit("Commands:\r\n\
          date get\r\n\
          date set <unix_ts>\r\n\
          zero\r\n\
@@ -94,8 +94,7 @@ fn help_text() -> String<256> {
          set_verbose <0|1>\r\n\
          get_settings\r\n\
          get_calibration\r\n\
-         help\r\n"
-    )
+         help\r\n")
 }
 
 fn cmd_date(args: &[&[u8]]) -> ShellResult {
@@ -137,7 +136,7 @@ fn cmd_calibrate(args: &[&[u8]]) -> ShellResult {
         return ShellResult::Error("Usage: calibrate <1-3> <lph>");
     }
     let coef_no = match parse_u8(args[0]) {
-        Some(n) if n >= 1 && n <= 3 => n,
+        Some(n) if (1..=3).contains(&n) => n,
         _ => return ShellResult::Error("coef must be 1, 2, or 3"),
     };
     let _lph = match parse_u32(args[1]) {
@@ -231,7 +230,7 @@ fn eq(a: &[u8], b: &[u8]) -> bool {
 fn parse_u32(s: &[u8]) -> Option<u32> {
     let mut result: u32 = 0;
     for &b in s {
-        if b >= b'0' && b <= b'9' {
+        if b.is_ascii_digit() {
             result = result.checked_mul(10)?.checked_add((b - b'0') as u32)?;
         } else {
             return None;

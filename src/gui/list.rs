@@ -12,6 +12,12 @@ pub struct List<A, const N: usize> {
     invalidate: bool,
 }
 
+impl<A: Clone + Default, const N: usize> Default for List<A, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<A: Clone + Default, const N: usize> List<A, N> {
     pub fn new() -> Self {
         Self {
