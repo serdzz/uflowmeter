@@ -213,14 +213,14 @@ CRC-функция, EEPROM-тесты, BTreeMap-эксперимент, RCC-до
 
 | Функция | C++ | Rust |
 |---------|-----|------|
-| Реальные измерения TDC | ✅ | ❌ RNG заглушка |
-| Modbus RTU интеграция | ✅ | ❌ код есть, не подключён |
-| M-Bus | ✅ | ❌ нет |
-| Shell/CLI | ✅ | ❌ нет |
+| Реальные измерения TDC | ✅ | ⚠️ TDC1000/TDC7200 ISR подключены, flow=0.0 (нужна формула) |
+| Modbus RTU интеграция | ✅ | ✅ USART1 ISR + modbus_poll task |
+| M-Bus | ✅ | ✅ mbus.rs + CommType switching |
+| Shell/CLI | ✅ | ✅ shell.rs + ASCII/Modbus mux |
 | Калибровка | ✅ | ❌ нет |
-| Калькулятор потока | ✅ | ⚠️ код есть, не подключён |
-| Low power | ✅ | ⚠️ частично |
-| Watchdog | ❌ | ❌ |
+| Калькулятор потока | ✅ | ⚠️ код есть (ultrasonic_flow.rs), не подключён |
+| Low power | ✅ | ✅ #[idle] + WFI |
+| Watchdog | ❌ | ✅ IWDG 5с |
 
 ---
 
