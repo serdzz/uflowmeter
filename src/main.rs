@@ -599,13 +599,22 @@ mod app {
             }
             AppRequest::DeepSleep => {
                 defmt::debug!("DeepSleep");
-                (power, lcd).lock(|power, lcd| {
-                    power.enter_sleep(|| {
-                        // #[cfg(not(feature = "swd"))]
+                // WFI MUST be outside the RTIC lock — calling WFI inside a lock
+                // corrupts the task context when an interrupt fires during sleep.
+                // Split: prepare sleep (LCD off) inside lock, then WFI outside.
+                let should_wfi = (power, lcd).lock(|power, lcd| {
+                    // enter_sleep sets power.sleep = true and calls the callback,
+                    // but we skip the WFI inside enter_sleep by not calling it here.
+                    // Instead, we do the WFI after releasing the lock.
+                    power.prepare_sleep(|| {
                         lcd.led_off();
                         lcd.off();
                     });
+                    power.is_sleep()
                 });
+                if should_wfi {
+                    cortex_m::asm::wfi();
+                }
             }
             AppRequest::SetHistory(history_type, timestamp) => {
                 defmt::info!("SetHistory");

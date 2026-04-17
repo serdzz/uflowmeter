@@ -83,10 +83,39 @@ impl Power {
                 self.gpio_power.down();
                 self.scb.set_sleepdeep();
             }
-            // Use cortex_m WFI directly instead of rtic::export::wfi()
-            // which is an internal API and may break on version updates
-            cortex_m::asm::wfi();
-            // WFI is handled by RTIC idle (outside any lock)
+            // WFI is NOT called here — the caller must do WFI outside the RTIC lock.
+            // Previously, calling WFI inside a lock corrupted the task context.
+        }
+    }
+
+    /// Prepare for sleep (set flags, call callback) without entering WFI.
+    /// Callers should call cortex_m::asm::wfi() AFTER releasing the RTIC lock.
+    pub fn prepare_sleep(&mut self, f: impl FnOnce()) {
+        if !self.is_active() || self.active_mode == 0_u64 {
+            self.sleep = true;
+            self.active_mode = 0_u64;
+            defmt::info!("-- Enter sleep mode --");
+            f();
+            #[cfg(feature = "low_power")]
+            {
+                self.pwr.cr.modify(|_, w| {
+                    w.fwu()
+                        .set_bit()
+                        .ulp()
+                        .set_bit()
+                        .pvde()
+                        .clear_bit()
+                        .pdds()
+                        .clear_bit()
+                        .lpsdsr()
+                        .set_bit()
+                        .cwuf()
+                        .set_bit()
+                });
+                while self.pwr.csr.read().wuf().bit_is_set() {}
+                self.gpio_power.down();
+                self.scb.set_sleepdeep();
+            }
         }
     }
 

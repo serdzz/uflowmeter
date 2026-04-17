@@ -100,19 +100,49 @@ impl Default for Options {
     }
 }
 
+/// Static buffer wrapper that implements Sync, allowing use in static context.
+/// SAFETY: Only safe when accessed from a single thread (e.g., RTIC init).
+#[allow(unsafe_code)]
+struct StaticBuf {
+    buf: core::cell::UnsafeCell<[u8; 1024]>,
+}
+
+#[allow(unsafe_code)]
+unsafe impl Sync for StaticBuf {}
+
+impl StaticBuf {
+    const fn new() -> Self {
+        Self {
+            buf: core::cell::UnsafeCell::new([0; 1024]),
+        }
+    }
+
+    /// Get mutable reference to the buffer.
+    /// SAFETY: Caller must ensure no concurrent access.
+    #[allow(unsafe_code, clippy::mut_from_ref)]
+    unsafe fn get_mut(&self) -> &mut [u8; 1024] {
+        &mut *self.buf.get()
+    }
+}
+
 impl Options {
     const SIZE: usize = 1024;
     const OFFSET_PRIMARY: u32 = 0;
     const OFFSET_SECONDARY: u32 = 1024;
 
-    pub fn load<S, E>(storage: &mut S) -> Result<Self, Error<E>>
+    /// Load Options from storage using a caller-provided buffer.
+    /// This avoids allocating 1KB+ on the stack, which caused stack overflow
+    /// on STM32L151RC with limited stack in RTIC init.
+    pub fn load_with_buf<S, E>(
+        storage: &mut S,
+        data: &mut [u8; Self::SIZE],
+    ) -> Result<Self, Error<E>>
     where
         S: Storage,
         Error<E>: From<S::Error>,
     {
         assert!(core::mem::size_of::<Options>() < Self::SIZE);
-        let mut data = [0; Self::SIZE];
-        storage.read(Self::OFFSET_PRIMARY, &mut data)?;
+        storage.read(Self::OFFSET_PRIMARY, data)?;
         #[cfg(not(test))]
         defmt::info!("data: {:x}", data);
         let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
@@ -122,7 +152,7 @@ impl Options {
         if crc != opt.crc() {
             #[cfg(not(test))]
             defmt::warn!("Wrong CRC on primary page {:x} != {:x}", crc, opt.crc());
-            storage.read(Self::OFFSET_SECONDARY, &mut data)?;
+            storage.read(Self::OFFSET_SECONDARY, data)?;
             let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
             let mut bytes = [0u8; core::mem::size_of::<Options>()];
             bytes.copy_from_slice(&data[0..core::mem::size_of::<Options>()]);
@@ -136,23 +166,56 @@ impl Options {
         Ok(opt)
     }
 
-    pub fn save<S, E>(&mut self, storage: &mut S) -> Result<(), Error<E>>
+    /// Save Options to storage using a caller-provided buffer.
+    pub fn save_with_buf<S, E>(
+        &mut self,
+        storage: &mut S,
+        data: &mut [u8; Self::SIZE],
+    ) -> Result<(), Error<E>>
     where
         S: Storage,
         Error<E>: From<S::Error>,
     {
         assert!(core::mem::size_of::<Options>() < Self::SIZE);
-        let mut data = [0_u8; Self::SIZE];
+        data.fill(0);
         let src = self.into_bytes();
         data[..src.len()].copy_from_slice(&src);
         let crc = crc16::State::<crc16::CCITT_FALSE>::calculate(&data[2..]);
         self.set_crc(crc);
         let src = self.into_bytes();
         data[..src.len()].copy_from_slice(&src);
-        storage.write(Self::OFFSET_PRIMARY, &data)?;
-        storage.write(Self::OFFSET_SECONDARY, &data)?;
+        storage.write(Self::OFFSET_PRIMARY, data)?;
+        storage.write(Self::OFFSET_SECONDARY, data)?;
         #[cfg(not(test))]
         defmt::info!("data: {:x}", data);
         Ok(())
+    }
+
+    /// Convenience wrappers that use a static buffer.
+    /// Safe only in RTIC init (single-threaded, no reentrancy).
+    /// For concurrent contexts, use load_with_buf/save_with_buf instead.
+    #[allow(unsafe_code)]
+    pub fn load<S, E>(storage: &mut S) -> Result<Self, Error<E>>
+    where
+        S: Storage,
+        Error<E>: From<S::Error>,
+    {
+        static DATA_BUF: StaticBuf = StaticBuf::new();
+        // SAFETY: Safe only in single-threaded context (RTIC init).
+        // Do NOT call from concurrent tasks — use load_with_buf() instead.
+        let data = unsafe { DATA_BUF.get_mut() };
+        Self::load_with_buf(storage, data)
+    }
+
+    #[allow(unsafe_code)]
+    pub fn save<S, E>(&mut self, storage: &mut S) -> Result<(), Error<E>>
+    where
+        S: Storage,
+        Error<E>: From<S::Error>,
+    {
+        static DATA_BUF: StaticBuf = StaticBuf::new();
+        // SAFETY: Same as load() — safe only in init, use save_with_buf() otherwise.
+        let data = unsafe { DATA_BUF.get_mut() };
+        Self::save_with_buf(self, storage, data)
     }
 }
