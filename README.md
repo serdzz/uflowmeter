@@ -105,7 +105,7 @@ The project supports testing on host platform thanks to its modular architecture
 
 ```bash
 # Run all tests
-make test
+make test   
 
 # Run Modbus tests
 make test-modbus

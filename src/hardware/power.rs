@@ -91,11 +91,13 @@ impl Power {
     /// Prepare for sleep (set flags, call callback) without entering WFI.
     /// Callers should call cortex_m::asm::wfi() AFTER releasing the RTIC lock.
     pub fn prepare_sleep(&mut self, f: impl FnOnce()) {
+        defmt::info!("prepare_sleep enter");
         if !self.is_active() || self.active_mode == 0_u64 {
             self.sleep = true;
             self.active_mode = 0_u64;
             defmt::info!("-- Enter sleep mode --");
             f();
+            defmt::info!("callback done");
             #[cfg(feature = "low_power")]
             {
                 self.pwr.cr.modify(|_, w| {
@@ -116,6 +118,9 @@ impl Power {
                 self.gpio_power.down();
                 self.scb.set_sleepdeep();
             }
+            defmt::info!("prepare_sleep done");
+        } else {
+            defmt::info!("prepare_sleep: still active, skip");
         }
     }
 

@@ -1,3 +1,4 @@
 /target
 **/*.rs.bk
 Cargo.lock
+microchip-eeprom-25x-local

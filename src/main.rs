@@ -343,13 +343,15 @@ mod app {
         timer.listen();
         let mut ui_timer = p.TIM3.timer(10.hz(), &mut rcc);
         ui_timer.listen();
+        // TEMP: Disable TIM3 interrupt to isolate crash
+        // ui_timer.listen();
 
         let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
 
-        // IWDG: 5-second timeout — if main loop hangs, device resets
-        let mut iwdg = p.IWDG.watchdog();
-        iwdg.start(1_u32.hz()); // 1 Hz = ~5s timeout with default LSI prescaler
-        defmt::info!("IWDG started");
+        // IWDG: started in idle() after init completes, not here.
+        // Starting in init() causes reset because idle loop can't feed it fast enough.
+        let iwdg = p.IWDG.watchdog();
+
         app_request::spawn(AppRequest::DeepSleep).ok();
 
         defmt::info!("init end");
@@ -598,14 +600,10 @@ mod app {
                 rtc.lock(|rtc| rtc.set_datetime(&dt).ok());
             }
             AppRequest::DeepSleep => {
-                defmt::debug!("DeepSleep");
+                defmt::info!("DeepSleep");
                 // WFI MUST be outside the RTIC lock — calling WFI inside a lock
                 // corrupts the task context when an interrupt fires during sleep.
-                // Split: prepare sleep (LCD off) inside lock, then WFI outside.
                 let should_wfi = (power, lcd).lock(|power, lcd| {
-                    // enter_sleep sets power.sleep = true and calls the callback,
-                    // but we skip the WFI inside enter_sleep by not calling it here.
-                    // Instead, we do the WFI after releasing the lock.
                     power.prepare_sleep(|| {
                         lcd.led_off();
                         lcd.off();
@@ -895,6 +893,7 @@ mod app {
     /// Signals that a measurement is complete
     #[task(binds = EXTI0, priority = 4, shared = [tdc7200])]
     fn tdc7200_irq(ctx: tdc7200_irq::Context) {
+        defmt::info!("exti0");
         // Clear EXTI pending bit for line 0
         ExtiExt::unpend(0);
 
@@ -969,6 +968,10 @@ mod app {
     #[idle(local = [iwdg])]
     fn idle(cx: idle::Context) -> ! {
         let iwdg = cx.local.iwdg;
+        // Start IWDG here — not in init() — because init dispatches tasks
+        // before idle() runs, and the watchdog would expire before we can feed it.
+        iwdg.start(1_u32.hz()); // ~5s timeout with default LSI prescaler
+        defmt::info!("IWDG started in idle");
         loop {
             iwdg.feed();
             cortex_m::asm::wfi();
