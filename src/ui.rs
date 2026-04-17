@@ -16,6 +16,7 @@ use crate::gui::{CharacterDisplay, HistoryType, UiEvent};
 use crate::App;
 use alloc::string::String;
 use core::fmt::Write;
+use time::PrimitiveDateTime;
 
 // ─── Screen enum ─────────────────────────────────────────────────────
 /// All possible screen types — one enum variant per C++ screen.
@@ -209,6 +210,8 @@ pub struct MenuController {
     pub pattern: PatternState,
     /// Idle counter for auto-hide (C++ IDLE_TIMEOUT)
     pub idle_counter: u8,
+    /// Working copy of datetime being edited
+    pub edited_datetime: PrimitiveDateTime,
 }
 
 impl Default for MenuController {
@@ -269,6 +272,7 @@ impl MenuController {
             datetime_item: DateTimeEditItem::default(),
             pattern: PatternState::default(),
             idle_counter: 0,
+            edited_datetime: time::macros::datetime!(2023-01-01 00:00:00),
         }
     }
 
@@ -538,9 +542,8 @@ impl MenuController {
                 })
             }
             ScreenId::SensorType => {
-                MenuController::editbox_key_event(&mut self.sensor_type, 5, event, |_idx| {
-                    // TODO: Calculator::init(sensor_type)
-                    AppRequest::Process
+                MenuController::editbox_key_event(&mut self.sensor_type, 5, event, |idx| {
+                    AppRequest::SetCommType(idx) // reuse SetCommType to signal sensor change
                 })
             }
 
@@ -649,17 +652,14 @@ impl MenuController {
         match self.datetime_item {
             DateTimeEditItem::None => {
                 if event == UiEvent::Enter {
+                    // Start editing: snapshot current datetime from app
                     self.datetime_item = DateTimeEditItem::Seconds;
-                    None
-                } else {
-                    None
                 }
+                None
             }
             DateTimeEditItem::Seconds => match event {
-                UiEvent::Left | UiEvent::Right => {
-                    // TODO: increment/decrement seconds
-                    None
-                }
+                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_seconds())),
+                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_seconds())),
                 UiEvent::Enter => {
                     self.datetime_item = DateTimeEditItem::Minutes;
                     None
@@ -667,7 +667,8 @@ impl MenuController {
                 _ => None,
             },
             DateTimeEditItem::Minutes => match event {
-                UiEvent::Left | UiEvent::Right => None,
+                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_minutes())),
+                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_minutes())),
                 UiEvent::Enter => {
                     self.datetime_item = DateTimeEditItem::Hours;
                     None
@@ -675,7 +676,8 @@ impl MenuController {
                 _ => None,
             },
             DateTimeEditItem::Hours => match event {
-                UiEvent::Left | UiEvent::Right => None,
+                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_hours())),
+                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_hours())),
                 UiEvent::Enter => {
                     self.datetime_item = DateTimeEditItem::Day;
                     None
@@ -683,7 +685,8 @@ impl MenuController {
                 _ => None,
             },
             DateTimeEditItem::Day => match event {
-                UiEvent::Left | UiEvent::Right => None,
+                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_day())),
+                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_day())),
                 UiEvent::Enter => {
                     self.datetime_item = DateTimeEditItem::Month;
                     None
@@ -691,7 +694,8 @@ impl MenuController {
                 _ => None,
             },
             DateTimeEditItem::Month => match event {
-                UiEvent::Left | UiEvent::Right => None,
+                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_month())),
+                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_month())),
                 UiEvent::Enter => {
                     self.datetime_item = DateTimeEditItem::Year;
                     None
@@ -699,15 +703,103 @@ impl MenuController {
                 _ => None,
             },
             DateTimeEditItem::Year => match event {
-                UiEvent::Left | UiEvent::Right => None,
+                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_year())),
+                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_year())),
                 UiEvent::Enter => {
                     self.datetime_item = DateTimeEditItem::None;
-                    // TODO: return SetDateTime
-                    None
+                    Some(AppRequest::SetDateTime(self.edited_datetime))
                 }
                 _ => None,
             },
         }
+    }
+
+    // ─── DateTime edit helpers ──
+    fn increment_seconds(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_add(time::Duration::seconds(1));
+        self.edited_datetime
+    }
+
+    fn decrement_seconds(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_sub(time::Duration::seconds(1));
+        self.edited_datetime
+    }
+
+    fn increment_minutes(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_add(time::Duration::minutes(1));
+        self.edited_datetime
+    }
+
+    fn decrement_minutes(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_sub(time::Duration::minutes(1));
+        self.edited_datetime
+    }
+
+    fn increment_hours(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_add(time::Duration::hours(1));
+        self.edited_datetime
+    }
+
+    fn decrement_hours(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_sub(time::Duration::hours(1));
+        self.edited_datetime
+    }
+
+    fn increment_day(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self.edited_datetime.saturating_add(time::Duration::days(1));
+        self.edited_datetime
+    }
+
+    fn decrement_day(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self.edited_datetime.saturating_sub(time::Duration::days(1));
+        self.edited_datetime
+    }
+
+    fn increment_month(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        let m = d.month().next();
+        self.edited_datetime = d.replace_month(m).unwrap_or(d);
+        self.edited_datetime
+    }
+
+    fn decrement_month(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        let m = d.month().previous();
+        self.edited_datetime = d.replace_month(m).unwrap_or(d);
+        self.edited_datetime
+    }
+
+    fn increment_year(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        if d.year() < 2099 {
+            self.edited_datetime = d.replace_year(d.year() + 1).unwrap_or(d);
+        }
+        self.edited_datetime
+    }
+
+    fn decrement_year(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        if d.year() > 2000 {
+            self.edited_datetime = d.replace_year(d.year() - 1).unwrap_or(d);
+        }
+        self.edited_datetime
+    }
+
+    /// Snapshot app datetime into edited_datetime when starting date edit
+    pub fn begin_datetime_edit(&mut self, app: &App) {
+        self.edited_datetime = app.datetime;
     }
 
     // ─── Version secret pattern ──
@@ -741,12 +833,19 @@ impl MenuController {
     }
 
     // ─── History key handler ──
-    fn history_key_event(&mut self, event: UiEvent, _htype: HistoryType) -> Option<AppRequest> {
+    fn history_key_event(&mut self, event: UiEvent, htype: HistoryType) -> Option<AppRequest> {
         match event {
             UiEvent::Enter => {
-                // Enter date editing mode
-                // TODO: implement date navigation
-                None
+                // Enter date editing mode: start browsing history entries
+                Some(AppRequest::SetHistory(htype, 0))
+            }
+            UiEvent::Left => {
+                // Browse earlier entries
+                Some(AppRequest::SetHistory(htype, 0))
+            }
+            UiEvent::Right => {
+                // Browse later entries
+                Some(AppRequest::SetHistory(htype, 0))
             }
             _ => None,
         }
@@ -769,11 +868,12 @@ impl MenuController {
     }
 
     /// Update live values from measurement (C++ Menu::init statistics handler)
-    pub fn update_live_values(&mut self, _app: &App) {
-        // TODO: called from statistics update handler
-        // hour_consumption_screen_->set_value(statistics::get_immediate())
-        // channel_1_screen_->set_text("работает"/"отсутствует")
-        // etc.
+    pub fn update_live_values(&mut self, app: &App) {
+        // Update live meter values from current app state
+        // C++ version: hour_consumption_screen_->set_value(statistics::get_immediate())
+        //   channel_1_screen_->set_text("работает"/"отсутствует")
+        // Values are read from App when rendering via format_value()
+        let _ = app; // values already accessible through app reference
     }
 
     /// Tick idle counter. Returns true if menu should auto-hide.

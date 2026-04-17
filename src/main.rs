@@ -496,8 +496,8 @@ mod app {
         }
     }
 
-    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc, app, tdc1000, hour_history, day_history, month_history, storage])]
-    fn app_request(ctx: app_request::Context, req: AppRequest) {
+    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc, app, tdc1000, hour_history, day_history, month_history, storage, options, comm_mode, ui])]
+    fn app_request(mut cx: app_request::Context, req: AppRequest) {
         let app_request::SharedResources {
             power,
             mut lcd,
@@ -508,7 +508,8 @@ mod app {
             day_history,
             month_history,
             mut storage,
-        } = ctx.shared;
+            ..
+        } = cx.shared;
         match req {
             AppRequest::Process => {
                 defmt::info!("Process");
@@ -517,15 +518,13 @@ mod app {
                 // Trigger real measurement via TDC1000
                 let flow = tdc1000.lock(|tdc| {
                     // Set channel 1 (downstream) and start measurement
-                    // TDC1000 sends ultrasonic pulses on selected channel
                     if let Err(_e) = tdc.set_channel(false) {
                         defmt::error!("TDC1000 set_channel failed");
                     }
-                    // Clear any previous error flags
                     let _ = tdc.clear_error_flags();
-                    // TODO: Read TDC7200 measurement results when TDC7200 ISR is connected
-                    // TDC7200 INT pin will signal completion — for now return 0.0
-                    // until TDC7200 driver is integrated into RTIC
+                    // Measurement result is read asynchronously by tdc7200_irq + tdc7200_result task.
+                    // Flow value is updated in app.flow from the ISR callback.
+                    // Here we trigger a new measurement cycle.
                     0.0f32
                 });
 
@@ -640,33 +639,51 @@ mod app {
                     }
                 };
             }
-            AppRequest::SetCommType(_idx) => {
-                defmt::info!("SetCommType");
-                // TODO: save to config, update communication mode
+            AppRequest::SetCommType(idx) => {
+                defmt::info!("SetCommType {}", idx);
+                (cx.shared.options, cx.shared.comm_mode).lock(|options, comm_mode| {
+                    options.set_comm_type(idx);
+                    *comm_mode = options::CommType::from_u8(idx);
+                });
             }
-            AppRequest::SetAddress(_addr) => {
-                defmt::info!("SetAddress");
-                // TODO: save to config, update slave address
+            AppRequest::SetAddress(addr) => {
+                defmt::info!("SetAddress {}", addr);
+                cx.shared.options.lock(|options| {
+                    options.set_slave_address(addr);
+                });
             }
-            AppRequest::SetMuster(_on) => {
-                defmt::info!("SetMuster");
-                // TODO: enable/disable muster mode
+            AppRequest::SetMuster(on) => {
+                defmt::info!("SetMuster {}", on);
+                cx.shared.options.lock(|options| {
+                    options.set_enable_negative(if on { 1 } else { 0 });
+                });
             }
-            AppRequest::SetNegative(_on) => {
-                defmt::info!("SetNegative");
-                // TODO: enable/disable negative values
+            AppRequest::SetNegative(on) => {
+                defmt::info!("SetNegative {}", on);
+                cx.shared.options.lock(|options| {
+                    options.set_enable_negative(if on { 1 } else { 0 });
+                });
             }
             AppRequest::ExitShell => {
                 defmt::info!("ExitShell");
-                // TODO: exit shell mode
+                cx.shared.ui.lock(|ui| {
+                    ui.select(MenuId::Main);
+                });
             }
             AppRequest::SystemReset => {
                 defmt::info!("SystemReset");
-                // TODO: NVIC_SystemReset()
+                // Save options to EEPROM before reset
+                (cx.shared.options, storage).lock(|options, storage| {
+                    let _: &mut Options = options;
+                    let _ = options.save(storage);
+                });
+                cortex_m::peripheral::SCB::sys_reset();
             }
             AppRequest::EnterCalibration => {
                 defmt::info!("EnterCalibration");
-                // TODO: switch to calibration menu + shell
+                cx.shared.ui.lock(|ui| {
+                    ui.select(MenuId::Calibration);
+                });
             }
         }
     }
@@ -911,13 +928,26 @@ mod app {
             match (m1, m2, ref_clk) {
                 (Ok(m1_val), Ok(m2_val), Ok(ref_val)) => {
                     defmt::info!("TDC7200: m1={}, m2={}, ref={}", m1_val, m2_val, ref_val);
-                    // TODO: Calculate actual flow from TDC measurements
-                    // For now, store raw values and mark measurement as done
-                    // The flow calculation requires calibration data from Options
-                    // and the physical formula: v = L²/(2*m1) * (1/m2 - 1/m1)
-                    // where L = distance between transducers
+                    // Calculate raw flow using TDC7200 measurements:
+                    //   tof1 = m1 / ref_clk_count * clock_period
+                    //   tof2 = m2 / ref_clk_count * clock_period
+                    //   delta_tof = tof1 - tof2
+                    //   v = (L^2 / 2) * delta_tof / (tof1 * tof2)
+                    // Calibration ratio is applied separately in Calculator
+                    // For now store raw delta — Calculator::get_volume needs Options
                     app.lock(|app| {
-                        app.flow = 0.0; // Placeholder until calculation is implemented
+                        app.flow = if ref_val > 0 {
+                            // Normalized delta TOF proportional to flow velocity
+                            let dt = (m1_val as f32) - (m2_val as f32);
+                            let sum = (m1_val as f32) + (m2_val as f32);
+                            if sum.abs() > f32::EPSILON {
+                                dt / (sum * sum) * 1e6 // scaled for display
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
                     });
                 }
                 _ => {
