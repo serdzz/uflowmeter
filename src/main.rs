@@ -348,11 +348,17 @@ mod app {
 
         let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
 
-        // IWDG: started in idle() after init completes, not here.
-        // Starting in init() causes reset because idle loop can't feed it fast enough.
-        let iwdg = p.IWDG.watchdog();
-
-        app_request::spawn(AppRequest::DeepSleep).ok();
+        // IWDG: ~8 s timeout (LSI≈38 kHz, PR=/128 (pre=5), RLR=2375).
+        //   period = (RLR+1) × 128 / 38000 ≈ 8.00 s
+        // The longer timeout is required because the chip enters STOP mode for
+        // ~5 s between RTC wakeups and IWDG keeps counting in STOP (LSI is not
+        // gated). 8 s leaves headroom over the 5 s sleep window.
+        // Fed from timer() task at 20 Hz (every 50 ms) when awake → 160× headroom.
+        // start(N.hz()) can't express sub-1 Hz periods, so we set the prescaler
+        // and reload directly via set_config.
+        let mut iwdg = p.IWDG.watchdog();
+        iwdg.set_config(5, 2375);
+        iwdg.feed();
 
         defmt::info!("init end");
         (
@@ -380,8 +386,20 @@ mod app {
                 }),
                 storage,
                 app: App::default(),
-                ui: MenuController::new(),
-                modbus_handler: modbus_handler::ModbusHandler::new(1), // Slave address 1
+                ui: {
+                    // Initialize UI state from persisted options so the menus
+                    // reflect what's stored in EEPROM after boot.
+                    let mut ui = MenuController::new();
+                    ui.comm_type.cursor = opt.comm_type().min(3);
+                    ui.negative.cursor = if opt.enable_negative() != 0 { 1 } else { 0 };
+                    let addr = opt.slave_address();
+                    if addr >= ui.slave_address.min && addr <= ui.slave_address.max {
+                        ui.slave_address.value = addr;
+                    }
+                    ui.sensor_type.cursor = opt.sensor_type().min(4);
+                    ui
+                },
+                modbus_handler: modbus_handler::ModbusHandler::new(opt.slave_address()),
                 serial,
                 modbus_rx_buf: heapless::Vec::new(),
                 modbus_last_rx: 0,
@@ -428,7 +446,7 @@ mod app {
         });
     }
 
-    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer], shared = [power,lcd,app,ui] )]
+    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer,iwdg], shared = [power,lcd,app,ui] )]
     fn timer(ctx: timer::Context) {
         let timer::SharedResources {
             mut power,
@@ -437,6 +455,7 @@ mod app {
             ui,
         } = ctx.shared;
         ctx.local.timer.clear_irq();
+        ctx.local.iwdg.feed();
         let is_active = power.lock(|power| power.is_active());
         if is_active {
             let event = ctx.local.keyboard.read_ui_keys();
@@ -648,27 +667,40 @@ mod app {
             }
             AppRequest::SetCommType(idx) => {
                 defmt::info!("SetCommType {}", idx);
-                (cx.shared.options, cx.shared.comm_mode).lock(|options, comm_mode| {
-                    options.set_comm_type(idx);
-                    *comm_mode = options::CommType::from_u8(idx);
-                });
+                (cx.shared.options, cx.shared.comm_mode, &mut storage).lock(
+                    |options, comm_mode, storage| {
+                        options.set_comm_type(idx);
+                        *comm_mode = options::CommType::from_u8(idx);
+                        if options.save(storage).is_err() {
+                            defmt::error!("options save failed (CommType)");
+                        }
+                    },
+                );
             }
             AppRequest::SetAddress(addr) => {
                 defmt::info!("SetAddress {}", addr);
-                cx.shared.options.lock(|options| {
+                (cx.shared.options, &mut storage).lock(|options, storage| {
                     options.set_slave_address(addr);
+                    if options.save(storage).is_err() {
+                        defmt::error!("options save failed (Address)");
+                    }
                 });
             }
             AppRequest::SetMuster(on) => {
-                defmt::info!("SetMuster {}", on);
-                cx.shared.options.lock(|options| {
-                    options.set_enable_negative(if on { 1 } else { 0 });
-                });
+                // Поверка (Muster) is an in-memory verification toggle; there is
+                // no backing field in Options so it is not persisted across
+                // reboots. The previous handler wrote to enable_negative, which
+                // corrupted the Реверс setting on every Muster toggle.
+                defmt::info!("SetMuster {} (in-memory only)", on);
+                let _ = on;
             }
             AppRequest::SetNegative(on) => {
                 defmt::info!("SetNegative {}", on);
-                cx.shared.options.lock(|options| {
+                (cx.shared.options, &mut storage).lock(|options, storage| {
                     options.set_enable_negative(if on { 1 } else { 0 });
+                    if options.save(storage).is_err() {
+                        defmt::error!("options save failed (Negative)");
+                    }
                 });
             }
             AppRequest::ExitShell => {
@@ -965,15 +997,10 @@ mod app {
         });
     }
 
-    #[idle(local = [iwdg])]
-    fn idle(cx: idle::Context) -> ! {
-        let iwdg = cx.local.iwdg;
-        // Start IWDG here — not in init() — because init dispatches tasks
-        // before idle() runs, and the watchdog would expire before we can feed it.
-        iwdg.start(1_u32.hz()); // ~5s timeout with default LSI prescaler
-        defmt::info!("IWDG started in idle");
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
+        defmt::info!("idle entered");
         loop {
-            iwdg.feed();
             cortex_m::asm::wfi();
         }
     }

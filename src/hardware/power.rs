@@ -37,7 +37,10 @@ impl Power {
     }
 
     pub fn active(&mut self) {
-        self.active_mode = monotonics::now().ticks();
+        // Use max(1, now) so that active_mode == 0 always means "no user
+        // activity" — see is_active() below.
+        let now = monotonics::now().ticks();
+        self.active_mode = if now == 0 { 1 } else { now };
         self.sleep = false;
 
         defmt::trace!("active ");
@@ -45,6 +48,12 @@ impl Power {
 
     pub fn is_active(&mut self) -> bool {
         if self.sleep {
+            return false;
+        }
+        // active_mode == 0 means no button has ever been pressed (boot) or the
+        // last sleep cycle reset it. The LCD must stay off in this state — RTC
+        // wakes for periodic measurement should NOT re-init the display.
+        if self.active_mode == 0 {
             return false;
         }
         if monotonics::now().ticks() - self.active_mode >= Self::IDLE_TIMEOUT {
