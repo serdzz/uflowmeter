@@ -4,11 +4,10 @@
 protocol = "Swd"
 
 [default.general]
-chip = "STM32L151C6"
+chip = "STM32L151RC"
 
 [default.rtt]
 enabled = true
-show_timestamps = true
 
 [default.gdb]
 # Whether or not a GDB server should be opened after flashing.
