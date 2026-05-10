@@ -360,6 +360,10 @@ mod app {
         iwdg.set_config(5, 2375);
         iwdg.feed();
 
+        // Read uptime + last-rtc-tick from backup before moving rtc into Shared.
+        let restored_uptime = rtc.read_backup_register(0);
+        let restored_last_rtc = rtc.read_backup_register(1);
+
         defmt::info!("init end");
         (
             Shared {
@@ -385,7 +389,16 @@ mod app {
                     }
                 }),
                 storage,
-                app: App::default(),
+                app: {
+                    // Restore the running-hours counter and last-RTC marker
+                    // from RTC backup (cleared only when VBAT is lost). The
+                    // counter is advanced in rtc_timer using actual RTC time
+                    // deltas, not a fixed step.
+                    let mut a = App::default();
+                    a.uptime_seconds = restored_uptime;
+                    a.last_uptime_rtc = restored_last_rtc;
+                    a
+                },
                 ui: {
                     // Initialize UI state from persisted options so the menus
                     // reflect what's stored in EEPROM after boot.
@@ -422,13 +435,30 @@ mod app {
         )
     }
 
-    #[task(binds = RTC_WKUP, priority = 2, shared = [power,rtc])]
+    #[task(binds = RTC_WKUP, priority = 2, shared = [power, rtc, app])]
     fn rtc_timer(ctx: rtc_timer::Context) {
         defmt::info!("rtc_timer");
-        let rtc_timer::SharedResources { power, rtc } = ctx.shared;
-        (power, rtc).lock(|power, rtc| {
+        let rtc_timer::SharedResources { power, rtc, app } = ctx.shared;
+        (power, rtc, app).lock(|power, rtc, app| {
             rtc.unpend(Event::Wakeup);
             power.exit_sleep();
+            // Use the real RTC delta since the last fire, not a fixed step.
+            // This is robust against missed IRQs, unexpected wake intervals,
+            // or other timing surprises that would silently under/over-count
+            // a fixed-step accumulator.
+            let now = rtc.get_datetime().assume_utc().unix_timestamp() as u32;
+            let last = app.last_uptime_rtc;
+            let delta = now.wrapping_sub(last);
+            // Reject the first fire after boot/VBAT-loss and any obviously
+            // bogus delta (e.g. RTC reset to compile time on init): just
+            // re-anchor without incrementing.
+            const MAX_REASONABLE_DELTA: u32 = 600; // 10 min
+            if last != 0 && delta > 0 && delta <= MAX_REASONABLE_DELTA {
+                app.uptime_seconds = app.uptime_seconds.saturating_add(delta);
+            }
+            app.last_uptime_rtc = now;
+            rtc.write_backup_register(0, app.uptime_seconds);
+            rtc.write_backup_register(1, now);
         });
         app_request::spawn(AppRequest::Process).ok();
     }

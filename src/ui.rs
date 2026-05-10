@@ -402,7 +402,14 @@ impl MenuController {
                 write!(s, "{:.3}", app.month_flow).ok();
             }
             ScreenId::Uptime => {
-                write!(s, "{:.0}m", app.num).ok();
+                // Single-letter unit suffixes — using "мин" pushes the screen
+                // over the 8-slot CGRAM budget (title + value would need 9
+                // unique custom glyphs) and 'и'/'н' fall back to Latin "uh".
+                let total = app.uptime_seconds;
+                let days = total / 86_400;
+                let hours = (total % 86_400) / 3_600;
+                let mins = (total % 3_600) / 60;
+                write!(s, "{}д {:02}ч {:02}м", days, hours, mins).ok();
             }
             ScreenId::HourHistory | ScreenId::DayHistory | ScreenId::MonthHistory => {
                 // History screens show date/time + value — handled in render

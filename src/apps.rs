@@ -49,6 +49,15 @@ pub struct App {
     pub day_flow: f32,
     pub month_flow: f32,
     pub history_state: HistoryState,
+    /// Cumulative running time in seconds. Persisted in RTC backup register 0
+    /// so it survives resets as long as VBAT is present. Incremented by the
+    /// RTC wakeup IRQ using the actual elapsed RTC time since the last fire.
+    pub uptime_seconds: u32,
+    /// Last RTC unix timestamp (low 32 bits) seen by the uptime tracker.
+    /// Used to compute the real elapsed delta between RTC IRQs, so missed
+    /// IRQs or unexpected wake intervals don't under/over-count uptime.
+    /// Persisted in RTC backup register 1.
+    pub last_uptime_rtc: u32,
 }
 
 impl App {
@@ -68,6 +77,8 @@ impl App {
                 flow: Some(0.0),
                 datetime: 0,
             },
+            uptime_seconds: 0,
+            last_uptime_rtc: 0,
         }
     }
 
