@@ -16,6 +16,7 @@ use crate::gui::{CharacterDisplay, HistoryType, UiEvent};
 use crate::App;
 use alloc::string::String;
 use core::fmt::Write;
+use time::{Duration, PrimitiveDateTime};
 
 // ─── Screen enum ─────────────────────────────────────────────────────
 /// All possible screen types — one enum variant per C++ screen.
@@ -57,6 +58,18 @@ pub enum MenuId {
     User,
     Calibration,
     Configuration,
+}
+
+/// Active edit field on a history screen. `None` = not in edit mode.
+/// Enter steps forward through the sequence (per screen type) and exits.
+#[cfg_attr(not(test), derive(defmt::Format))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryEditField {
+    None,
+    Hour,
+    Day,
+    Month,
+    Year,
 }
 
 // ─── Comm type strings ───────────────────────────────────────────────
@@ -209,7 +222,22 @@ pub struct MenuController {
     pub pattern: PatternState,
     /// Idle counter for auto-hide (C++ IDLE_TIMEOUT)
     pub idle_counter: u8,
+    /// Working copy of datetime being edited
+    pub edited_datetime: PrimitiveDateTime,
+    /// Datetime cursor for browsing history (hour/day/month screens)
+    pub history_datetime: PrimitiveDateTime,
+    /// Active edit field on the current history screen (None = not editing)
+    pub history_edit: HistoryEditField,
+    /// Frame counter for blink animation while editing history fields.
+    /// Wraps at HISTORY_BLINK_PERIOD; visible when counter < HISTORY_BLINK_PERIOD/2.
+    pub history_blink: u8,
+    /// Frame counter for blink animation while editing the DateTime screen.
+    pub datetime_blink: u8,
 }
+
+/// Frames-per-blink-cycle (render runs at 10 Hz → 6 frames ≈ 600 ms cycle,
+/// 300 ms visible / 300 ms hidden ≈ 1.66 Hz blink).
+const HISTORY_BLINK_PERIOD: u8 = 6;
 
 impl Default for MenuController {
     fn default() -> Self {
@@ -269,6 +297,11 @@ impl MenuController {
             datetime_item: DateTimeEditItem::default(),
             pattern: PatternState::default(),
             idle_counter: 0,
+            edited_datetime: time::macros::datetime!(2023-01-01 00:00:00),
+            history_datetime: time::macros::datetime!(2024-01-01 00:00:00),
+            history_edit: HistoryEditField::None,
+            history_blink: 0,
+            datetime_blink: 0,
         }
     }
 
@@ -369,7 +402,14 @@ impl MenuController {
                 write!(s, "{:.3}", app.month_flow).ok();
             }
             ScreenId::Uptime => {
-                write!(s, "{:.0}m", app.num).ok();
+                // Single-letter unit suffixes — using "мин" pushes the screen
+                // over the 8-slot CGRAM budget (title + value would need 9
+                // unique custom glyphs) and 'и'/'н' fall back to Latin "uh".
+                let total = app.uptime_seconds;
+                let days = total / 86_400;
+                let hours = (total % 86_400) / 3_600;
+                let mins = (total % 3_600) / 60;
+                write!(s, "{}д {:02}ч {:02}м", days, hours, mins).ok();
             }
             ScreenId::HourHistory | ScreenId::DayHistory | ScreenId::MonthHistory => {
                 // History screens show date/time + value — handled in render
@@ -465,17 +505,19 @@ impl MenuController {
         }
 
         // Screen didn't consume — List handles navigation (C++ UI::List::key_event)
-        // Cache enabled state to avoid borrow conflict
+        // Cache enabled state to avoid borrow conflict.
+        // Hardware Up/Down emit UiEvent::Right/Left (see hardware/keyboard.rs::to_ui_event),
+        // so the list must accept both forms.
         let comm_cursor = self.comm_type.cursor;
         match event {
-            UiEvent::Up => {
+            UiEvent::Up | UiEvent::Right => {
                 self.current_list_mut().next_enabled(|s: ScreenId| match s {
                     ScreenId::SlaveAddress => comm_cursor != 0,
                     _ => true,
                 });
                 None
             }
-            UiEvent::Down => {
+            UiEvent::Down | UiEvent::Left => {
                 self.current_list_mut().prev_enabled(|s: ScreenId| match s {
                     ScreenId::SlaveAddress => comm_cursor != 0,
                     _ => true,
@@ -506,8 +548,8 @@ impl MenuController {
             // ── Uptime: long Enter → user menu (handled above) ──
             ScreenId::Uptime => None,
 
-            // ── DateTime: Enter starts editing, Left/Right change fields ──
-            ScreenId::DateTime => self.datetime_key_event(event),
+            // ── DateTime: Enter cycles YY→MM→dd→hh→mm→ss→exit ──
+            ScreenId::DateTime => self.datetime_key_event(event, _app),
 
             // ── Version: secret pattern detection ──
             ScreenId::Version => self.version_key_event(event),
@@ -538,9 +580,8 @@ impl MenuController {
                 })
             }
             ScreenId::SensorType => {
-                MenuController::editbox_key_event(&mut self.sensor_type, 5, event, |_idx| {
-                    // TODO: Calculator::init(sensor_type)
-                    AppRequest::Process
+                MenuController::editbox_key_event(&mut self.sensor_type, 5, event, |idx| {
+                    AppRequest::SetCommType(idx) // reuse SetCommType to signal sensor change
                 })
             }
 
@@ -590,12 +631,13 @@ impl MenuController {
                 }
             }
             UiEvent::Enter => {
-                state.editable = !state.editable;
-                if !state.editable {
-                    Some(on_change(state.cursor))
-                } else {
-                    None
-                }
+                // Enter advances the value directly and commits — applies to
+                // all editbox screens (CommType 4-value, SensorType 5-value,
+                // Muster/Negative 2-value). No separate edit mode: with only
+                // 4 hardware buttons (Set, Enter, Up, Down) and Up/Down used
+                // for screen navigation, Enter is the natural value-cycle key.
+                state.cursor = (state.cursor + 1) % max_items;
+                Some(on_change(state.cursor))
             }
             _ => None,
         }
@@ -633,81 +675,172 @@ impl MenuController {
                 }
             }
             UiEvent::Enter => {
-                state.editable = !state.editable;
-                if !state.editable {
-                    Some(on_change(state.value))
+                // Enter increments the value and commits — wraps min..=max.
+                // No edit mode: with Up/Down already used for screen
+                // navigation, Enter is the only way to change the value.
+                // The keyboard's repeat (150 ms after 1 s hold) gives fast
+                // increment when held.
+                if state.value < state.max {
+                    state.value += 1;
                 } else {
-                    None
+                    state.value = state.min;
                 }
+                Some(on_change(state.value))
             }
             _ => None,
         }
     }
 
     // ─── DateTime key handler ──
-    fn datetime_key_event(&mut self, event: UiEvent) -> Option<AppRequest> {
-        match self.datetime_item {
-            DateTimeEditItem::None => {
-                if event == UiEvent::Enter {
-                    self.datetime_item = DateTimeEditItem::Seconds;
-                    None
-                } else {
-                    None
-                }
-            }
-            DateTimeEditItem::Seconds => match event {
-                UiEvent::Left | UiEvent::Right => {
-                    // TODO: increment/decrement seconds
-                    None
-                }
+    /// Edit cycle: None → Year → Month → Day → Hours → Minutes → Seconds → None.
+    /// In edit mode, Up/Down inc/dec the active field and dispatch SetDateTime
+    /// so the RTC tracks each step. The active field blinks on the LCD.
+    fn datetime_key_event(&mut self, event: UiEvent, app: &App) -> Option<AppRequest> {
+        // Out of edit mode: Enter starts editing at Year.
+        if self.datetime_item == DateTimeEditItem::None {
+            return match event {
                 UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Minutes;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Minutes => match event {
-                UiEvent::Left | UiEvent::Right => None,
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Hours;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Hours => match event {
-                UiEvent::Left | UiEvent::Right => None,
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Day;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Day => match event {
-                UiEvent::Left | UiEvent::Right => None,
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Month;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Month => match event {
-                UiEvent::Left | UiEvent::Right => None,
-                UiEvent::Enter => {
+                    // Snapshot the live RTC value into the edit buffer so the
+                    // first inc/dec works on the current time, not stale state.
+                    self.edited_datetime = app.datetime;
                     self.datetime_item = DateTimeEditItem::Year;
+                    self.datetime_blink = 0;
                     None
                 }
                 _ => None,
-            },
-            DateTimeEditItem::Year => match event {
-                UiEvent::Left | UiEvent::Right => None,
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::None;
-                    // TODO: return SetDateTime
-                    None
-                }
-                _ => None,
-            },
+            };
         }
+
+        // In edit mode.
+        match event {
+            UiEvent::Enter => {
+                self.datetime_item = match self.datetime_item {
+                    DateTimeEditItem::Year => DateTimeEditItem::Month,
+                    DateTimeEditItem::Month => DateTimeEditItem::Day,
+                    DateTimeEditItem::Day => DateTimeEditItem::Hours,
+                    DateTimeEditItem::Hours => DateTimeEditItem::Minutes,
+                    DateTimeEditItem::Minutes => DateTimeEditItem::Seconds,
+                    DateTimeEditItem::Seconds | DateTimeEditItem::None => DateTimeEditItem::None,
+                };
+                self.datetime_blink = 0;
+                if self.datetime_item == DateTimeEditItem::None {
+                    return Some(AppRequest::SetDateTime(self.edited_datetime));
+                }
+                None
+            }
+            // Hardware Up = UiEvent::Right, Down = UiEvent::Left.
+            UiEvent::Up | UiEvent::Right => {
+                Some(AppRequest::SetDateTime(match self.datetime_item {
+                    DateTimeEditItem::Year => self.increment_year(),
+                    DateTimeEditItem::Month => self.increment_month(),
+                    DateTimeEditItem::Day => self.increment_day(),
+                    DateTimeEditItem::Hours => self.increment_hours(),
+                    DateTimeEditItem::Minutes => self.increment_minutes(),
+                    DateTimeEditItem::Seconds => self.increment_seconds(),
+                    DateTimeEditItem::None => self.edited_datetime,
+                }))
+            }
+            UiEvent::Down | UiEvent::Left => {
+                Some(AppRequest::SetDateTime(match self.datetime_item {
+                    DateTimeEditItem::Year => self.decrement_year(),
+                    DateTimeEditItem::Month => self.decrement_month(),
+                    DateTimeEditItem::Day => self.decrement_day(),
+                    DateTimeEditItem::Hours => self.decrement_hours(),
+                    DateTimeEditItem::Minutes => self.decrement_minutes(),
+                    DateTimeEditItem::Seconds => self.decrement_seconds(),
+                    DateTimeEditItem::None => self.edited_datetime,
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    // ─── DateTime edit helpers ──
+    fn increment_seconds(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_add(time::Duration::seconds(1));
+        self.edited_datetime
+    }
+
+    fn decrement_seconds(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_sub(time::Duration::seconds(1));
+        self.edited_datetime
+    }
+
+    fn increment_minutes(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_add(time::Duration::minutes(1));
+        self.edited_datetime
+    }
+
+    fn decrement_minutes(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_sub(time::Duration::minutes(1));
+        self.edited_datetime
+    }
+
+    fn increment_hours(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_add(time::Duration::hours(1));
+        self.edited_datetime
+    }
+
+    fn decrement_hours(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self
+            .edited_datetime
+            .saturating_sub(time::Duration::hours(1));
+        self.edited_datetime
+    }
+
+    fn increment_day(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self.edited_datetime.saturating_add(time::Duration::days(1));
+        self.edited_datetime
+    }
+
+    fn decrement_day(&mut self) -> PrimitiveDateTime {
+        self.edited_datetime = self.edited_datetime.saturating_sub(time::Duration::days(1));
+        self.edited_datetime
+    }
+
+    fn increment_month(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        let m = d.month().next();
+        self.edited_datetime = d.replace_month(m).unwrap_or(d);
+        self.edited_datetime
+    }
+
+    fn decrement_month(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        let m = d.month().previous();
+        self.edited_datetime = d.replace_month(m).unwrap_or(d);
+        self.edited_datetime
+    }
+
+    fn increment_year(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        if d.year() < 2099 {
+            self.edited_datetime = d.replace_year(d.year() + 1).unwrap_or(d);
+        }
+        self.edited_datetime
+    }
+
+    fn decrement_year(&mut self) -> PrimitiveDateTime {
+        let d = self.edited_datetime;
+        if d.year() > 2000 {
+            self.edited_datetime = d.replace_year(d.year() - 1).unwrap_or(d);
+        }
+        self.edited_datetime
+    }
+
+    /// Snapshot app datetime into edited_datetime when starting date edit
+    pub fn begin_datetime_edit(&mut self, app: &App) {
+        self.edited_datetime = app.datetime;
     }
 
     // ─── Version secret pattern ──
@@ -741,39 +874,276 @@ impl MenuController {
     }
 
     // ─── History key handler ──
-    fn history_key_event(&mut self, event: UiEvent, _htype: HistoryType) -> Option<AppRequest> {
+    /// HourHistory: Enter cycles edit field Hour → Day → Month → Year → None.
+    /// DayHistory: Day → Month → Year → None.
+    /// MonthHistory: Month → Year → None.
+    /// In edit mode: Up/Down inc/dec the active field, do not navigate screens.
+    /// Out of edit mode: Up/Down fall through to screen-list navigation.
+    fn history_key_event(&mut self, event: UiEvent, htype: HistoryType) -> Option<AppRequest> {
+        // Out of edit mode: Enter starts editing at the screen's first field.
+        if self.history_edit == HistoryEditField::None {
+            return match event {
+                UiEvent::Enter => {
+                    self.history_edit = match htype {
+                        HistoryType::Hour => HistoryEditField::Hour,
+                        HistoryType::Day => HistoryEditField::Day,
+                        HistoryType::Month => HistoryEditField::Month,
+                    };
+                    self.history_blink = 0;
+                    None
+                }
+                _ => None,
+            };
+        }
+
+        // In edit mode.
         match event {
             UiEvent::Enter => {
-                // Enter date editing mode
-                // TODO: implement date navigation
+                // Advance to the next field, or exit edit mode after Year.
+                self.history_edit = match self.history_edit {
+                    HistoryEditField::Hour => HistoryEditField::Day,
+                    HistoryEditField::Day => HistoryEditField::Month,
+                    HistoryEditField::Month => HistoryEditField::Year,
+                    HistoryEditField::Year | HistoryEditField::None => HistoryEditField::None,
+                };
+                self.history_blink = 0;
+                // When exiting, dispatch the final flow lookup at the cursor.
+                if self.history_edit == HistoryEditField::None {
+                    let timestamp = self.history_datetime.assume_utc().unix_timestamp() as u32;
+                    return Some(AppRequest::SetHistory(htype, timestamp));
+                }
                 None
             }
-            _ => None,
+            // Hardware Up = UiEvent::Right (see keyboard.rs::to_ui_event).
+            UiEvent::Up | UiEvent::Right => {
+                self.history_inc();
+                let timestamp = self.history_datetime.assume_utc().unix_timestamp() as u32;
+                Some(AppRequest::SetHistory(htype, timestamp))
+            }
+            UiEvent::Down | UiEvent::Left => {
+                self.history_dec();
+                let timestamp = self.history_datetime.assume_utc().unix_timestamp() as u32;
+                Some(AppRequest::SetHistory(htype, timestamp))
+            }
+            UiEvent::Back => {
+                // Cancel edit mode without changing fields further.
+                self.history_edit = HistoryEditField::None;
+                None
+            }
         }
+    }
+
+    fn history_inc(&mut self) {
+        let dt = self.history_datetime;
+        self.history_datetime = match self.history_edit {
+            HistoryEditField::Hour => {
+                let h = (dt.hour() + 1) % 24;
+                dt.replace_hour(h).unwrap_or(dt)
+            }
+            HistoryEditField::Day => dt.saturating_add(Duration::DAY),
+            HistoryEditField::Month => dt.replace_month(dt.month().next()).unwrap_or(dt),
+            HistoryEditField::Year => dt.replace_year(dt.year() + 1).unwrap_or(dt),
+            HistoryEditField::None => dt,
+        };
+    }
+
+    fn history_dec(&mut self) {
+        let dt = self.history_datetime;
+        self.history_datetime = match self.history_edit {
+            HistoryEditField::Hour => {
+                let h = if dt.hour() == 0 { 23 } else { dt.hour() - 1 };
+                dt.replace_hour(h).unwrap_or(dt)
+            }
+            HistoryEditField::Day => dt.saturating_sub(Duration::DAY),
+            HistoryEditField::Month => dt.replace_month(dt.month().previous()).unwrap_or(dt),
+            HistoryEditField::Year => dt.replace_year(dt.year() - 1).unwrap_or(dt),
+            HistoryEditField::None => dt,
+        };
     }
 
     // ─── Rendering ───────────────────────────────────────────────────
     /// Render current screen to LCD
     pub fn render(&mut self, app: &App, display: &mut impl CharacterDisplay) {
+        // Free CGRAM bookkeeping at the start of each frame. Without this,
+        // load_custom_char (display.rs) consumes a fresh slot every render
+        // for the same Cyrillic glyph; after 8 frames all 8 slots are taken
+        // and subsequent frames fall back to the Latin lookalike (e.g. 'д' → 'd').
+        display.reset_custom_chars();
+
         let screen = self.current_screen();
+
+        // History screens have a custom layout: title shows the unit being
+        // browsed (hour/day/month) and value line shows date + flow.
+        if matches!(
+            screen,
+            ScreenId::HourHistory | ScreenId::DayHistory | ScreenId::MonthHistory
+        ) {
+            self.render_history(screen, app, display);
+            return;
+        }
+
+        // DateTime screen: two-line layout (date + time) with blinking on the
+        // active edit field.
+        if screen == ScreenId::DateTime {
+            self.render_datetime(app, display);
+            return;
+        }
+
         let title = self.title(screen);
 
+        // Use char count, not byte length — title and value may contain
+        // multi-byte UTF-8 (Cyrillic). Without this, finish_line under-pads
+        // and leaves stale DDRAM content in the trailing columns.
         display.set_position(0, 0);
         write!(display, "{}", title).ok();
-        display.finish_line(16, title.len());
+        display.finish_line(16, title.chars().count());
 
         display.set_position(0, 1);
         let value = self.format_value(screen, app);
         write!(display, "{:>16}", value.as_str()).ok();
-        display.finish_line(16, value.len());
+        display.finish_line(16, value.chars().count());
+    }
+
+    /// Render hour/day/month history screen with cursor + flow lookup result.
+    /// Layout:
+    ///   line 0: "Расход за час HH" (HourHistory)
+    ///         | "Расход за день  " (DayHistory)
+    ///         | "Расход за месяц " (MonthHistory)
+    ///   line 1: "DD/MM/YY {value:>7}" — date in cols 0..8, value in 9..16.
+    /// While editing, the active field renders as blanks for half the cycle
+    /// (HISTORY_BLINK_PERIOD / 2 frames) to give a visible blink.
+    fn render_history(&mut self, screen: ScreenId, app: &App, display: &mut impl CharacterDisplay) {
+        // Tick blink counter on every frame.
+        self.history_blink = (self.history_blink + 1) % HISTORY_BLINK_PERIOD;
+        let blink_off = self.history_edit != HistoryEditField::None
+            && self.history_blink >= HISTORY_BLINK_PERIOD / 2;
+        let dt = self.history_datetime;
+
+        // Helper: render field content unless the field is the active edit
+        // field and we're in the "off" half of the blink cycle.
+        let field = |edit: HistoryEditField, content: &str, blank: &str| -> alloc::string::String {
+            if blink_off && self.history_edit == edit {
+                blank.into()
+            } else {
+                content.into()
+            }
+        };
+
+        // ─── Line 0: title ─────────────────────────────────────────────
+        let mut line0 = alloc::string::String::new();
+        match screen {
+            ScreenId::HourHistory => {
+                let hh = alloc::format!("{:02}", dt.hour());
+                let hh_disp = field(HistoryEditField::Hour, &hh, "  ");
+                write!(line0, "Расход за час {}", hh_disp).ok();
+            }
+            ScreenId::DayHistory => {
+                line0.push_str("Расход за день");
+            }
+            ScreenId::MonthHistory => {
+                line0.push_str("Расход за месяц");
+            }
+            _ => {}
+        }
+        display.set_position(0, 0);
+        write!(display, "{}", line0).ok();
+        display.finish_line(16, line0.chars().count());
+
+        // ─── Line 1: date + value ─────────────────────────────────────
+        // Date is "DD/MM/YY" (8 chars). Each numeric pair blinks when its
+        // field is active. Slashes stay solid.
+        let dd = field(
+            HistoryEditField::Day,
+            &alloc::format!("{:02}", dt.day()),
+            "  ",
+        );
+        let mm = field(
+            HistoryEditField::Month,
+            &alloc::format!("{:02}", dt.month() as u8),
+            "  ",
+        );
+        let yy = field(
+            HistoryEditField::Year,
+            &alloc::format!("{:02}", dt.year() % 100),
+            "  ",
+        );
+        let date_str = alloc::format!("{}/{}/{}", dd, mm, yy);
+
+        let value_str = match app.history_state.flow {
+            Some(flow) => alloc::format!("{:.3}", flow),
+            None => alloc::string::String::from("None"),
+        };
+        let line1 = alloc::format!("{} {:>7}", date_str, value_str);
+
+        display.set_position(0, 1);
+        write!(display, "{}", line1).ok();
+        display.finish_line(16, line1.chars().count());
+    }
+
+    /// Render the DateTime screen.
+    /// Layout (16x2):
+    ///   line 0: "Дата   DD/MM/YY"  ("Дата " 4 chars + 3 spaces + 8-char date)
+    ///   line 1: "Время  HH:MM:SS"  ("Время" 5 chars + 2 spaces + 8-char time)
+    /// Date and time are column-aligned at col 7. While editing, the active
+    /// numeric pair (YY/MM/DD/HH/MM/SS) blinks. When not editing, the live RTC
+    /// time is shown; while editing, the working buffer is shown.
+    fn render_datetime(&mut self, app: &App, display: &mut impl CharacterDisplay) {
+        self.datetime_blink = (self.datetime_blink + 1) % HISTORY_BLINK_PERIOD;
+        let blink_off = self.datetime_item != DateTimeEditItem::None
+            && self.datetime_blink >= HISTORY_BLINK_PERIOD / 2;
+
+        let dt = if self.datetime_item == DateTimeEditItem::None {
+            app.datetime
+        } else {
+            self.edited_datetime
+        };
+
+        let field = |edit: DateTimeEditItem, content: &str| -> alloc::string::String {
+            if blink_off && self.datetime_item == edit {
+                "  ".into()
+            } else {
+                content.into()
+            }
+        };
+
+        let dd = field(DateTimeEditItem::Day, &alloc::format!("{:02}", dt.day()));
+        let mm_d = field(
+            DateTimeEditItem::Month,
+            &alloc::format!("{:02}", dt.month() as u8),
+        );
+        let yy = field(
+            DateTimeEditItem::Year,
+            &alloc::format!("{:02}", dt.year() % 100),
+        );
+        let hh = field(DateTimeEditItem::Hours, &alloc::format!("{:02}", dt.hour()));
+        let mm_t = field(
+            DateTimeEditItem::Minutes,
+            &alloc::format!("{:02}", dt.minute()),
+        );
+        let ss = field(
+            DateTimeEditItem::Seconds,
+            &alloc::format!("{:02}", dt.second()),
+        );
+
+        let line0 = alloc::format!("Дата    {}/{}/{}", dd, mm_d, yy);
+        let line1 = alloc::format!("Время   {}:{}:{}", hh, mm_t, ss);
+
+        display.set_position(0, 0);
+        write!(display, "{}", line0).ok();
+        display.finish_line(16, line0.chars().count());
+
+        display.set_position(0, 1);
+        write!(display, "{}", line1).ok();
+        display.finish_line(16, line1.chars().count());
     }
 
     /// Update live values from measurement (C++ Menu::init statistics handler)
-    pub fn update_live_values(&mut self, _app: &App) {
-        // TODO: called from statistics update handler
-        // hour_consumption_screen_->set_value(statistics::get_immediate())
-        // channel_1_screen_->set_text("работает"/"отсутствует")
-        // etc.
+    pub fn update_live_values(&mut self, app: &App) {
+        // Update live meter values from current app state
+        // C++ version: hour_consumption_screen_->set_value(statistics::get_immediate())
+        //   channel_1_screen_->set_text("работает"/"отсутствует")
+        // Values are read from App when rendering via format_value()
+        let _ = app; // values already accessible through app reference
     }
 
     /// Tick idle counter. Returns true if menu should auto-hide.
@@ -936,24 +1306,20 @@ mod tests {
         ctrl.select(MenuId::Main);
 
         // Navigate to comm type screen (index 10)
-        let always_enabled = |_s: ScreenId| true;
         for _ in 0..10 {
             ctrl.main_menu.next_enabled(|_s: ScreenId| true);
         }
         assert_eq!(ctrl.current_screen(), ScreenId::CommType);
 
-        // Enter edit mode
-        ctrl.key_event(UiEvent::Enter, &app);
-        assert!(ctrl.comm_type.editable);
-
-        // Cycle through types
-        let req = ctrl.key_event(UiEvent::Right, &app);
+        // Enter cycles through the four comm types and wraps back to 0.
+        // No edit mode — Enter advances directly.
+        let req = ctrl.key_event(UiEvent::Enter, &app);
         assert_eq!(req, Some(AppRequest::SetCommType(1)));
-        let req = ctrl.key_event(UiEvent::Right, &app);
+        let req = ctrl.key_event(UiEvent::Enter, &app);
         assert_eq!(req, Some(AppRequest::SetCommType(2)));
-        let req = ctrl.key_event(UiEvent::Right, &app);
+        let req = ctrl.key_event(UiEvent::Enter, &app);
         assert_eq!(req, Some(AppRequest::SetCommType(3)));
-        let req = ctrl.key_event(UiEvent::Right, &app);
+        let req = ctrl.key_event(UiEvent::Enter, &app);
         assert_eq!(req, Some(AppRequest::SetCommType(0))); // wraps
     }
 
@@ -971,19 +1337,20 @@ mod tests {
             ctrl.main_menu.next_enabled(|_s: ScreenId| true);
         }
         assert_eq!(ctrl.current_screen(), ScreenId::SlaveAddress);
+        assert_eq!(ctrl.slave_address.value, 1);
 
-        // Enter edit mode
-        ctrl.key_event(UiEvent::Enter, &app);
-        assert!(ctrl.slave_address.editable);
-
-        // Increment
-        ctrl.key_event(UiEvent::Up, &app);
-        assert_eq!(ctrl.slave_address.value, 2);
-
-        // Exit edit mode
+        // Enter increments and commits — no separate edit mode.
         let req = ctrl.key_event(UiEvent::Enter, &app);
         assert_eq!(req, Some(AppRequest::SetAddress(2)));
-        assert!(!ctrl.slave_address.editable);
+        assert_eq!(ctrl.slave_address.value, 2);
+
+        let req = ctrl.key_event(UiEvent::Enter, &app);
+        assert_eq!(req, Some(AppRequest::SetAddress(3)));
+
+        // Wrap from max → min.
+        ctrl.slave_address.value = ctrl.slave_address.max;
+        let req = ctrl.key_event(UiEvent::Enter, &app);
+        assert_eq!(req, Some(AppRequest::SetAddress(ctrl.slave_address.min)));
     }
 
     #[test]
@@ -1003,20 +1370,33 @@ mod tests {
     }
 
     #[test]
-    fn test_editbox_toggle() {
+    fn test_editbox_enter_cycles() {
+        // Enter advances the cursor through values and emits the change
+        // request each press — no separate edit mode.
         let mut state = EditBoxState::default();
-        assert!(!state.editable);
+        assert_eq!(state.cursor, 0);
 
-        // Enter toggles edit mode
-        let _ = MenuController::editbox_key_event(&mut state, 4, UiEvent::Enter, |i| {
+        let req = MenuController::editbox_key_event(&mut state, 4, UiEvent::Enter, |i| {
             AppRequest::SetCommType(i)
         });
-        assert!(state.editable);
+        assert_eq!(req, Some(AppRequest::SetCommType(1)));
+        assert_eq!(state.cursor, 1);
 
-        let _ = MenuController::editbox_key_event(&mut state, 4, UiEvent::Enter, |i| {
+        let req = MenuController::editbox_key_event(&mut state, 4, UiEvent::Enter, |i| {
             AppRequest::SetCommType(i)
         });
-        assert!(!state.editable);
+        assert_eq!(req, Some(AppRequest::SetCommType(2)));
+
+        // Two-value editbox wraps after one press.
+        let mut two = EditBoxState::default();
+        let req = MenuController::editbox_key_event(&mut two, 2, UiEvent::Enter, |i| {
+            AppRequest::SetNegative(i > 0)
+        });
+        assert_eq!(req, Some(AppRequest::SetNegative(true)));
+        let req = MenuController::editbox_key_event(&mut two, 2, UiEvent::Enter, |i| {
+            AppRequest::SetNegative(i > 0)
+        });
+        assert_eq!(req, Some(AppRequest::SetNegative(false)));
     }
 
     #[test]

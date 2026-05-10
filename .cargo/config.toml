@@ -12,4 +12,4 @@ runner = "probe-rs run --chip STM32L151RC"
 #STM32L151RC
 
 [env]
-DEFMT_LOG = "info"
+DEFMT_LOG = "trace"

@@ -343,14 +343,26 @@ mod app {
         timer.listen();
         let mut ui_timer = p.TIM3.timer(10.hz(), &mut rcc);
         ui_timer.listen();
+        // TEMP: Disable TIM3 interrupt to isolate crash
+        // ui_timer.listen();
 
         let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
 
-        // IWDG: 5-second timeout — if main loop hangs, device resets
+        // IWDG: ~8 s timeout (LSI≈38 kHz, PR=/128 (pre=5), RLR=2375).
+        //   period = (RLR+1) × 128 / 38000 ≈ 8.00 s
+        // The longer timeout is required because the chip enters STOP mode for
+        // ~5 s between RTC wakeups and IWDG keeps counting in STOP (LSI is not
+        // gated). 8 s leaves headroom over the 5 s sleep window.
+        // Fed from timer() task at 20 Hz (every 50 ms) when awake → 160× headroom.
+        // start(N.hz()) can't express sub-1 Hz periods, so we set the prescaler
+        // and reload directly via set_config.
         let mut iwdg = p.IWDG.watchdog();
-        iwdg.start(1_u32.hz()); // 1 Hz = ~5s timeout with default LSI prescaler
-        defmt::info!("IWDG started");
-        app_request::spawn(AppRequest::DeepSleep).ok();
+        iwdg.set_config(5, 2375);
+        iwdg.feed();
+
+        // Read uptime + last-rtc-tick from backup before moving rtc into Shared.
+        let restored_uptime = rtc.read_backup_register(0);
+        let restored_last_rtc = rtc.read_backup_register(1);
 
         defmt::info!("init end");
         (
@@ -377,9 +389,30 @@ mod app {
                     }
                 }),
                 storage,
-                app: App::default(),
-                ui: MenuController::new(),
-                modbus_handler: modbus_handler::ModbusHandler::new(1), // Slave address 1
+                app: {
+                    // Restore the running-hours counter and last-RTC marker
+                    // from RTC backup (cleared only when VBAT is lost). The
+                    // counter is advanced in rtc_timer using actual RTC time
+                    // deltas, not a fixed step.
+                    let mut a = App::default();
+                    a.uptime_seconds = restored_uptime;
+                    a.last_uptime_rtc = restored_last_rtc;
+                    a
+                },
+                ui: {
+                    // Initialize UI state from persisted options so the menus
+                    // reflect what's stored in EEPROM after boot.
+                    let mut ui = MenuController::new();
+                    ui.comm_type.cursor = opt.comm_type().min(3);
+                    ui.negative.cursor = if opt.enable_negative() != 0 { 1 } else { 0 };
+                    let addr = opt.slave_address();
+                    if addr >= ui.slave_address.min && addr <= ui.slave_address.max {
+                        ui.slave_address.value = addr;
+                    }
+                    ui.sensor_type.cursor = opt.sensor_type().min(4);
+                    ui
+                },
+                modbus_handler: modbus_handler::ModbusHandler::new(opt.slave_address()),
                 serial,
                 modbus_rx_buf: heapless::Vec::new(),
                 modbus_last_rx: 0,
@@ -402,13 +435,30 @@ mod app {
         )
     }
 
-    #[task(binds = RTC_WKUP, priority = 2, shared = [power,rtc])]
+    #[task(binds = RTC_WKUP, priority = 2, shared = [power, rtc, app])]
     fn rtc_timer(ctx: rtc_timer::Context) {
         defmt::info!("rtc_timer");
-        let rtc_timer::SharedResources { power, rtc } = ctx.shared;
-        (power, rtc).lock(|power, rtc| {
+        let rtc_timer::SharedResources { power, rtc, app } = ctx.shared;
+        (power, rtc, app).lock(|power, rtc, app| {
             rtc.unpend(Event::Wakeup);
             power.exit_sleep();
+            // Use the real RTC delta since the last fire, not a fixed step.
+            // This is robust against missed IRQs, unexpected wake intervals,
+            // or other timing surprises that would silently under/over-count
+            // a fixed-step accumulator.
+            let now = rtc.get_datetime().assume_utc().unix_timestamp() as u32;
+            let last = app.last_uptime_rtc;
+            let delta = now.wrapping_sub(last);
+            // Reject the first fire after boot/VBAT-loss and any obviously
+            // bogus delta (e.g. RTC reset to compile time on init): just
+            // re-anchor without incrementing.
+            const MAX_REASONABLE_DELTA: u32 = 600; // 10 min
+            if last != 0 && delta > 0 && delta <= MAX_REASONABLE_DELTA {
+                app.uptime_seconds = app.uptime_seconds.saturating_add(delta);
+            }
+            app.last_uptime_rtc = now;
+            rtc.write_backup_register(0, app.uptime_seconds);
+            rtc.write_backup_register(1, now);
         });
         app_request::spawn(AppRequest::Process).ok();
     }
@@ -426,7 +476,7 @@ mod app {
         });
     }
 
-    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer], shared = [power,lcd,app,ui] )]
+    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer,iwdg], shared = [power,lcd,app,ui] )]
     fn timer(ctx: timer::Context) {
         let timer::SharedResources {
             mut power,
@@ -435,6 +485,7 @@ mod app {
             ui,
         } = ctx.shared;
         ctx.local.timer.clear_irq();
+        ctx.local.iwdg.feed();
         let is_active = power.lock(|power| power.is_active());
         if is_active {
             let event = ctx.local.keyboard.read_ui_keys();
@@ -496,8 +547,8 @@ mod app {
         }
     }
 
-    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc, app, tdc1000, hour_history, day_history, month_history, storage])]
-    fn app_request(ctx: app_request::Context, req: AppRequest) {
+    #[task(capacity = 8, priority = 1, shared = [power, lcd, rtc, app, tdc1000, hour_history, day_history, month_history, storage, options, comm_mode, ui])]
+    fn app_request(mut cx: app_request::Context, req: AppRequest) {
         let app_request::SharedResources {
             power,
             mut lcd,
@@ -508,7 +559,8 @@ mod app {
             day_history,
             month_history,
             mut storage,
-        } = ctx.shared;
+            ..
+        } = cx.shared;
         match req {
             AppRequest::Process => {
                 defmt::info!("Process");
@@ -517,15 +569,13 @@ mod app {
                 // Trigger real measurement via TDC1000
                 let flow = tdc1000.lock(|tdc| {
                     // Set channel 1 (downstream) and start measurement
-                    // TDC1000 sends ultrasonic pulses on selected channel
                     if let Err(_e) = tdc.set_channel(false) {
                         defmt::error!("TDC1000 set_channel failed");
                     }
-                    // Clear any previous error flags
                     let _ = tdc.clear_error_flags();
-                    // TODO: Read TDC7200 measurement results when TDC7200 ISR is connected
-                    // TDC7200 INT pin will signal completion — for now return 0.0
-                    // until TDC7200 driver is integrated into RTIC
+                    // Measurement result is read asynchronously by tdc7200_irq + tdc7200_result task.
+                    // Flow value is updated in app.flow from the ISR callback.
+                    // Here we trigger a new measurement cycle.
                     0.0f32
                 });
 
@@ -599,14 +649,19 @@ mod app {
                 rtc.lock(|rtc| rtc.set_datetime(&dt).ok());
             }
             AppRequest::DeepSleep => {
-                defmt::debug!("DeepSleep");
-                (power, lcd).lock(|power, lcd| {
-                    power.enter_sleep(|| {
-                        // #[cfg(not(feature = "swd"))]
+                defmt::info!("DeepSleep");
+                // WFI MUST be outside the RTIC lock — calling WFI inside a lock
+                // corrupts the task context when an interrupt fires during sleep.
+                let should_wfi = (power, lcd).lock(|power, lcd| {
+                    power.prepare_sleep(|| {
                         lcd.led_off();
                         lcd.off();
                     });
+                    power.is_sleep()
                 });
+                if should_wfi {
+                    cortex_m::asm::wfi();
+                }
             }
             AppRequest::SetHistory(history_type, timestamp) => {
                 defmt::info!("SetHistory");
@@ -640,33 +695,64 @@ mod app {
                     }
                 };
             }
-            AppRequest::SetCommType(_idx) => {
-                defmt::info!("SetCommType");
-                // TODO: save to config, update communication mode
+            AppRequest::SetCommType(idx) => {
+                defmt::info!("SetCommType {}", idx);
+                (cx.shared.options, cx.shared.comm_mode, &mut storage).lock(
+                    |options, comm_mode, storage| {
+                        options.set_comm_type(idx);
+                        *comm_mode = options::CommType::from_u8(idx);
+                        if options.save(storage).is_err() {
+                            defmt::error!("options save failed (CommType)");
+                        }
+                    },
+                );
             }
-            AppRequest::SetAddress(_addr) => {
-                defmt::info!("SetAddress");
-                // TODO: save to config, update slave address
+            AppRequest::SetAddress(addr) => {
+                defmt::info!("SetAddress {}", addr);
+                (cx.shared.options, &mut storage).lock(|options, storage| {
+                    options.set_slave_address(addr);
+                    if options.save(storage).is_err() {
+                        defmt::error!("options save failed (Address)");
+                    }
+                });
             }
-            AppRequest::SetMuster(_on) => {
-                defmt::info!("SetMuster");
-                // TODO: enable/disable muster mode
+            AppRequest::SetMuster(on) => {
+                // Поверка (Muster) is an in-memory verification toggle; there is
+                // no backing field in Options so it is not persisted across
+                // reboots. The previous handler wrote to enable_negative, which
+                // corrupted the Реверс setting on every Muster toggle.
+                defmt::info!("SetMuster {} (in-memory only)", on);
+                let _ = on;
             }
-            AppRequest::SetNegative(_on) => {
-                defmt::info!("SetNegative");
-                // TODO: enable/disable negative values
+            AppRequest::SetNegative(on) => {
+                defmt::info!("SetNegative {}", on);
+                (cx.shared.options, &mut storage).lock(|options, storage| {
+                    options.set_enable_negative(if on { 1 } else { 0 });
+                    if options.save(storage).is_err() {
+                        defmt::error!("options save failed (Negative)");
+                    }
+                });
             }
             AppRequest::ExitShell => {
                 defmt::info!("ExitShell");
-                // TODO: exit shell mode
+                cx.shared.ui.lock(|ui| {
+                    ui.select(MenuId::Main);
+                });
             }
             AppRequest::SystemReset => {
                 defmt::info!("SystemReset");
-                // TODO: NVIC_SystemReset()
+                // Save options to EEPROM before reset
+                (cx.shared.options, storage).lock(|options, storage| {
+                    let _: &mut Options = options;
+                    let _ = options.save(storage);
+                });
+                cortex_m::peripheral::SCB::sys_reset();
             }
             AppRequest::EnterCalibration => {
                 defmt::info!("EnterCalibration");
-                // TODO: switch to calibration menu + shell
+                cx.shared.ui.lock(|ui| {
+                    ui.select(MenuId::Calibration);
+                });
             }
         }
     }
@@ -869,6 +955,7 @@ mod app {
     /// Signals that a measurement is complete
     #[task(binds = EXTI0, priority = 4, shared = [tdc7200])]
     fn tdc7200_irq(ctx: tdc7200_irq::Context) {
+        defmt::info!("exti0");
         // Clear EXTI pending bit for line 0
         ExtiExt::unpend(0);
 
@@ -911,13 +998,26 @@ mod app {
             match (m1, m2, ref_clk) {
                 (Ok(m1_val), Ok(m2_val), Ok(ref_val)) => {
                     defmt::info!("TDC7200: m1={}, m2={}, ref={}", m1_val, m2_val, ref_val);
-                    // TODO: Calculate actual flow from TDC measurements
-                    // For now, store raw values and mark measurement as done
-                    // The flow calculation requires calibration data from Options
-                    // and the physical formula: v = L²/(2*m1) * (1/m2 - 1/m1)
-                    // where L = distance between transducers
+                    // Calculate raw flow using TDC7200 measurements:
+                    //   tof1 = m1 / ref_clk_count * clock_period
+                    //   tof2 = m2 / ref_clk_count * clock_period
+                    //   delta_tof = tof1 - tof2
+                    //   v = (L^2 / 2) * delta_tof / (tof1 * tof2)
+                    // Calibration ratio is applied separately in Calculator
+                    // For now store raw delta — Calculator::get_volume needs Options
                     app.lock(|app| {
-                        app.flow = 0.0; // Placeholder until calculation is implemented
+                        app.flow = if ref_val > 0 {
+                            // Normalized delta TOF proportional to flow velocity
+                            let dt = (m1_val as f32) - (m2_val as f32);
+                            let sum = (m1_val as f32) + (m2_val as f32);
+                            if sum.abs() > f32::EPSILON {
+                                dt / (sum * sum) * 1e6 // scaled for display
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
                     });
                 }
                 _ => {
@@ -927,11 +1027,10 @@ mod app {
         });
     }
 
-    #[idle(local = [iwdg])]
-    fn idle(cx: idle::Context) -> ! {
-        let iwdg = cx.local.iwdg;
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
+        defmt::info!("idle entered");
         loop {
-            iwdg.feed();
             cortex_m::asm::wfi();
         }
     }

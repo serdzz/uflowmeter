@@ -37,7 +37,10 @@ impl Power {
     }
 
     pub fn active(&mut self) {
-        self.active_mode = monotonics::now().ticks();
+        // Use max(1, now) so that active_mode == 0 always means "no user
+        // activity" — see is_active() below.
+        let now = monotonics::now().ticks();
+        self.active_mode = if now == 0 { 1 } else { now };
         self.sleep = false;
 
         defmt::trace!("active ");
@@ -45,6 +48,12 @@ impl Power {
 
     pub fn is_active(&mut self) -> bool {
         if self.sleep {
+            return false;
+        }
+        // active_mode == 0 means no button has ever been pressed (boot) or the
+        // last sleep cycle reset it. The LCD must stay off in this state — RTC
+        // wakes for periodic measurement should NOT re-init the display.
+        if self.active_mode == 0 {
             return false;
         }
         if monotonics::now().ticks() - self.active_mode >= Self::IDLE_TIMEOUT {
@@ -83,10 +92,44 @@ impl Power {
                 self.gpio_power.down();
                 self.scb.set_sleepdeep();
             }
-            // Use cortex_m WFI directly instead of rtic::export::wfi()
-            // which is an internal API and may break on version updates
-            cortex_m::asm::wfi();
-            // WFI is handled by RTIC idle (outside any lock)
+            // WFI is NOT called here — the caller must do WFI outside the RTIC lock.
+            // Previously, calling WFI inside a lock corrupted the task context.
+        }
+    }
+
+    /// Prepare for sleep (set flags, call callback) without entering WFI.
+    /// Callers should call cortex_m::asm::wfi() AFTER releasing the RTIC lock.
+    pub fn prepare_sleep(&mut self, f: impl FnOnce()) {
+        defmt::info!("prepare_sleep enter");
+        if !self.is_active() || self.active_mode == 0_u64 {
+            self.sleep = true;
+            self.active_mode = 0_u64;
+            defmt::info!("-- Enter sleep mode --");
+            f();
+            defmt::info!("callback done");
+            #[cfg(feature = "low_power")]
+            {
+                self.pwr.cr.modify(|_, w| {
+                    w.fwu()
+                        .set_bit()
+                        .ulp()
+                        .set_bit()
+                        .pvde()
+                        .clear_bit()
+                        .pdds()
+                        .clear_bit()
+                        .lpsdsr()
+                        .set_bit()
+                        .cwuf()
+                        .set_bit()
+                });
+                while self.pwr.csr.read().wuf().bit_is_set() {}
+                self.gpio_power.down();
+                self.scb.set_sleepdeep();
+            }
+            defmt::info!("prepare_sleep done");
+        } else {
+            defmt::info!("prepare_sleep: still active, skip");
         }
     }
 
