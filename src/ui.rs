@@ -231,6 +231,8 @@ pub struct MenuController {
     /// Frame counter for blink animation while editing history fields.
     /// Wraps at HISTORY_BLINK_PERIOD; visible when counter < HISTORY_BLINK_PERIOD/2.
     pub history_blink: u8,
+    /// Frame counter for blink animation while editing the DateTime screen.
+    pub datetime_blink: u8,
 }
 
 /// Frames-per-blink-cycle (render runs at 10 Hz → 6 frames ≈ 600 ms cycle,
@@ -299,6 +301,7 @@ impl MenuController {
             history_datetime: time::macros::datetime!(2024-01-01 00:00:00),
             history_edit: HistoryEditField::None,
             history_blink: 0,
+            datetime_blink: 0,
         }
     }
 
@@ -538,8 +541,8 @@ impl MenuController {
             // ── Uptime: long Enter → user menu (handled above) ──
             ScreenId::Uptime => None,
 
-            // ── DateTime: Enter starts editing, Left/Right change fields ──
-            ScreenId::DateTime => self.datetime_key_event(event),
+            // ── DateTime: Enter cycles YY→MM→dd→hh→mm→ss→exit ──
+            ScreenId::DateTime => self.datetime_key_event(event, _app),
 
             // ── Version: secret pattern detection ──
             ScreenId::Version => self.version_key_event(event),
@@ -682,69 +685,64 @@ impl MenuController {
     }
 
     // ─── DateTime key handler ──
-    fn datetime_key_event(&mut self, event: UiEvent) -> Option<AppRequest> {
-        match self.datetime_item {
-            DateTimeEditItem::None => {
-                if event == UiEvent::Enter {
-                    // Start editing: snapshot current datetime from app
-                    self.datetime_item = DateTimeEditItem::Seconds;
+    /// Edit cycle: None → Year → Month → Day → Hours → Minutes → Seconds → None.
+    /// In edit mode, Up/Down inc/dec the active field and dispatch SetDateTime
+    /// so the RTC tracks each step. The active field blinks on the LCD.
+    fn datetime_key_event(&mut self, event: UiEvent, app: &App) -> Option<AppRequest> {
+        // Out of edit mode: Enter starts editing at Year.
+        if self.datetime_item == DateTimeEditItem::None {
+            return match event {
+                UiEvent::Enter => {
+                    // Snapshot the live RTC value into the edit buffer so the
+                    // first inc/dec works on the current time, not stale state.
+                    self.edited_datetime = app.datetime;
+                    self.datetime_item = DateTimeEditItem::Year;
+                    self.datetime_blink = 0;
+                    None
+                }
+                _ => None,
+            };
+        }
+
+        // In edit mode.
+        match event {
+            UiEvent::Enter => {
+                self.datetime_item = match self.datetime_item {
+                    DateTimeEditItem::Year => DateTimeEditItem::Month,
+                    DateTimeEditItem::Month => DateTimeEditItem::Day,
+                    DateTimeEditItem::Day => DateTimeEditItem::Hours,
+                    DateTimeEditItem::Hours => DateTimeEditItem::Minutes,
+                    DateTimeEditItem::Minutes => DateTimeEditItem::Seconds,
+                    DateTimeEditItem::Seconds | DateTimeEditItem::None => {
+                        DateTimeEditItem::None
+                    }
+                };
+                self.datetime_blink = 0;
+                if self.datetime_item == DateTimeEditItem::None {
+                    return Some(AppRequest::SetDateTime(self.edited_datetime));
                 }
                 None
             }
-            DateTimeEditItem::Seconds => match event {
-                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_seconds())),
-                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_seconds())),
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Minutes;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Minutes => match event {
-                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_minutes())),
-                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_minutes())),
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Hours;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Hours => match event {
-                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_hours())),
-                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_hours())),
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Day;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Day => match event {
-                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_day())),
-                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_day())),
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Month;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Month => match event {
-                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_month())),
-                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_month())),
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::Year;
-                    None
-                }
-                _ => None,
-            },
-            DateTimeEditItem::Year => match event {
-                UiEvent::Left => Some(AppRequest::SetDateTime(self.decrement_year())),
-                UiEvent::Right => Some(AppRequest::SetDateTime(self.increment_year())),
-                UiEvent::Enter => {
-                    self.datetime_item = DateTimeEditItem::None;
-                    Some(AppRequest::SetDateTime(self.edited_datetime))
-                }
-                _ => None,
-            },
+            // Hardware Up = UiEvent::Right, Down = UiEvent::Left.
+            UiEvent::Up | UiEvent::Right => Some(AppRequest::SetDateTime(match self.datetime_item {
+                DateTimeEditItem::Year => self.increment_year(),
+                DateTimeEditItem::Month => self.increment_month(),
+                DateTimeEditItem::Day => self.increment_day(),
+                DateTimeEditItem::Hours => self.increment_hours(),
+                DateTimeEditItem::Minutes => self.increment_minutes(),
+                DateTimeEditItem::Seconds => self.increment_seconds(),
+                DateTimeEditItem::None => self.edited_datetime,
+            })),
+            UiEvent::Down | UiEvent::Left => Some(AppRequest::SetDateTime(match self.datetime_item {
+                DateTimeEditItem::Year => self.decrement_year(),
+                DateTimeEditItem::Month => self.decrement_month(),
+                DateTimeEditItem::Day => self.decrement_day(),
+                DateTimeEditItem::Hours => self.decrement_hours(),
+                DateTimeEditItem::Minutes => self.decrement_minutes(),
+                DateTimeEditItem::Seconds => self.decrement_seconds(),
+                DateTimeEditItem::None => self.edited_datetime,
+            })),
+            _ => None,
         }
     }
 
@@ -975,6 +973,13 @@ impl MenuController {
             return;
         }
 
+        // DateTime screen: two-line layout (date + time) with blinking on the
+        // active edit field.
+        if screen == ScreenId::DateTime {
+            self.render_datetime(app, display);
+            return;
+        }
+
         let title = self.title(screen);
 
         // Use char count, not byte length — title and value may contain
@@ -1065,6 +1070,66 @@ impl MenuController {
             None => alloc::string::String::from("None"),
         };
         let line1 = alloc::format!("{} {:>7}", date_str, value_str);
+
+        display.set_position(0, 1);
+        write!(display, "{}", line1).ok();
+        display.finish_line(16, line1.chars().count());
+    }
+
+    /// Render the DateTime screen.
+    /// Layout (16x2):
+    ///   line 0: "Дата   DD/MM/YY"  ("Дата " 4 chars + 3 spaces + 8-char date)
+    ///   line 1: "Время  HH:MM:SS"  ("Время" 5 chars + 2 spaces + 8-char time)
+    /// Date and time are column-aligned at col 7. While editing, the active
+    /// numeric pair (YY/MM/DD/HH/MM/SS) blinks. When not editing, the live RTC
+    /// time is shown; while editing, the working buffer is shown.
+    fn render_datetime(&mut self, app: &App, display: &mut impl CharacterDisplay) {
+        self.datetime_blink = (self.datetime_blink + 1) % HISTORY_BLINK_PERIOD;
+        let blink_off = self.datetime_item != DateTimeEditItem::None
+            && self.datetime_blink >= HISTORY_BLINK_PERIOD / 2;
+
+        let dt = if self.datetime_item == DateTimeEditItem::None {
+            app.datetime
+        } else {
+            self.edited_datetime
+        };
+
+        let field = |edit: DateTimeEditItem, content: &str| -> alloc::string::String {
+            if blink_off && self.datetime_item == edit {
+                "  ".into()
+            } else {
+                content.into()
+            }
+        };
+
+        let dd = field(DateTimeEditItem::Day, &alloc::format!("{:02}", dt.day()));
+        let mm_d = field(
+            DateTimeEditItem::Month,
+            &alloc::format!("{:02}", dt.month() as u8),
+        );
+        let yy = field(
+            DateTimeEditItem::Year,
+            &alloc::format!("{:02}", dt.year() % 100),
+        );
+        let hh = field(
+            DateTimeEditItem::Hours,
+            &alloc::format!("{:02}", dt.hour()),
+        );
+        let mm_t = field(
+            DateTimeEditItem::Minutes,
+            &alloc::format!("{:02}", dt.minute()),
+        );
+        let ss = field(
+            DateTimeEditItem::Seconds,
+            &alloc::format!("{:02}", dt.second()),
+        );
+
+        let line0 = alloc::format!("Дата    {}/{}/{}", dd, mm_d, yy);
+        let line1 = alloc::format!("Время   {}:{}:{}", hh, mm_t, ss);
+
+        display.set_position(0, 0);
+        write!(display, "{}", line0).ok();
+        display.finish_line(16, line0.chars().count());
 
         display.set_position(0, 1);
         write!(display, "{}", line1).ok();
