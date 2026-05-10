@@ -34,7 +34,7 @@ panic-probe = { version = "1.0", features = ["print-defmt"] }
 rtt-target = { version = "0.3.1", features = ["cortex-m"] }
 systick-monotonic = "1.0.1"
 time = { version = "0.3.22", default-features = false, features = ["macros"] }
-microchip-eeprom-25lcxx = { path = "./microchip-eeprom-25x-local", features = ["25lc1024"] }
+microchip-eeprom-25lcxx = { git = "https://github.com/serdzz/microchip-eeprom-25x.git", rev = "b169fe4", features = ["25lc1024"] }
 shared-bus-rtic = "0.2.2"
 nb = "1.1.0"
 bitflags = "2.9.0"
