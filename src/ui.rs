@@ -720,9 +720,7 @@ impl MenuController {
                     DateTimeEditItem::Day => DateTimeEditItem::Hours,
                     DateTimeEditItem::Hours => DateTimeEditItem::Minutes,
                     DateTimeEditItem::Minutes => DateTimeEditItem::Seconds,
-                    DateTimeEditItem::Seconds | DateTimeEditItem::None => {
-                        DateTimeEditItem::None
-                    }
+                    DateTimeEditItem::Seconds | DateTimeEditItem::None => DateTimeEditItem::None,
                 };
                 self.datetime_blink = 0;
                 if self.datetime_item == DateTimeEditItem::None {
@@ -731,24 +729,28 @@ impl MenuController {
                 None
             }
             // Hardware Up = UiEvent::Right, Down = UiEvent::Left.
-            UiEvent::Up | UiEvent::Right => Some(AppRequest::SetDateTime(match self.datetime_item {
-                DateTimeEditItem::Year => self.increment_year(),
-                DateTimeEditItem::Month => self.increment_month(),
-                DateTimeEditItem::Day => self.increment_day(),
-                DateTimeEditItem::Hours => self.increment_hours(),
-                DateTimeEditItem::Minutes => self.increment_minutes(),
-                DateTimeEditItem::Seconds => self.increment_seconds(),
-                DateTimeEditItem::None => self.edited_datetime,
-            })),
-            UiEvent::Down | UiEvent::Left => Some(AppRequest::SetDateTime(match self.datetime_item {
-                DateTimeEditItem::Year => self.decrement_year(),
-                DateTimeEditItem::Month => self.decrement_month(),
-                DateTimeEditItem::Day => self.decrement_day(),
-                DateTimeEditItem::Hours => self.decrement_hours(),
-                DateTimeEditItem::Minutes => self.decrement_minutes(),
-                DateTimeEditItem::Seconds => self.decrement_seconds(),
-                DateTimeEditItem::None => self.edited_datetime,
-            })),
+            UiEvent::Up | UiEvent::Right => {
+                Some(AppRequest::SetDateTime(match self.datetime_item {
+                    DateTimeEditItem::Year => self.increment_year(),
+                    DateTimeEditItem::Month => self.increment_month(),
+                    DateTimeEditItem::Day => self.increment_day(),
+                    DateTimeEditItem::Hours => self.increment_hours(),
+                    DateTimeEditItem::Minutes => self.increment_minutes(),
+                    DateTimeEditItem::Seconds => self.increment_seconds(),
+                    DateTimeEditItem::None => self.edited_datetime,
+                }))
+            }
+            UiEvent::Down | UiEvent::Left => {
+                Some(AppRequest::SetDateTime(match self.datetime_item {
+                    DateTimeEditItem::Year => self.decrement_year(),
+                    DateTimeEditItem::Month => self.decrement_month(),
+                    DateTimeEditItem::Day => self.decrement_day(),
+                    DateTimeEditItem::Hours => self.decrement_hours(),
+                    DateTimeEditItem::Minutes => self.decrement_minutes(),
+                    DateTimeEditItem::Seconds => self.decrement_seconds(),
+                    DateTimeEditItem::None => self.edited_datetime,
+                }))
+            }
             _ => None,
         }
     }
@@ -1010,12 +1012,7 @@ impl MenuController {
     ///   line 1: "DD/MM/YY {value:>7}" — date in cols 0..8, value in 9..16.
     /// While editing, the active field renders as blanks for half the cycle
     /// (HISTORY_BLINK_PERIOD / 2 frames) to give a visible blink.
-    fn render_history(
-        &mut self,
-        screen: ScreenId,
-        app: &App,
-        display: &mut impl CharacterDisplay,
-    ) {
+    fn render_history(&mut self, screen: ScreenId, app: &App, display: &mut impl CharacterDisplay) {
         // Tick blink counter on every frame.
         self.history_blink = (self.history_blink + 1) % HISTORY_BLINK_PERIOD;
         let blink_off = self.history_edit != HistoryEditField::None
@@ -1118,10 +1115,7 @@ impl MenuController {
             DateTimeEditItem::Year,
             &alloc::format!("{:02}", dt.year() % 100),
         );
-        let hh = field(
-            DateTimeEditItem::Hours,
-            &alloc::format!("{:02}", dt.hour()),
-        );
+        let hh = field(DateTimeEditItem::Hours, &alloc::format!("{:02}", dt.hour()));
         let mm_t = field(
             DateTimeEditItem::Minutes,
             &alloc::format!("{:02}", dt.minute()),
