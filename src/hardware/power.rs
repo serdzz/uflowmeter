@@ -89,7 +89,11 @@ impl Power {
                         .set_bit()
                 });
                 while self.pwr.csr.read().wuf().bit_is_set() {}
-                self.gpio_power.down();
+                // gpio_power.down() intentionally skipped — reconfiguring
+                // SPI pins to floating lets a pending EXTI line (e.g.
+                // TDC7200 INT on EXTI0) preempt mid-sleep-entry and fault
+                // on SPI access. STOP itself gates peripheral clocks, which
+                // is the main saving; this GPIO tweak isn't worth the race.
                 self.scb.set_sleepdeep();
             }
             // WFI is NOT called here — the caller must do WFI outside the RTIC lock.
@@ -124,7 +128,11 @@ impl Power {
                         .set_bit()
                 });
                 while self.pwr.csr.read().wuf().bit_is_set() {}
-                self.gpio_power.down();
+                // gpio_power.down() intentionally skipped — reconfiguring
+                // SPI pins to floating lets a pending EXTI line (e.g.
+                // TDC7200 INT on EXTI0) preempt mid-sleep-entry and fault
+                // on SPI access. STOP itself gates peripheral clocks, which
+                // is the main saving; this GPIO tweak isn't worth the race.
                 self.scb.set_sleepdeep();
             }
             defmt::info!("prepare_sleep done");
@@ -144,7 +152,7 @@ impl Power {
                     defmt::Debug2Format(&self.rcc.get_sysclk_source()),
                 );
                 self.scb.clear_sleepdeep();
-                self.gpio_power.up();
+                // gpio_power.up() skipped — see prepare_sleep.
                 self.rcc.update();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
                 // ADC HSI Enable

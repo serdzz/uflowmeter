@@ -357,8 +357,15 @@ mod app {
         // start(N.hz()) can't express sub-1 Hz periods, so we set the prescaler
         // and reload directly via set_config.
         let mut iwdg = p.IWDG.watchdog();
-        iwdg.set_config(5, 2375);
-        iwdg.feed();
+        // IWDG is intentionally NOT started. The watchdog uses LSI which
+        // keeps running through STOP, so the 5 s wake interval plus LSI
+        // drift (±10 %) sits uncomfortably close to even a 16 s timeout
+        // and the dog occasionally fires mid-sleep-cycle. probe-rs traces
+        // that as "Exception @ __INTERRUPTS". The HAL example
+        // (examples/rtic_low_power_advanced.rs) also runs without IWDG.
+        // Re-enable with iwdg.set_config(pre, rlr) if/when the wake path
+        // gains a reliable feed point that doesn't depend on TIM2 timing.
+        let _ = &mut iwdg;
 
         // Read uptime + last-rtc-tick from backup before moving rtc into Shared.
         let restored_uptime = rtc.read_backup_register(0);
@@ -485,6 +492,9 @@ mod app {
             ui,
         } = ctx.shared;
         ctx.local.timer.clear_irq();
+        // IWDG is currently disabled at init — feed() is a no-op on an
+        // un-started watchdog, but keep the call so re-enabling IWDG in
+        // init is the only change required to bring it back.
         ctx.local.iwdg.feed();
         let is_active = power.lock(|power| power.is_active());
         if is_active {
@@ -639,7 +649,29 @@ mod app {
                         }
                     }
                 }
-                app_request::spawn_after(25_u64.millis(), AppRequest::DeepSleep).ok();
+                // Inline DeepSleep instead of spawn_after to keep the RTIC
+                // timer queue empty across STOP entry. With an entry in the
+                // queue, SysTick's tq::dequeue after wake from STOP reads a
+                // corrupted head index and HardFaults. Path B (button → 15 s
+                // idle → DeepSleep) still uses the spawn_after in TIM2.
+                //
+                // Mask EXTI0 (TDC7200 INT) over the STOP entry so a pending
+                // measurement-complete IRQ can't preempt and fault on SPI.
+                cortex_m::peripheral::NVIC::mask(hal::stm32::Interrupt::EXTI0);
+                let should_wfi = (power, lcd).lock(|power, lcd| {
+                    power.prepare_sleep(|| {
+                        lcd.led_off();
+                        lcd.off();
+                    });
+                    power.is_sleep()
+                });
+                if should_wfi {
+                    cortex_m::asm::wfi();
+                }
+                #[allow(unsafe_code)]
+                unsafe {
+                    cortex_m::peripheral::NVIC::unmask(hal::stm32::Interrupt::EXTI0);
+                }
             }
             AppRequest::LcdLed(on) => {
                 defmt::info!("LcdLed {}", on);
