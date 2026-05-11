@@ -346,10 +346,7 @@ mod app {
         // TEMP: Disable TIM3 interrupt to isolate crash
         // ui_timer.listen();
 
-        // Constrain the raw PWR peripheral into the HAL's typed Pwr handle so
-        // Power can use Pwr::stop_mode() — see hardware/power.rs.
-        let pwr = p.PWR.constrain();
-        let power = Power::new(gpio_power, rcc, pwr, cx.core.SCB);
+        let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
 
         // IWDG: ~8 s timeout (LSI≈38 kHz, PR=/128 (pre=5), RLR=2375).
         //   period = (RLR+1) × 128 / 38000 ≈ 8.00 s
@@ -663,12 +660,6 @@ mod app {
                     power.is_sleep()
                 });
                 if should_wfi {
-                    // DSB ensures any pending SWD writes (RTT RdOff updates)
-                    // commit before the AHB clock is gated by STOP. Without
-                    // it, probe-rs sees a stale RTT pointer on next poll and
-                    // emits "RTT read pointer changed, re-attaching".
-                    // See examples/rtic_low_power_advanced.rs.
-                    cortex_m::asm::dsb();
                     cortex_m::asm::wfi();
                 }
             }
