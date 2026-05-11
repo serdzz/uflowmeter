@@ -81,7 +81,11 @@ impl Power {
             #[cfg(feature = "low_power")]
             {
                 self.pwr.clear_wakeup_flag();
-                self.gpio_power.down();
+                // Intentionally NOT calling gpio_power.down() — it reconfigures
+                // SPI pins to floating, which faults the TDC7200 INT (EXTI0)
+                // handler if it preempts mid-sleep-entry and touches SPI.
+                // STOP mode itself gates peripheral clocks for the main power
+                // savings; GPIO pull tweaks aren't worth the race.
                 self.pwr
                     .stop_mode(StopModeConfig::ultra_low_power(), &mut self.scb);
             }
@@ -103,7 +107,11 @@ impl Power {
             #[cfg(feature = "low_power")]
             {
                 self.pwr.clear_wakeup_flag();
-                self.gpio_power.down();
+                // Intentionally NOT calling gpio_power.down() — it reconfigures
+                // SPI pins to floating, which faults the TDC7200 INT (EXTI0)
+                // handler if it preempts mid-sleep-entry and touches SPI.
+                // STOP mode itself gates peripheral clocks for the main power
+                // savings; GPIO pull tweaks aren't worth the race.
                 self.pwr
                     .stop_mode(StopModeConfig::ultra_low_power(), &mut self.scb);
             }
@@ -131,7 +139,7 @@ impl Power {
                 // executed before the next prepare_sleep() does a normal
                 // Sleep, not STOP mode.
                 self.scb.clear_sleepdeep();
-                self.gpio_power.up();
+                // gpio_power.up() skipped — see prepare_sleep.
                 info!(
                     "--- Wakeup | Clock: {} ({} MHz) ---",
                     defmt::Debug2Format(&self.rcc.get_sysclk_source()),

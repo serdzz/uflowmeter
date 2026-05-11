@@ -653,6 +653,13 @@ mod app {
             }
             AppRequest::DeepSleep => {
                 defmt::info!("DeepSleep");
+                // Mask EXTI0 (TDC7200 INT on PB0) for the duration of the
+                // STOP entry → wake → clock-reconfig sequence. If we let it
+                // preempt mid-sequence, the IRQ handler talks SPI to TDC7200
+                // while peripherals are gated / GPIO is in low-power state
+                // and faults — see hardware/power.rs for the matching note
+                // on skipping gpio_power.down().
+                cortex_m::peripheral::NVIC::mask(hal::stm32::Interrupt::EXTI0);
                 // WFI MUST be outside the RTIC lock — calling WFI inside a lock
                 // corrupts the task context when an interrupt fires during sleep.
                 let should_wfi = (power, lcd).lock(|power, lcd| {
@@ -670,6 +677,15 @@ mod app {
                     // See examples/rtic_low_power_advanced.rs.
                     cortex_m::asm::dsb();
                     cortex_m::asm::wfi();
+                }
+                // Re-enable EXTI0 after the wake path has restored clocks
+                // and pin state. Any pending TDC measurement-complete IRQ
+                // dispatches now with peripherals fully up.
+                // SAFETY: re-enabling an IRQ we previously masked at the same
+                // point in this handler — symmetric op, no priority inversion.
+                #[allow(unsafe_code)]
+                unsafe {
+                    cortex_m::peripheral::NVIC::unmask(hal::stm32::Interrupt::EXTI0);
                 }
             }
             AppRequest::SetHistory(history_type, timestamp) => {
