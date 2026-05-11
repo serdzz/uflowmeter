@@ -5,13 +5,18 @@ use crate::app::*;
 use defmt::info;
 use defmt_rtt as _;
 use hal::mco::*;
+use hal::pwr::{Pwr, StopModeConfig};
 use hal::rcc::SysClkSource;
 use systick_monotonic::{fugit::Duration, fugit::ExtU64};
 
+/// Power-management state. STOP entry uses the HAL's typed `Pwr` handle
+/// (`pwr.stop_mode(StopModeConfig::ultra_low_power(), &mut scb)`) and the
+/// wake path uses `rcc.reconfigure_after_stop()` to restore the PLL,
+/// matching `examples/rtic_low_power_advanced.rs`.
 pub struct Power {
     gpio_power: GpioPower,
     rcc: hal::rcc::Rcc,
-    pwr: hal::stm32::PWR,
+    pwr: Pwr,
     scb: cortex_m::peripheral::SCB,
     sleep: bool,
     active_mode: u64,
@@ -23,7 +28,7 @@ impl Power {
     pub fn new(
         gpio_power: GpioPower,
         rcc: hal::rcc::Rcc,
-        pwr: hal::stm32::PWR,
+        pwr: Pwr,
         scb: cortex_m::peripheral::SCB,
     ) -> Self {
         Self {
@@ -74,27 +79,20 @@ impl Power {
             f();
             #[cfg(feature = "low_power")]
             {
-                self.pwr.cr.modify(|_, w| {
-                    w.fwu()
-                        .set_bit()
-                        .ulp()
-                        .set_bit()
-                        .pvde()
-                        .clear_bit()
-                        .pdds()
-                        .clear_bit()
-                        .lpsdsr()
-                        .set_bit()
-                        .cwuf()
-                        .set_bit()
-                });
-                while self.pwr.csr.read().wuf().bit_is_set() {}
-                // gpio_power.down() intentionally skipped — reconfiguring
+                // Drain pending wakeup flag, then enter STOP via the HAL.
+                // pwr.stop_mode() sets lpsdsr / ulp / pdds(clear) /
+                // SLEEPDEEP — equivalent to the manual PWR_CR modify we
+                // had here before. The HAL doesn't expose FWU (fast
+                // wakeup) — acceptable for our wake latency budget.
+                // gpio_power.down() intentionally skipped: reconfiguring
                 // SPI pins to floating lets a pending EXTI line (e.g.
-                // TDC7200 INT on EXTI0) preempt mid-sleep-entry and fault
-                // on SPI access. STOP itself gates peripheral clocks, which
-                // is the main saving; this GPIO tweak isn't worth the race.
-                self.scb.set_sleepdeep();
+                // TDC7200 INT on EXTI0) preempt mid-sleep-entry and
+                // fault on SPI access. STOP itself gates peripheral
+                // clocks, which is the main saving.
+                self.pwr.clear_wakeup_flag();
+                while self.pwr.is_wakeup_flag_set() {}
+                self.pwr
+                    .stop_mode(StopModeConfig::ultra_low_power(), &mut self.scb);
             }
             // WFI is NOT called here — the caller must do WFI outside the RTIC lock.
             // Previously, calling WFI inside a lock corrupted the task context.
@@ -113,27 +111,20 @@ impl Power {
             defmt::info!("callback done");
             #[cfg(feature = "low_power")]
             {
-                self.pwr.cr.modify(|_, w| {
-                    w.fwu()
-                        .set_bit()
-                        .ulp()
-                        .set_bit()
-                        .pvde()
-                        .clear_bit()
-                        .pdds()
-                        .clear_bit()
-                        .lpsdsr()
-                        .set_bit()
-                        .cwuf()
-                        .set_bit()
-                });
-                while self.pwr.csr.read().wuf().bit_is_set() {}
-                // gpio_power.down() intentionally skipped — reconfiguring
+                // Drain pending wakeup flag, then enter STOP via the HAL.
+                // pwr.stop_mode() sets lpsdsr / ulp / pdds(clear) /
+                // SLEEPDEEP — equivalent to the manual PWR_CR modify we
+                // had here before. The HAL doesn't expose FWU (fast
+                // wakeup) — acceptable for our wake latency budget.
+                // gpio_power.down() intentionally skipped: reconfiguring
                 // SPI pins to floating lets a pending EXTI line (e.g.
-                // TDC7200 INT on EXTI0) preempt mid-sleep-entry and fault
-                // on SPI access. STOP itself gates peripheral clocks, which
-                // is the main saving; this GPIO tweak isn't worth the race.
-                self.scb.set_sleepdeep();
+                // TDC7200 INT on EXTI0) preempt mid-sleep-entry and
+                // fault on SPI access. STOP itself gates peripheral
+                // clocks, which is the main saving.
+                self.pwr.clear_wakeup_flag();
+                while self.pwr.is_wakeup_flag_set() {}
+                self.pwr
+                    .stop_mode(StopModeConfig::ultra_low_power(), &mut self.scb);
             }
             defmt::info!("prepare_sleep done");
         } else {
@@ -151,13 +142,20 @@ impl Power {
                     "Clock after STOP (before reconfig): {}",
                     defmt::Debug2Format(&self.rcc.get_sysclk_source()),
                 );
-                self.scb.clear_sleepdeep();
-                // gpio_power.up() skipped — see prepare_sleep.
-                self.rcc.update();
+                // Restore the configured PLL clock — STOP falls back to MSI
+                // on wake. rcc.reconfigure_after_stop() handles this (calls
+                // self.update() internally). MCO output and ADC HSI need a
+                // separate touch because the HAL doesn't restore them.
+                self.rcc.reconfigure_after_stop();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
-                // ADC HSI Enable
+                // ADC uses HSI; re-enable and wait for ready.
                 self.rcc.cr.write(|w| w.hsion().set_bit());
                 while self.rcc.cr.read().hsirdy().bit_is_clear() {}
+                // SLEEPDEEP persists across wake; clear it so any later WFI
+                // (e.g. in idle, before the next prepare_sleep) does normal
+                // Sleep, not STOP.
+                self.scb.clear_sleepdeep();
+                // gpio_power.up() skipped — see prepare_sleep.
                 info!(
                     "--- Wakeup | Clock: {} ({} MHz) ---",
                     defmt::Debug2Format(&self.rcc.get_sysclk_source()),

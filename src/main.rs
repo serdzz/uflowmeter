@@ -120,7 +120,6 @@ mod app {
         handle: Option<__rtic_internal_app_request_MonoTimer_SpawnHandle>,
         adc: hal::adc::Adc,
         photo_r: PhotoR,
-        iwdg: hal::watchdog::IndependedWatchdog,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -346,26 +345,15 @@ mod app {
         // TEMP: Disable TIM3 interrupt to isolate crash
         // ui_timer.listen();
 
-        let power = Power::new(gpio_power, rcc, p.PWR, cx.core.SCB);
+        // Constrain raw PWR into the HAL's typed Pwr handle so Power can
+        // use Pwr::stop_mode() — see hardware/power.rs.
+        let pwr = p.PWR.constrain();
+        let power = Power::new(gpio_power, rcc, pwr, cx.core.SCB);
 
-        // IWDG: ~8 s timeout (LSI≈38 kHz, PR=/128 (pre=5), RLR=2375).
-        //   period = (RLR+1) × 128 / 38000 ≈ 8.00 s
-        // The longer timeout is required because the chip enters STOP mode for
-        // ~5 s between RTC wakeups and IWDG keeps counting in STOP (LSI is not
-        // gated). 8 s leaves headroom over the 5 s sleep window.
-        // Fed from timer() task at 20 Hz (every 50 ms) when awake → 160× headroom.
-        // start(N.hz()) can't express sub-1 Hz periods, so we set the prescaler
-        // and reload directly via set_config.
-        let mut iwdg = p.IWDG.watchdog();
-        // IWDG is intentionally NOT started. The watchdog uses LSI which
-        // keeps running through STOP, so the 5 s wake interval plus LSI
-        // drift (±10 %) sits uncomfortably close to even a 16 s timeout
-        // and the dog occasionally fires mid-sleep-cycle. probe-rs traces
-        // that as "Exception @ __INTERRUPTS". The HAL example
-        // (examples/rtic_low_power_advanced.rs) also runs without IWDG.
-        // Re-enable with iwdg.set_config(pre, rlr) if/when the wake path
-        // gains a reliable feed point that doesn't depend on TIM2 timing.
-        let _ = &mut iwdg;
+        // IWDG is not used. LSI keeps running through STOP and even a 16 s
+        // timeout sits uncomfortably close to the 5 s wake window once LSI
+        // drift (±10 %) is added. The HAL low-power example also runs
+        // without IWDG.
 
         // Read uptime + last-rtc-tick from backup before moving rtc into Shared.
         let restored_uptime = rtc.read_backup_register(0);
@@ -436,7 +424,6 @@ mod app {
                 handle: None,
                 adc,
                 photo_r,
-                iwdg,
             },
             init::Monotonics(mono),
         )
@@ -483,7 +470,7 @@ mod app {
         });
     }
 
-    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer,iwdg], shared = [power,lcd,app,ui] )]
+    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer], shared = [power,lcd,app,ui] )]
     fn timer(ctx: timer::Context) {
         let timer::SharedResources {
             mut power,
@@ -492,10 +479,6 @@ mod app {
             ui,
         } = ctx.shared;
         ctx.local.timer.clear_irq();
-        // IWDG is currently disabled at init — feed() is a no-op on an
-        // un-started watchdog, but keep the call so re-enabling IWDG in
-        // init is the only change required to bring it back.
-        ctx.local.iwdg.feed();
         let is_active = power.lock(|power| power.is_active());
         if is_active {
             let event = ctx.local.keyboard.read_ui_keys();
@@ -666,6 +649,11 @@ mod app {
                     power.is_sleep()
                 });
                 if should_wfi {
+                    // DSB ensures pending SWD writes (RTT RdOff updates)
+                    // commit before AHB is gated by STOP. Without it,
+                    // probe-rs sees a stale RTT pointer and emits
+                    // "RTT read pointer changed, re-attaching".
+                    cortex_m::asm::dsb();
                     cortex_m::asm::wfi();
                 }
                 #[allow(unsafe_code)]
@@ -692,6 +680,7 @@ mod app {
                     power.is_sleep()
                 });
                 if should_wfi {
+                    cortex_m::asm::dsb();
                     cortex_m::asm::wfi();
                 }
             }
