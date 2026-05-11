@@ -4,20 +4,14 @@ use super::gpio_power::*;
 use crate::app::*;
 use defmt::info;
 use defmt_rtt as _;
-use hal::pwr::{Pwr, StopModeConfig};
+use hal::mco::*;
+use hal::rcc::SysClkSource;
 use systick_monotonic::{fugit::Duration, fugit::ExtU64};
 
-/// Power-management state. Wraps the HAL `Pwr`/`Rcc`/SCB handles plus
-/// idle-tracking. Modeled on `examples/rtic_low_power_advanced.rs`:
-///   - `Pwr::stop_mode(StopModeConfig::ultra_low_power(), &mut SCB)` instead
-///     of manual PWR_CR pokes.
-///   - `Rcc::reconfigure_after_stop()` to restore the PLL clock after wake.
-///   - Caller does `cortex_m::asm::dsb(); cortex_m::asm::wfi();` outside
-///     the RTIC lock — see `app::AppRequest::DeepSleep` in main.rs.
 pub struct Power {
     gpio_power: GpioPower,
     rcc: hal::rcc::Rcc,
-    pwr: Pwr,
+    pwr: hal::stm32::PWR,
     scb: cortex_m::peripheral::SCB,
     sleep: bool,
     active_mode: u64,
@@ -29,7 +23,7 @@ impl Power {
     pub fn new(
         gpio_power: GpioPower,
         rcc: hal::rcc::Rcc,
-        pwr: Pwr,
+        pwr: hal::stm32::PWR,
         scb: cortex_m::peripheral::SCB,
     ) -> Self {
         Self {
@@ -80,10 +74,23 @@ impl Power {
             f();
             #[cfg(feature = "low_power")]
             {
-                self.pwr.clear_wakeup_flag();
+                self.pwr.cr.modify(|_, w| {
+                    w.fwu()
+                        .set_bit()
+                        .ulp()
+                        .set_bit()
+                        .pvde()
+                        .clear_bit()
+                        .pdds()
+                        .clear_bit()
+                        .lpsdsr()
+                        .set_bit()
+                        .cwuf()
+                        .set_bit()
+                });
+                while self.pwr.csr.read().wuf().bit_is_set() {}
                 self.gpio_power.down();
-                self.pwr
-                    .stop_mode(StopModeConfig::ultra_low_power(), &mut self.scb);
+                self.scb.set_sleepdeep();
             }
             // WFI is NOT called here — the caller must do WFI outside the RTIC lock.
             // Previously, calling WFI inside a lock corrupted the task context.
@@ -102,10 +109,23 @@ impl Power {
             defmt::info!("callback done");
             #[cfg(feature = "low_power")]
             {
-                self.pwr.clear_wakeup_flag();
+                self.pwr.cr.modify(|_, w| {
+                    w.fwu()
+                        .set_bit()
+                        .ulp()
+                        .set_bit()
+                        .pvde()
+                        .clear_bit()
+                        .pdds()
+                        .clear_bit()
+                        .lpsdsr()
+                        .set_bit()
+                        .cwuf()
+                        .set_bit()
+                });
+                while self.pwr.csr.read().wuf().bit_is_set() {}
                 self.gpio_power.down();
-                self.pwr
-                    .stop_mode(StopModeConfig::ultra_low_power(), &mut self.scb);
+                self.scb.set_sleepdeep();
             }
             defmt::info!("prepare_sleep done");
         } else {
@@ -123,15 +143,13 @@ impl Power {
                     "Clock after STOP (before reconfig): {}",
                     defmt::Debug2Format(&self.rcc.get_sysclk_source()),
                 );
-                // Restore the configured PLL clock — STOP mode falls back to
-                // MSI on wake. Doing this before any other peripheral access
-                // means the rest of the wake path runs at the intended speed.
-                self.rcc.reconfigure_after_stop();
-                // SLEEPDEEP persists across the wake; clear it so that any WFI
-                // executed before the next prepare_sleep() does a normal
-                // Sleep, not STOP mode.
                 self.scb.clear_sleepdeep();
                 self.gpio_power.up();
+                self.rcc.update();
+                self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
+                // ADC HSI Enable
+                self.rcc.cr.write(|w| w.hsion().set_bit());
+                while self.rcc.cr.read().hsirdy().bit_is_clear() {}
                 info!(
                     "--- Wakeup | Clock: {} ({} MHz) ---",
                     defmt::Debug2Format(&self.rcc.get_sysclk_source()),
