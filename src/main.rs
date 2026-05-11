@@ -357,13 +357,15 @@ mod app {
         // start(N.hz()) can't express sub-1 Hz periods, so we set the prescaler
         // and reload directly via set_config.
         let mut iwdg = p.IWDG.watchdog();
-        // IWDG ~16 s timeout (was 8 s). Pre=6 (/256), RLR=2375.
-        //   period = (RLR+1) × 256 / 38000 ≈ 16 s.
-        // Bumped because 8 s left only ~3 s margin over the 5 s STOP window,
-        // and LSI drift (±10 %) occasionally tripped the dog before the
-        // next wake fed it.
-        iwdg.set_config(6, 2375);
-        iwdg.feed();
+        // IWDG is intentionally NOT started. The watchdog uses LSI which
+        // keeps running through STOP, so the 5 s wake interval plus LSI
+        // drift (±10 %) sits uncomfortably close to even a 16 s timeout
+        // and the dog occasionally fires mid-sleep-cycle. probe-rs traces
+        // that as "Exception @ __INTERRUPTS". The HAL example
+        // (examples/rtic_low_power_advanced.rs) also runs without IWDG.
+        // Re-enable with iwdg.set_config(pre, rlr) if/when the wake path
+        // gains a reliable feed point that doesn't depend on TIM2 timing.
+        let _ = &mut iwdg;
 
         // Read uptime + last-rtc-tick from backup before moving rtc into Shared.
         let restored_uptime = rtc.read_backup_register(0);
@@ -490,6 +492,9 @@ mod app {
             ui,
         } = ctx.shared;
         ctx.local.timer.clear_irq();
+        // IWDG is currently disabled at init — feed() is a no-op on an
+        // un-started watchdog, but keep the call so re-enabling IWDG in
+        // init is the only change required to bring it back.
         ctx.local.iwdg.feed();
         let is_active = power.lock(|power| power.is_active());
         if is_active {
