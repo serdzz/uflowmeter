@@ -357,7 +357,12 @@ mod app {
         // start(N.hz()) can't express sub-1 Hz periods, so we set the prescaler
         // and reload directly via set_config.
         let mut iwdg = p.IWDG.watchdog();
-        iwdg.set_config(5, 2375);
+        // IWDG ~16 s timeout (was 8 s). Pre=6 (/256), RLR=2375.
+        //   period = (RLR+1) × 256 / 38000 ≈ 16 s.
+        // Bumped because 8 s left only ~3 s margin over the 5 s STOP window,
+        // and LSI drift (±10 %) occasionally tripped the dog before the
+        // next wake fed it.
+        iwdg.set_config(6, 2375);
         iwdg.feed();
 
         // Read uptime + last-rtc-tick from backup before moving rtc into Shared.
@@ -639,7 +644,29 @@ mod app {
                         }
                     }
                 }
-                app_request::spawn_after(25_u64.millis(), AppRequest::DeepSleep).ok();
+                // Inline DeepSleep instead of spawn_after to keep the RTIC
+                // timer queue empty across STOP entry. With an entry in the
+                // queue, SysTick's tq::dequeue after wake from STOP reads a
+                // corrupted head index and HardFaults. Path B (button → 15 s
+                // idle → DeepSleep) still uses the spawn_after in TIM2.
+                //
+                // Mask EXTI0 (TDC7200 INT) over the STOP entry so a pending
+                // measurement-complete IRQ can't preempt and fault on SPI.
+                cortex_m::peripheral::NVIC::mask(hal::stm32::Interrupt::EXTI0);
+                let should_wfi = (power, lcd).lock(|power, lcd| {
+                    power.prepare_sleep(|| {
+                        lcd.led_off();
+                        lcd.off();
+                    });
+                    power.is_sleep()
+                });
+                if should_wfi {
+                    cortex_m::asm::wfi();
+                }
+                #[allow(unsafe_code)]
+                unsafe {
+                    cortex_m::peripheral::NVIC::unmask(hal::stm32::Interrupt::EXTI0);
+                }
             }
             AppRequest::LcdLed(on) => {
                 defmt::info!("LcdLed {}", on);
