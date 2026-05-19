@@ -89,6 +89,7 @@ impl Power {
                 // TDC7200 INT on EXTI0) preempt mid-sleep-entry and
                 // fault on SPI access. STOP itself gates peripheral
                 // clocks, which is the main saving.
+                self.gpio_power.down();
                 self.pwr.clear_wakeup_flag();
                 while self.pwr.is_wakeup_flag_set() {}
                 self.pwr
@@ -121,6 +122,7 @@ impl Power {
                 // TDC7200 INT on EXTI0) preempt mid-sleep-entry and
                 // fault on SPI access. STOP itself gates peripheral
                 // clocks, which is the main saving.
+                self.gpio_power.down();
                 self.pwr.clear_wakeup_flag();
                 while self.pwr.is_wakeup_flag_set() {}
                 self.pwr
@@ -146,6 +148,7 @@ impl Power {
                 // on wake. rcc.reconfigure_after_stop() handles this (calls
                 // self.update() internally). MCO output and ADC HSI need a
                 // separate touch because the HAL doesn't restore them.
+                self.gpio_power.up();
                 self.rcc.reconfigure_after_stop();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
                 // ADC uses HSI; re-enable and wait for ready.
