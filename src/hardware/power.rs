@@ -102,12 +102,16 @@ impl Power {
         }
     }
 
-    /// Drain the pending wakeup flag, cut the peripheral rail, and enter STOP via the HAL.
+    /// Drain the pending wakeup flag, then enter STOP via the HAL.
     /// `pwr.stop_mode()` sets lpsdsr / ulp / pdds(clear) / SLEEPDEEP. The HAL doesn't
     /// expose FWU (fast wakeup) — acceptable for our wake-latency budget.
+    ///
+    /// `gpio_power.down()` is intentionally not called: reconfiguring the rail's
+    /// pins to floating masks/clobbers the RTC wake EXTI line so the MCU never
+    /// wakes from STOP. Verified on hardware after commit 4c4776b. STOP alone
+    /// gates peripheral clocks, which is the main saving.
     #[cfg(feature = "low_power")]
     fn enter_stop_mode(&mut self) {
-        self.gpio_power.down();
         self.pwr.clear_wakeup_flag();
         while self.pwr.is_wakeup_flag_set() {}
         self.pwr
@@ -128,7 +132,6 @@ impl Power {
                 // on wake. rcc.reconfigure_after_stop() handles this (calls
                 // self.update() internally). MCO output and ADC HSI need a
                 // separate touch because the HAL doesn't restore them.
-                self.gpio_power.up();
                 self.rcc.reconfigure_after_stop();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
                 // ADC uses HSI; re-enable and wait for ready.
