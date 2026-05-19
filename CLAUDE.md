@@ -55,3 +55,22 @@ TDC driver methods carry an `E: From<PinError>` bound that is **not** satisfied 
 - `docs/MODBUS_MAP.md` — Modbus register map
 - `docs/TDC1000_REGISTER_MAP.md`, `docs/TDC7200_REGISTER_MAP.md` — chip register details
 - `STM32L151.svd` — peripheral definitions for the MCU
+
+## Known load-bearing bugs in STOP / wake / UI path
+
+Three coupled bugs that **together** keep the device from crashing but break the button UI path. Touching any one in isolation surfaces the others — verified on hardware 2026-05-19.
+
+1. **`exti9_5` ordering** (`src/main.rs:467-470`). The button-wake handler calls `power.active()` before `power.exit_sleep()`. `active()` clears `self.sleep`, so `exit_sleep()` sees `self.sleep == false` and **skips `rcc.reconfigure_after_stop()`** — clocks stay on the MSI fallback after wake instead of returning to PLL. SPI to the LCD then runs at the wrong rate and the UI silently fails to render new state ("buttons don't react"). RTC wake (`rtc_timer`, line 438) calls only `exit_sleep()` so it's unaffected.
+
+2. **`rcc.cr.write()` clobber** (`src/hardware/power.rs:138`). Uses `.write()` instead of `.modify()` to enable HSI. `.write()` resets every unspecified field to its reset default, which turns **PLLON and HSEON off** right after `reconfigure_after_stop()` just turned them on. Hardware then auto-falls-back SYSCLK to MSI. Net effect today: PLL never actually stays restored after any wake — the system runs on MSI most of the time even when `get_sysclk_source()` reports PLL.
+
+3. **RTIC timer queue corrupts across STOP / SysTick wake** (`cortex-m-rtic-1.1.4` + `systick-monotonic` + STM32L1 STOP). After several STOP cycles with a fully-clocked SysTick, the `SysTick` handler's `tq::dequeue` call panics with a BusFault — peek() returns a `Some(&NotReady)` whose backing pointer is into unmapped memory (`0x0012xxxx`). This is the bug `src/main.rs:635-639` documents and works around for Path A (rtc_timer → Process → inline `prepare_sleep`, no `spawn_after`). Path B (button → TIM2 → `spawn_after(IDLE_TIMEOUT, DeepSleep)`) still leaves an entry in the queue, plus `modbus_poll` self-reschedules via `spawn_after`. The crash reproduces even with both queues empty if SysTick is fast enough.
+
+**Why nothing crashes today**: bugs #1 and #2 together keep SYSCLK on MSI (~2 MHz) after any wake, so SysTick fires ~12× slower than configured. That's slow enough that the queue corruption in #3 never accumulates to a crash within a typical session. Fix #1 alone or #2 alone exposes #3 → first or second wake HardFaults.
+
+**To actually fix the UI**, #3 must be addressed first. Options (none cheap):
+- Switch the monotonic backend off SysTick (e.g. RTC-based monotonic that keeps ticking through STOP).
+- Quiesce SysTick + drain `RTIC_TQ` before STOP entry, reinit after wake.
+- Update RTIC past 1.1.4 if newer releases fix this.
+
+Until then, the file `src/main.rs:467` ordering and the `write()` at `src/hardware/power.rs:138` are **load-bearing** — do not "fix" them in isolation. The `// gpio_power.up() skipped` style stale comments around `exit_sleep` already led to one bad commit (`4c4776b`, reverted by `e70d707`).
