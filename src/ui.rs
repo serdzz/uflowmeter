@@ -14,8 +14,8 @@
 use crate::apps::AppRequest;
 use crate::gui::{CharacterDisplay, HistoryType, UiEvent};
 use crate::App;
-use alloc::string::String;
 use core::fmt::Write;
+use heapless::String as HString;
 use time::{Duration, PrimitiveDateTime};
 
 // ─── Screen enum ─────────────────────────────────────────────────────
@@ -389,8 +389,8 @@ impl MenuController {
     }
 
     // ─── Value line ──────────────────────────────────────────────────
-    pub fn format_value(&self, screen: ScreenId, app: &App) -> String {
-        let mut s = String::new();
+    pub fn format_value(&self, screen: ScreenId, app: &App) -> HString<32> {
+        let mut s: HString<32> = HString::new();
         match screen {
             ScreenId::HourConsumption => {
                 write!(s, "{:.3}", app.flow).ok();
@@ -416,7 +416,7 @@ impl MenuController {
                 if let Some(flow) = app.history_state.flow {
                     write!(s, "{:.3}", flow).ok();
                 } else {
-                    s.push_str("None");
+                    s.push_str("None").ok();
                 }
             }
             ScreenId::DateTime => {
@@ -433,7 +433,7 @@ impl MenuController {
             ScreenId::CommType => {
                 let idx = self.comm_type.cursor as usize;
                 if idx < COMM_TYPES.len() {
-                    s.push_str(COMM_TYPES[idx]);
+                    s.push_str(COMM_TYPES[idx]).ok();
                 }
             }
             ScreenId::SlaveAddress => {
@@ -442,23 +442,23 @@ impl MenuController {
             ScreenId::Muster => {
                 let idx = self.muster.cursor as usize;
                 if idx < ON_OFF.len() {
-                    s.push_str(ON_OFF[idx]);
+                    s.push_str(ON_OFF[idx]).ok();
                 }
             }
             ScreenId::Negative => {
                 let idx = self.negative.cursor as usize;
                 if idx < ON_OFF.len() {
-                    s.push_str(ON_OFF[idx]);
+                    s.push_str(ON_OFF[idx]).ok();
                 }
             }
             ScreenId::Channel1 | ScreenId::Channel2 => {
                 // Channel status — "работает" / "отсутствует"
-                s.push_str("отсутствует");
+                s.push_str("отсутствует").ok();
             }
             ScreenId::SensorType => {
                 let idx = self.sensor_type.cursor as usize;
                 if idx < SENSOR_TYPES.len() {
-                    s.push_str(SENSOR_TYPES[idx]);
+                    s.push_str(SENSOR_TYPES[idx]).ok();
                 }
             }
             ScreenId::SerialNumber => {
@@ -1019,29 +1019,50 @@ impl MenuController {
             && self.history_blink >= HISTORY_BLINK_PERIOD / 2;
         let dt = self.history_datetime;
 
-        // Helper: render field content unless the field is the active edit
-        // field and we're in the "off" half of the blink cycle.
-        let field = |edit: HistoryEditField, content: &str, blank: &str| -> alloc::string::String {
-            if blink_off && self.history_edit == edit {
-                blank.into()
-            } else {
-                content.into()
-            }
+        // Each numeric field is rendered into a 2-byte stack buffer, then
+        // swapped for "  " when blink is in the "off" half of the cycle.
+        let mut hh: HString<2> = HString::new();
+        let mut dd: HString<2> = HString::new();
+        let mut mm: HString<2> = HString::new();
+        let mut yy: HString<2> = HString::new();
+        write!(hh, "{:02}", dt.hour()).ok();
+        write!(dd, "{:02}", dt.day()).ok();
+        write!(mm, "{:02}", dt.month() as u8).ok();
+        write!(yy, "{:02}", dt.year() % 100).ok();
+        let blank = "  ";
+        let hh_disp: &str = if blink_off && self.history_edit == HistoryEditField::Hour {
+            blank
+        } else {
+            hh.as_str()
+        };
+        let dd_disp: &str = if blink_off && self.history_edit == HistoryEditField::Day {
+            blank
+        } else {
+            dd.as_str()
+        };
+        let mm_disp: &str = if blink_off && self.history_edit == HistoryEditField::Month {
+            blank
+        } else {
+            mm.as_str()
+        };
+        let yy_disp: &str = if blink_off && self.history_edit == HistoryEditField::Year {
+            blank
+        } else {
+            yy.as_str()
         };
 
         // ─── Line 0: title ─────────────────────────────────────────────
-        let mut line0 = alloc::string::String::new();
+        // Cyrillic UTF-8: longest title "Расход за месяц" ≈ 28 bytes.
+        let mut line0: HString<32> = HString::new();
         match screen {
             ScreenId::HourHistory => {
-                let hh = alloc::format!("{:02}", dt.hour());
-                let hh_disp = field(HistoryEditField::Hour, &hh, "  ");
                 write!(line0, "Расход за час {}", hh_disp).ok();
             }
             ScreenId::DayHistory => {
-                line0.push_str("Расход за день");
+                line0.push_str("Расход за день").ok();
             }
             ScreenId::MonthHistory => {
-                line0.push_str("Расход за месяц");
+                line0.push_str("Расход за месяц").ok();
             }
             _ => {}
         }
@@ -1049,31 +1070,26 @@ impl MenuController {
         write!(display, "{}", line0).ok();
         display.finish_line(16, line0.chars().count());
 
-        // ─── Line 1: date + value ─────────────────────────────────────
-        // Date is "DD/MM/YY" (8 chars). Each numeric pair blinks when its
-        // field is active. Slashes stay solid.
-        let dd = field(
-            HistoryEditField::Day,
-            &alloc::format!("{:02}", dt.day()),
-            "  ",
-        );
-        let mm = field(
-            HistoryEditField::Month,
-            &alloc::format!("{:02}", dt.month() as u8),
-            "  ",
-        );
-        let yy = field(
-            HistoryEditField::Year,
-            &alloc::format!("{:02}", dt.year() % 100),
-            "  ",
-        );
-        let date_str = alloc::format!("{}/{}/{}", dd, mm, yy);
-
-        let value_str = match app.history_state.flow {
-            Some(flow) => alloc::format!("{:.3}", flow),
-            None => alloc::string::String::from("None"),
-        };
-        let line1 = alloc::format!("{} {:>7}", date_str, value_str);
+        // ─── Line 1: "DD/MM/YY VVVVVVV" — exactly 16 ASCII chars.
+        let mut line1: HString<16> = HString::new();
+        let mut value_str: HString<16> = HString::new();
+        match app.history_state.flow {
+            Some(flow) => {
+                write!(value_str, "{:.3}", flow).ok();
+            }
+            None => {
+                value_str.push_str("None").ok();
+            }
+        }
+        write!(
+            line1,
+            "{}/{}/{} {:>7}",
+            dd_disp,
+            mm_disp,
+            yy_disp,
+            value_str.as_str()
+        )
+        .ok();
 
         display.set_position(0, 1);
         write!(display, "{}", line1).ok();
@@ -1098,35 +1114,55 @@ impl MenuController {
             self.edited_datetime
         };
 
-        let field = |edit: DateTimeEditItem, content: &str| -> alloc::string::String {
-            if blink_off && self.datetime_item == edit {
-                "  ".into()
-            } else {
-                content.into()
-            }
+        let mut dd_buf: HString<2> = HString::new();
+        let mut mm_d_buf: HString<2> = HString::new();
+        let mut yy_buf: HString<2> = HString::new();
+        let mut hh_buf: HString<2> = HString::new();
+        let mut mm_t_buf: HString<2> = HString::new();
+        let mut ss_buf: HString<2> = HString::new();
+        write!(dd_buf, "{:02}", dt.day()).ok();
+        write!(mm_d_buf, "{:02}", dt.month() as u8).ok();
+        write!(yy_buf, "{:02}", dt.year() % 100).ok();
+        write!(hh_buf, "{:02}", dt.hour()).ok();
+        write!(mm_t_buf, "{:02}", dt.minute()).ok();
+        write!(ss_buf, "{:02}", dt.second()).ok();
+        let blank = "  ";
+        let dd: &str = if blink_off && self.datetime_item == DateTimeEditItem::Day {
+            blank
+        } else {
+            dd_buf.as_str()
+        };
+        let mm_d: &str = if blink_off && self.datetime_item == DateTimeEditItem::Month {
+            blank
+        } else {
+            mm_d_buf.as_str()
+        };
+        let yy: &str = if blink_off && self.datetime_item == DateTimeEditItem::Year {
+            blank
+        } else {
+            yy_buf.as_str()
+        };
+        let hh: &str = if blink_off && self.datetime_item == DateTimeEditItem::Hours {
+            blank
+        } else {
+            hh_buf.as_str()
+        };
+        let mm_t: &str = if blink_off && self.datetime_item == DateTimeEditItem::Minutes {
+            blank
+        } else {
+            mm_t_buf.as_str()
+        };
+        let ss: &str = if blink_off && self.datetime_item == DateTimeEditItem::Seconds {
+            blank
+        } else {
+            ss_buf.as_str()
         };
 
-        let dd = field(DateTimeEditItem::Day, &alloc::format!("{:02}", dt.day()));
-        let mm_d = field(
-            DateTimeEditItem::Month,
-            &alloc::format!("{:02}", dt.month() as u8),
-        );
-        let yy = field(
-            DateTimeEditItem::Year,
-            &alloc::format!("{:02}", dt.year() % 100),
-        );
-        let hh = field(DateTimeEditItem::Hours, &alloc::format!("{:02}", dt.hour()));
-        let mm_t = field(
-            DateTimeEditItem::Minutes,
-            &alloc::format!("{:02}", dt.minute()),
-        );
-        let ss = field(
-            DateTimeEditItem::Seconds,
-            &alloc::format!("{:02}", dt.second()),
-        );
-
-        let line0 = alloc::format!("Дата    {}/{}/{}", dd, mm_d, yy);
-        let line1 = alloc::format!("Время   {}:{}:{}", hh, mm_t, ss);
+        // "Дата" / "Время" + "    " + 8-char date/time ≈ 21 bytes UTF-8.
+        let mut line0: HString<24> = HString::new();
+        let mut line1: HString<24> = HString::new();
+        write!(line0, "Дата    {}/{}/{}", dd, mm_d, yy).ok();
+        write!(line1, "Время   {}:{}:{}", hh, mm_t, ss).ok();
 
         display.set_position(0, 0);
         write!(display, "{}", line0).ok();

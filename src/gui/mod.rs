@@ -60,3 +60,13 @@ pub trait Widget<S, A> {
         None
     }
 }
+
+/// Push as many chars of `s` into `dst` as fit, breaking on UTF-8 char
+/// boundaries. Used by widgets whose `state` is bounded by `const LEN`.
+pub(crate) fn push_truncating<const N: usize>(dst: &mut heapless::String<N>, s: &str) {
+    for ch in s.chars() {
+        if dst.push(ch).is_err() {
+            break;
+        }
+    }
+}

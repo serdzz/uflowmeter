@@ -245,8 +245,11 @@ mod label_tests {
 
         label.render(&mut display);
 
-        assert_eq!(label.state, long_text);
-        assert!(display.assertions().contains(long_text));
+        // Storage is now bounded by LEN — input is truncated on UTF-8
+        // char boundaries to fit.
+        assert_eq!(label.state.len(), 16);
+        assert!(long_text.starts_with(label.state.as_str()));
+        assert!(display.assertions().contains(label.state.as_str()));
     }
 }
 

@@ -1,4 +1,14 @@
 /target
+/target-embed
 **/*.rs.bk
 Cargo.lock
 microchip-eeprom-25x-local
+
+# Claude Code / agent tooling artifacts
+/.claude/
+/.claude-flow/
+/.swarm/
+/.mcp.json
+/agentdb.rvf
+/agentdb.rvf.lock
+/ruvector.db

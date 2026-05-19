@@ -1,5 +1,6 @@
 use crate::gui::date_time_widget::DateTimeItems;
 use crate::gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
+use heapless::String as HString;
 
 #[cfg_attr(not(test), derive(defmt::Format))]
 #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
@@ -9,7 +10,6 @@ pub enum HistoryType {
     Day,
     Month,
 }
-use crate::alloc::string::ToString;
 use crate::Actions;
 use crate::App;
 use core::fmt::Write;
@@ -250,7 +250,10 @@ impl<K: HistoryKind> Widget<&App, Actions> for HistoryWidget<K> {
         defmt::debug!("HistoryWidget::update called, editable={}", self.editable);
         self.date.state.clear();
         self.time.state.clear();
-        let date_str = alloc::format!(
+
+        let mut date_str: HString<8> = HString::new();
+        write!(
+            date_str,
             "{:02}/{:02}/{:02}",
             if K::history_type() == HistoryType::Month {
                 0
@@ -259,33 +262,34 @@ impl<K: HistoryKind> Widget<&App, Actions> for HistoryWidget<K> {
             },
             self.datetime.month() as u8,
             self.datetime.year() - 2000
-        );
+        )
+        .ok();
         self.date.update(&date_str);
-        let time_str = alloc::format!(
-            "{:>6}",
-            if K::history_type() == HistoryType::Hour {
-                alloc::format!("{:02}:00", self.datetime.hour())
-            } else {
-                " ".to_string()
-            }
-        );
+
+        // 6-char time field: " HH:00" when Hour, six spaces otherwise.
+        let mut time_str: HString<6> = HString::new();
+        if K::history_type() == HistoryType::Hour {
+            write!(time_str, " {:02}:00", self.datetime.hour()).ok();
+        } else {
+            time_str.push_str("      ").ok();
+        }
         self.time.update(&time_str);
         #[cfg(not(test))]
         defmt::debug!("HistoryWidget date.editable={}, date.invalidate={}, time.editable={}, time.invalidate={}",
             self.date.editable, self.date.invalidate, self.time.editable, self.time.invalidate);
 
         if let Some(flow) = state.history_state.flow {
-            let mut value_str = alloc::string::String::new();
-            write!(value_str, "{:>8}", alloc::format!("{}", flow)).ok();
-            if self.value.state != value_str {
+            let mut value_str: HString<16> = HString::new();
+            write!(value_str, "{:>8}", flow).ok();
+            if self.value.state.as_str() != value_str.as_str() {
                 self.value.update(&value_str);
             }
             #[cfg(not(test))]
             defmt::debug!("HistoryWidget flow value: {}", flow);
         } else if self.value.state != "None" {
-            let mut value_str = alloc::string::String::new();
-            write!(value_str, "{:>8}", alloc::format!("None")).ok();
-            if self.value.state != value_str {
+            let mut value_str: HString<16> = HString::new();
+            value_str.push_str("    None").ok();
+            if self.value.state.as_str() != value_str.as_str() {
                 self.value.update(&value_str);
             }
             #[cfg(not(test))]

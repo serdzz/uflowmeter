@@ -656,10 +656,7 @@ mod app {
                     cortex_m::asm::dsb();
                     cortex_m::asm::wfi();
                 }
-                #[allow(unsafe_code)]
-                unsafe {
-                    cortex_m::peripheral::NVIC::unmask(hal::stm32::Interrupt::EXTI0);
-                }
+                hardware::unmask_exti0();
             }
             AppRequest::LcdLed(on) => {
                 defmt::info!("LcdLed {}", on);
@@ -973,79 +970,81 @@ mod app {
     }
 
     /// TDC7200 INT interrupt on PB0 (EXTI0)
-    /// Signals that a measurement is complete
-    #[task(binds = EXTI0, priority = 4, shared = [tdc7200])]
-    fn tdc7200_irq(ctx: tdc7200_irq::Context) {
-        defmt::info!("exti0");
-        // Clear EXTI pending bit for line 0
+    /// Top half only: mask EXTI0 (TDC INT stays asserted until we ACK over
+    /// SPI, so without masking we'd re-fire immediately on return), unpend
+    /// the line, and defer the SPI dialog to `tdc7200_result` at priority 2.
+    #[task(binds = EXTI0, priority = 4)]
+    fn tdc7200_irq(_ctx: tdc7200_irq::Context) {
+        cortex_m::peripheral::NVIC::mask(hal::stm32::Interrupt::EXTI0);
         ExtiExt::unpend(0);
-
-        let mut tdc7200 = ctx.shared.tdc7200;
-        tdc7200.lock(|tdc| {
-            // Read interrupt status to determine what happened
-            match tdc.get_interrupt_status() {
-                Ok(status) => {
-                    if status.contains(hardware::tdc7200::InterruptStatus::MEASUREMENT_COMPLETE) {
-                        defmt::info!("TDC7200 measurement complete");
-                        tdc7200_result::spawn().ok();
-                    }
-                    if status.contains(hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR) {
-                        defmt::warn!("TDC7200 timeout error");
-                    }
-                    if status.contains(hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW)
-                    {
-                        defmt::warn!("TDC7200 coarse counter overflow");
-                    }
-                    let _ = tdc.clear_interrupt_status(status);
-                }
-                Err(_) => {
-                    defmt::error!("TDC7200 SPI read failed");
-                }
-            }
-        });
+        tdc7200_result::spawn().ok();
     }
 
-    /// Read TDC7200 measurement results and calculate flow
+    /// TDC7200 bottom half: reads INT status + measurement registers over
+    /// SPI at priority 2, then re-enables EXTI0 once the TDC INT pin is
+    /// de-asserted via `clear_interrupt_status`.
     #[task(priority = 2, shared = [tdc7200, app])]
     fn tdc7200_result(ctx: tdc7200_result::Context) {
         let (mut tdc7200, mut app) = (ctx.shared.tdc7200, ctx.shared.app);
 
         tdc7200.lock(|tdc| {
-            // Read measurement results
-            let m1 = tdc.get_measurement1();
-            let m2 = tdc.get_measurement2();
-            let ref_clk = tdc.get_reference_clock_counter();
+            let status = match tdc.get_interrupt_status() {
+                Ok(s) => s,
+                Err(_) => {
+                    defmt::error!("TDC7200 SPI status read failed");
+                    return;
+                }
+            };
 
-            match (m1, m2, ref_clk) {
-                (Ok(m1_val), Ok(m2_val), Ok(ref_val)) => {
-                    defmt::info!("TDC7200: m1={}, m2={}, ref={}", m1_val, m2_val, ref_val);
-                    // Calculate raw flow using TDC7200 measurements:
-                    //   tof1 = m1 / ref_clk_count * clock_period
-                    //   tof2 = m2 / ref_clk_count * clock_period
-                    //   delta_tof = tof1 - tof2
-                    //   v = (L^2 / 2) * delta_tof / (tof1 * tof2)
-                    // Calibration ratio is applied separately in Calculator
-                    // For now store raw delta — Calculator::get_volume needs Options
-                    app.lock(|app| {
-                        app.flow = if ref_val > 0 {
-                            // Normalized delta TOF proportional to flow velocity
-                            let dt = (m1_val as f32) - (m2_val as f32);
-                            let sum = (m1_val as f32) + (m2_val as f32);
-                            if sum.abs() > f32::EPSILON {
-                                dt / (sum * sum) * 1e6 // scaled for display
+            if status.contains(hardware::tdc7200::InterruptStatus::TIMEOUT_ERROR) {
+                defmt::warn!("TDC7200 timeout error");
+            }
+            if status.contains(hardware::tdc7200::InterruptStatus::COARSE_COUNTER_OVERFLOW) {
+                defmt::warn!("TDC7200 coarse counter overflow");
+            }
+
+            if status.contains(hardware::tdc7200::InterruptStatus::MEASUREMENT_COMPLETE) {
+                defmt::info!("TDC7200 measurement complete");
+                let m1 = tdc.get_measurement1();
+                let m2 = tdc.get_measurement2();
+                let ref_clk = tdc.get_reference_clock_counter();
+
+                match (m1, m2, ref_clk) {
+                    (Ok(m1_val), Ok(m2_val), Ok(ref_val)) => {
+                        defmt::info!("TDC7200: m1={}, m2={}, ref={}", m1_val, m2_val, ref_val);
+                        // Calculate raw flow using TDC7200 measurements:
+                        //   tof1 = m1 / ref_clk_count * clock_period
+                        //   tof2 = m2 / ref_clk_count * clock_period
+                        //   delta_tof = tof1 - tof2
+                        //   v = (L^2 / 2) * delta_tof / (tof1 * tof2)
+                        // Calibration ratio is applied separately in Calculator
+                        // For now store raw delta — Calculator::get_volume needs Options
+                        app.lock(|app| {
+                            app.flow = if ref_val > 0 {
+                                let dt = (m1_val as f32) - (m2_val as f32);
+                                let sum = (m1_val as f32) + (m2_val as f32);
+                                if sum.abs() > f32::EPSILON {
+                                    dt / (sum * sum) * 1e6
+                                } else {
+                                    0.0
+                                }
                             } else {
                                 0.0
-                            }
-                        } else {
-                            0.0
-                        };
-                    });
-                }
-                _ => {
-                    defmt::error!("TDC7200 read failed");
+                            };
+                        });
+                    }
+                    _ => {
+                        defmt::error!("TDC7200 read failed");
+                    }
                 }
             }
+
+            let _ = tdc.clear_interrupt_status(status);
         });
+
+        // Re-enable EXTI0 after the TDC7200 INT pin has been de-asserted
+        // via clear_interrupt_status above.
+        hardware::unmask_exti0();
     }
 
     #[idle]

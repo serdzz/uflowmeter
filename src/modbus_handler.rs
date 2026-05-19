@@ -277,13 +277,13 @@ impl ModbusHandler {
         }
 
         // Modify options
-        let mut options_bytes = options.into_bytes().to_vec();
+        let mut options_bytes = options.into_bytes();
         let byte_offset = ((address - registers::OPTIONS_START) * 2) as usize;
         options_bytes[byte_offset] = request.write_data[0];
         options_bytes[byte_offset + 1] = request.write_data[1];
 
         // Update options
-        *options = Options::from_bytes(options_bytes.as_slice().try_into().unwrap());
+        *options = Options::from_bytes(options_bytes);
 
         // Save to storage
         if options.save(storage).is_err() {
@@ -340,14 +340,14 @@ impl ModbusHandler {
         }
 
         // Modify options
-        let mut options_bytes = options.into_bytes().to_vec();
+        let mut options_bytes = options.into_bytes();
         let start_byte = ((start - registers::OPTIONS_START) * 2) as usize;
         for (offset, &byte) in request.write_data.iter().enumerate() {
             options_bytes[start_byte + offset] = byte;
         }
 
         // Update options
-        *options = Options::from_bytes(options_bytes.as_slice().try_into().unwrap());
+        *options = Options::from_bytes(options_bytes);
 
         // Save to storage
         if options.save(storage).is_err() {

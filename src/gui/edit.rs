@@ -1,10 +1,9 @@
 #![allow(unsafe_code)]
-use crate::gui::{CharacterDisplay, UiEvent, Widget};
+use crate::gui::{push_truncating, CharacterDisplay, UiEvent, Widget};
 use bit_field::*;
 #[allow(unused_imports)]
 use core::fmt::Write;
 use core::marker::PhantomData;
-use core::str::FromStr;
 use heapless::String;
 #[derive(Debug, Clone)]
 pub struct Edit<A, const LEN: usize, const X: u8, const Y: u8> {
@@ -21,8 +20,10 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Edit<A, LEN, X, Y> {
     pub const BLINK_TIME: u64 = 200_u64;
 
     pub fn new(val: &str) -> Self {
+        let mut state: String<LEN> = String::new();
+        push_truncating(&mut state, val);
         Self {
-            state: String::from_str(val).expect("REASON"),
+            state,
             editable: false,
             blink_state: false,
             invalidate: true,
@@ -62,7 +63,8 @@ impl<A, const LEN: usize, const X: u8, const Y: u8> Widget<&str, A> for Edit<A, 
 
     fn update(&mut self, state: &str) {
         if self.state != state {
-            self.state = String::from_str(state).expect("RESON");
+            self.state.clear();
+            push_truncating(&mut self.state, state);
             self.invalidate = true;
         }
     }

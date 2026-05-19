@@ -3,35 +3,6 @@
 use bitflags::bitflags;
 use embedded_hal::blocking::spi::{Transfer, Write};
 use embedded_hal::digital::v2::OutputPin;
-use volatile_register::{RO as RORegister, RW as RWRegister}; // Закомментировано, требует добавления зависимости
-
-// Чтобы использовать volatile_register, добавьте следующее в ваш Cargo.toml:
-// [dependencies]
-// volatile-register = "0.2"
-//
-// И раскомментируйте строку выше:
-// use volatile_register::{RORegister, RWRegister, WORegister};
-
-// Определяем регистры TDC7200
-#[repr(C)]
-pub struct Tdc7200Registers {
-    pub config1: RWRegister<u8>,
-    pub config2: RWRegister<u8>,
-    pub main_control: RWRegister<u8>,
-    pub trigger1_edge: RWRegister<u8>,
-    pub trigger2_edge: RWRegister<u8>,
-    pub int_mask: RWRegister<u8>,
-    pub int_status: RORegister<u8>,
-    pub timeout1: RWRegister<u16>,
-    pub timeout2: RWRegister<u16>,
-    pub clock_count_overflow_err_stat: RORegister<u8>,
-    pub num_coarse_conversions: RWRegister<u8>,
-    pub measurement1: RORegister<u32>,
-    pub measurement2: RORegister<u32>,
-    pub coarse_counter_overflow_count1: RORegister<u8>,
-    pub coarse_counter_overflow_count2: RORegister<u8>,
-    pub reference_clock_counter: RORegister<u32>,
-}
 
 // Определяем битовые поля для регистров CONFIG1 и CONFIG2
 bitflags! {
@@ -92,18 +63,13 @@ bitflags! {
 pub struct Tdc7200<SPI, CS> {
     spi: SPI,
     chip_select: CS,
-    registers: Option<core::sync::atomic::AtomicPtr<Tdc7200Registers>>,
 }
 
 // Простой конструктор без trait bounds
 impl<SPI, CS> Tdc7200<SPI, CS> {
     /// Создает новый экземпляр драйвера TDC7200.
     pub fn new(spi: SPI, chip_select: CS) -> Self {
-        Tdc7200 {
-            spi,
-            chip_select,
-            registers: None,
-        }
+        Tdc7200 { spi, chip_select }
     }
 }
 

@@ -89,7 +89,7 @@ impl<const OFFSET: usize, const SIZE: i32, const ELEMENT_SIZE: i32>
     }
     fn last_value<S: Storage>(&mut self, storage: &mut S) -> Result<Option<i32>> {
         if self.data.size() > 0 {
-            return Ok(self.find(storage, self.data.time_of_last()).unwrap());
+            return self.find(storage, self.data.time_of_last());
         }
         Ok(None)
     }
