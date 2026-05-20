@@ -1,49 +1,26 @@
 #![cfg_attr(not(test), no_std)]
 
-#[cfg(not(test))]
-extern crate alloc;
+// During the embassy migration most of the embedded glue (hardware/*,
+// history/mbus/modbus/etc.) is gated off because it still imports the
+// old stm32l1xx-hal types. Host tests keep working because they only
+// reach into the pure-Rust modules below.
 
 #[cfg(test)]
 extern crate alloc;
-
-#[cfg(not(test))]
-#[global_allocator]
-static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
-
-#[cfg(not(test))]
-extern crate stm32l1xx_hal as hal;
 
 pub mod apps;
 pub mod calibration;
 pub mod gui;
 pub mod history_lib;
+// measurement/ultrasonic_flow.rs still uses embedded-hal 0.2 API
+// (blocking::spi, digital::v2). Gated off for the embassy port until
+// the TDC drivers are rewritten on embedded-hal 1.0.
+#[cfg(test)]
 pub mod measurement;
 pub mod ui;
 
 pub use apps::{Actions, App};
 pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
-
-#[cfg(not(test))]
-pub mod hardware {
-    pub mod display;
-    pub mod gpio_power;
-    pub mod hd44780;
-    pub mod pins;
-    pub mod tdc1000;
-    pub mod tdc7200;
-
-    pub use display::*;
-    pub use gpio_power::*;
-    pub use hd44780::*;
-    pub use pins::*;
-}
-
-pub mod history;
-pub mod mbus;
-pub mod modbus;
-pub mod modbus_handler;
-pub mod options;
-pub mod shell;
 
 #[cfg(test)]
 mod history_lib_tests;
