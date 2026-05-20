@@ -10,25 +10,22 @@ mod drivers;
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_time::Timer;
+use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use {defmt_rtt as _, panic_probe as _};
 
 use drivers::hd44780::Hd44780;
+use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
     info!("uflowmeter (embassy): boot");
 
-    // Power the LCD and its backlight. PC0 (LcdOn) is active-LOW —
-    // legacy code drives it low to enable the LCD rail. PC5 (LcdLed)
-    // is straight high = backlight on.
+    // LCD power + backlight. PC0 (LcdOn) is active-LOW.
     let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
     let _backlight = Output::new(p.PC5, Level::High, Speed::Low);
 
-    // HD44780 4-bit parallel mode. Pin map per src/hardware/pins.rs:
-    //   RS=PC1, RW=PC2, E=PC3, D4=PA4, D5=PA5, D6=PA6, D7=PA7.
+    // HD44780 4-bit parallel: RS=PC1, RW=PC2, E=PC3, D4..D7 = PA4..PA7.
     let rs = Output::new(p.PC1, Level::Low, Speed::Low);
     let rw = Output::new(p.PC2, Level::Low, Speed::Low);
     let e = Output::new(p.PC3, Level::Low, Speed::Low);
@@ -41,15 +38,36 @@ async fn main(_spawner: Spawner) {
     lcd.init().await;
     info!("lcd init done");
 
-    lcd.set_position(0, 0).await;
-    lcd.write_str("embassy").await;
-    lcd.set_position(0, 1).await;
-    lcd.write_str("alive").await;
+    // Buttons: PB6=Config, PB7=Enter, PB8=Down, PB9=Up (all pull-up).
+    let btn_config = Input::new(p.PB6, Pull::Up);
+    let btn_enter = Input::new(p.PB7, Pull::Up);
+    let btn_down = Input::new(p.PB8, Pull::Up);
+    let btn_up = Input::new(p.PB9, Pull::Up);
+    spawner.spawn(unwrap!(keypad_task(btn_config, btn_enter, btn_down, btn_up)));
 
-    let mut n: u32 = 0;
+    lcd.set_position(0, 0).await;
+    lcd.write_str("press a key").await;
+    lcd.set_position(0, 1).await;
+    lcd.write_str("                ").await;
+
+    let mut last_count: u32 = 0;
     loop {
-        Timer::after_millis(1000).await;
-        info!("tick {}", n);
-        n = n.wrapping_add(1);
+        let event = KEYS.receive().await;
+        let KeyEvent::Pressed(flag) = event;
+        last_count = last_count.wrapping_add(1);
+        info!("key: {} (#{})", defmt::Debug2Format(&flag), last_count);
+        lcd.set_position(0, 1).await;
+        let label = if flag.contains(ButtonFlags::CONFIG) {
+            "Config "
+        } else if flag.contains(ButtonFlags::ENTER) {
+            "Enter  "
+        } else if flag.contains(ButtonFlags::DOWN) {
+            "Down   "
+        } else if flag.contains(ButtonFlags::UP) {
+            "Up     "
+        } else {
+            "?      "
+        };
+        lcd.write_str(label).await;
     }
 }

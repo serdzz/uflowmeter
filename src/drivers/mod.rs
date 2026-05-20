@@ -6,3 +6,4 @@
 //! 1.0 + async APIs.
 
 pub mod hd44780;
+pub mod keypad;
