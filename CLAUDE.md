@@ -74,3 +74,18 @@ Three coupled bugs that **together** keep the device from crashing but break the
 - Update RTIC past 1.1.4 if newer releases fix this.
 
 Until then, the file `src/main.rs:467` ordering and the `write()` at `src/hardware/power.rs:138` are **load-bearing** — do not "fix" them in isolation. The `// gpio_power.up() skipped` style stale comments around `exit_sleep` already led to one bad commit (`4c4776b`, reverted by `e70d707`).
+
+### Failed fix attempt (2026-05-19, do not retry as-is)
+
+Tried this combination expecting it to close #3 without the deeper refactor:
+
+- Fix #1: swap `power.exit_sleep()` before `power.active()` in `exti9_5`.
+- Fix #2: replace `self.rcc.cr.write(...)` with `self.rcc.cr.modify(...)`.
+- Mask SysTick `CTRL.TICKINT` in `enter_stop_mode`, clear `SCB.ICSR.PENDSTCLR` and re-enable `TICKINT` at the end of `exit_sleep` (after `reconfigure_after_stop`). Wrapped the unsafe MMIO in two helpers `mask_systick()` / `unmask_systick_clear_pending()` in `src/hardware/nvic.rs` to stay inside `#![deny(unsafe_code)]`.
+- Removed the `app_request::spawn_after(IDLE_TIMEOUT, DeepSleep)` / `handle.cancel()` churn from the TIM2 timer task; replaced with `app_request::spawn(AppRequest::DeepSleep)` on the `is_active() → false` transition. Removed the `handle: Option<...>` local field too.
+
+Result on hardware: clean boot, RTC wake works, but **first or second button press still HardFaults** with the same `Escalated BusFault → tq::dequeue → SysTick` stack trace at `0x00124xxx`. SysTick masking only narrows the immediate-wake window — corruption is already in the queue's RAM by the time `TICKINT` is re-enabled. Removing TIM2's `spawn_after` doesn't help either, because the only remaining producer (`modbus_poll`) wasn't even firing during the test — the queue should have been empty, yet `peek()` returned `Some(&garbage)`.
+
+So masking + queue hygiene around `Power` is **not** the right layer. The corruption either happens (a) inside `monotonic::now()` returning a value that makes `tq.set_compare()` confuse internal state, or (b) inside `cortex-m-rtic 1.1.4`'s timer-queue implementation itself across STOP. Fixing it requires touching RTIC internals or replacing the monotonic.
+
+All four changes above were reverted; tree returned to `e70d707` parity.
