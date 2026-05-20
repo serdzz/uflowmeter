@@ -1,3 +1,4 @@
+mod clock;
 mod display;
 mod gpio_power;
 mod hd44780;
@@ -8,6 +9,7 @@ mod power;
 mod tdc1000;
 pub mod tdc7200;
 
+pub use clock::*;
 pub use display::*;
 pub use gpio_power::*;
 pub use hd44780::*;

@@ -47,7 +47,6 @@ use rand_core::{RngCore, SeedableRng};
 use rand_pcg::Pcg32;
 use rtic::app;
 use shared_bus_rtic::SharedBus;
-use systick_monotonic::{fugit::ExtU64, Systick};
 use time::Duration;
 use time::{
     macros::{date, time},
@@ -88,7 +87,7 @@ mod app {
     use super::*;
     use hal::exti::TriggerEdge;
 
-    defmt::timestamp!("{=u64:tms}", { monotonics::now().ticks() });
+    defmt::timestamp!("{=u32:ms}", { hardware::now_ms() });
 
     #[shared]
     struct Shared {
@@ -104,7 +103,7 @@ mod app {
         modbus_handler: modbus_handler::ModbusHandler,
         serial: hal::serial::Serial<hal::stm32::USART1>,
         modbus_rx_buf: heapless::Vec<u8, 256>,
-        modbus_last_rx: u64,
+        modbus_last_rx: u32,
         shell_line_buf: heapless::Vec<u8, 80>,
         options: Options,
         tdc1000: Tdc1000Dev,
@@ -117,16 +116,20 @@ mod app {
         keyboard: Keyboard,
         timer: Timer<hal::stm32::TIM2>,
         ui_timer: Timer<hal::stm32::TIM3>,
-        handle: Option<__rtic_internal_app_request_MonoTimer_SpawnHandle>,
         adc: hal::adc::Adc,
         photo_r: PhotoR,
     }
 
-    #[monotonic(binds = SysTick, default = true)]
-    type MonoTimer = Systick<1000>;
-
     #[init]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
+        // No monotonic — RTIC requires the third tuple element but we return
+        // the empty Monotonics() since we removed `#[monotonic]`. Time is
+        // tracked by `hardware::clock` via TIM2 ISR ticks. Without a
+        // monotonic, SysTick must stay off — its vector is unbound, so any
+        // tick would land in panic-probe's DefaultHandler.
+        let mut syst = cx.core.SYST;
+        syst.disable_interrupt();
+        syst.disable_counter();
         defmt::info!("init");
         let mut p = cx.device;
         p.DBGMCU.cr.modify(|_, w| {
@@ -149,9 +152,6 @@ mod app {
         let mut rtc = Rtc::new(p.RTC, &mut p.PWR);
 
         defmt::info!("rtc");
-        let mono = Systick::new(cx.core.SYST, 24_000_000);
-
-        defmt::info!("mono");
 
         let hardware::Pins {
             lcd_rs,
@@ -421,13 +421,31 @@ mod app {
                 keyboard,
                 timer,
                 ui_timer,
-                handle: None,
                 adc,
                 photo_r,
             },
-            init::Monotonics(mono),
+            init::Monotonics(),
         )
     }
+
+    /// No-op SysTick handler. We don't use SysTick (the systick-monotonic
+    /// crate is removed), but binding it here ensures a stale CTRL.ENABLE
+    /// or any spurious tick lands in a safe no-op rather than panic-probe's
+    /// DefaultHandler.
+    #[task(binds = SysTick, priority = 1)]
+    fn systick_noop(_: systick_noop::Context) {}
+
+    /// Catch-all no-op binds for IRQs that may fire spuriously after the
+    /// PLL is restored in `exit_sleep`. Going to DefaultHandler panics
+    /// via panic-probe; binding here drops the IRQ silently.
+    #[task(binds = ADC1, priority = 1)]
+    fn adc1_noop(_: adc1_noop::Context) {}
+
+    #[task(binds = PVD, priority = 1)]
+    fn pvd_noop(_: pvd_noop::Context) {}
+
+    #[task(binds = RTC_ALARM, priority = 1)]
+    fn rtc_alarm_noop(_: rtc_alarm_noop::Context) {}
 
     #[task(binds = RTC_WKUP, priority = 2, shared = [power, rtc, app])]
     fn rtc_timer(ctx: rtc_timer::Context) {
@@ -465,12 +483,22 @@ mod app {
         ExtiExt::unpend(8);
         ExtiExt::unpend(9);
         power.lock(|power| {
+            // NOTE: order matters. active() before exit_sleep() means
+            // exit_sleep is a no-op on button wake (self.sleep already
+            // cleared) — so clocks stay on MSI fallback after STOP. UI
+            // rendering on MSI is degraded but stable.
+            //
+            // The "correct" order (exit_sleep then active) reliably
+            // triggers a HardFault → DefaultHandler → defmt panic chain
+            // somewhere downstream that we couldn't isolate. Suspect
+            // some IRQ (not SysTick/ADC1/PVD/RTC_ALARM) firing only when
+            // PLL is restored on button wake. See CLAUDE.md.
             power.active();
             power.exit_sleep();
         });
     }
 
-    #[task(binds = TIM2, priority = 2, local = [handle,keyboard,timer], shared = [power,lcd,app,ui] )]
+    #[task(binds = TIM2, priority = 2, local = [keyboard,timer], shared = [power,lcd,app,ui] )]
     fn timer(ctx: timer::Context) {
         let timer::SharedResources {
             mut power,
@@ -479,6 +507,10 @@ mod app {
             ui,
         } = ctx.shared;
         ctx.local.timer.clear_irq();
+        // Advance the software monotonic. Has to happen on every TIM2 tick
+        // including while !is_active so power.is_active() can detect the
+        // IDLE_TIMEOUT crossing on subsequent fires.
+        hardware::tick();
         let is_active = power.lock(|power| power.is_active());
         if is_active {
             let event = ctx.local.keyboard.read_ui_keys();
@@ -497,14 +529,11 @@ mod app {
                 ui.get_active();
                 ui.render(app, lcd);
             });
-            if event.is_some() {
-                if let Some(h) = ctx.local.handle.take() {
-                    h.cancel().ok();
-                }
-                *ctx.local.handle =
-                    app_request::spawn_after(Power::IDLE_TIMEOUT.secs(), AppRequest::DeepSleep)
-                        .ok();
-            }
+        } else {
+            // IDLE_TIMEOUT crossed while we held the button + 15 s passed.
+            // Trigger DeepSleep via spawn (not spawn_after — we no longer
+            // have a monotonic and want zero entries in the RTIC TQ).
+            app_request::spawn(AppRequest::DeepSleep).ok();
         }
     }
 
@@ -529,14 +558,12 @@ mod app {
                 ui.get_active();
                 ui.render(app, lcd);
             });
-            let chan_val: u16 = ctx.local.adc.read(ctx.local.photo_r).unwrap_or(1000u16);
-            if chan_val < 500 && *ctx.local.led {
-                *ctx.local.led = false;
-                app_request::spawn(AppRequest::LcdLed(*ctx.local.led)).ok();
-            } else if chan_val > 500 && !*ctx.local.led {
-                *ctx.local.led = true;
-                app_request::spawn(AppRequest::LcdLed(*ctx.local.led)).ok();
-            }
+            // ADC backlight auto-adjust disabled — Adc::power_up() busy-waits
+            // on ADONS which can spin forever if HSI isn't running after
+            // STOP wake. Backlight stays at whatever LcdLed last set it to.
+            let _ = ctx.local.adc;
+            let _ = ctx.local.photo_r;
+            let _ = ctx.local.led;
         }
     }
 
@@ -827,7 +854,7 @@ mod app {
                 }
             }
         });
-        modbus_last_rx.lock(|last| *last = monotonics::now().ticks());
+        modbus_last_rx.lock(|last| *last = hardware::now_ms());
 
         // Check if we have enough for a Modbus frame
         let len = modbus_rx_buf.lock(|buf| buf.len());
@@ -890,10 +917,13 @@ mod app {
     #[task(priority = 1, shared = [serial, modbus_handler, app, options, storage, hour_history, day_history, month_history, modbus_rx_buf, modbus_last_rx])]
     fn modbus_poll(mut ctx: modbus_poll::Context) {
         let mut modbus_last_rx = ctx.shared.modbus_last_rx;
-        let now = monotonics::now().ticks();
+        let now = hardware::now_ms();
         let last = modbus_last_rx.lock(|l| *l);
-        if now - last < 1 {
-            modbus_poll::spawn_after(1_u64.millis()).ok();
+        // tick granularity is 50 ms (TIM2 @ 20 Hz). If now == last the frame
+        // is still being received; drop this call and let the next TIM2
+        // tick + usart1_irq re-enqueue. Previously we used spawn_after(1 ms)
+        // but that requires a monotonic and pollutes the RTIC timer queue.
+        if now == last {
             return;
         }
 

@@ -1,13 +1,13 @@
 #![allow(warnings)]
 #![allow(dead_code)]
 use super::gpio_power::*;
-use crate::app::*;
 use defmt::info;
 use defmt_rtt as _;
 use hal::mco::*;
 use hal::pwr::{Pwr, StopModeConfig};
 use hal::rcc::SysClkSource;
-use systick_monotonic::{fugit::Duration, fugit::ExtU64};
+
+use crate::hardware::clock;
 
 /// Power-management state. STOP entry uses the HAL's typed `Pwr` handle
 /// (`pwr.stop_mode(StopModeConfig::ultra_low_power(), &mut scb)`) and the
@@ -19,11 +19,11 @@ pub struct Power {
     pwr: Pwr,
     scb: cortex_m::peripheral::SCB,
     sleep: bool,
-    active_mode: u64,
+    active_mode: u32,
 }
 
 impl Power {
-    pub const IDLE_TIMEOUT: u64 = 15_000u64;
+    pub const IDLE_TIMEOUT: u32 = 15_000;
 
     pub fn new(
         gpio_power: GpioPower,
@@ -37,14 +37,14 @@ impl Power {
             pwr,
             scb,
             sleep: false,
-            active_mode: 0_u64,
+            active_mode: 0,
         }
     }
 
     pub fn active(&mut self) {
         // Use max(1, now) so that active_mode == 0 always means "no user
         // activity" — see is_active() below.
-        let now = monotonics::now().ticks();
+        let now = clock::now_ms();
         self.active_mode = if now == 0 { 1 } else { now };
         self.sleep = false;
 
@@ -61,7 +61,8 @@ impl Power {
         if self.active_mode == 0 {
             return false;
         }
-        if monotonics::now().ticks() - self.active_mode >= Self::IDLE_TIMEOUT {
+        // wrapping_sub handles u32 ms wrap at ~49 days.
+        if clock::now_ms().wrapping_sub(self.active_mode) >= Self::IDLE_TIMEOUT {
             return false;
         }
         true
@@ -72,9 +73,9 @@ impl Power {
     }
 
     pub fn enter_sleep(&mut self, f: impl FnOnce()) {
-        if !self.is_active() || self.active_mode == 0_u64 {
+        if !self.is_active() || self.active_mode == 0 {
             self.sleep = true;
-            self.active_mode = 0_u64;
+            self.active_mode = 0;
             defmt::info!("-- Enter sleep mode --");
             f();
             #[cfg(feature = "low_power")]
@@ -88,9 +89,9 @@ impl Power {
     /// Callers should call cortex_m::asm::wfi() AFTER releasing the RTIC lock.
     pub fn prepare_sleep(&mut self, f: impl FnOnce()) {
         defmt::info!("prepare_sleep enter");
-        if !self.is_active() || self.active_mode == 0_u64 {
+        if !self.is_active() || self.active_mode == 0 {
             self.sleep = true;
-            self.active_mode = 0_u64;
+            self.active_mode = 0;
             defmt::info!("-- Enter sleep mode --");
             f();
             defmt::info!("callback done");
@@ -124,28 +125,22 @@ impl Power {
             self.sleep = false;
             #[cfg(feature = "low_power")]
             {
-                info!(
-                    "Clock after STOP (before reconfig): {}",
-                    defmt::Debug2Format(&self.rcc.get_sysclk_source()),
-                );
                 // Restore the configured PLL clock — STOP falls back to MSI
                 // on wake. rcc.reconfigure_after_stop() handles this (calls
                 // self.update() internally). MCO output and ADC HSI need a
                 // separate touch because the HAL doesn't restore them.
                 self.rcc.reconfigure_after_stop();
                 self.rcc.update_mco(MCOSel::Hse, MCODiv::Div1);
-                // ADC uses HSI; re-enable and wait for ready.
-                self.rcc.cr.write(|w| w.hsion().set_bit());
+                // ADC uses HSI; re-enable and wait for ready. modify(), not
+                // write() — write() resets CR (clobbers HSEON which trips
+                // the Clock Security System → NMI → DefaultHandler → panic).
+                self.rcc.cr.modify(|_, w| w.hsion().set_bit());
                 while self.rcc.cr.read().hsirdy().bit_is_clear() {}
                 // SLEEPDEEP persists across wake; clear it so any later WFI
                 // (e.g. in idle, before the next prepare_sleep) does normal
                 // Sleep, not STOP.
                 self.scb.clear_sleepdeep();
-                info!(
-                    "--- Wakeup | Clock: {} ({} MHz) ---",
-                    defmt::Debug2Format(&self.rcc.get_sysclk_source()),
-                    self.rcc.clocks.sys_clk().0 / 1_000_000,
-                );
+                defmt::info!("wake");
             }
         }
         ret

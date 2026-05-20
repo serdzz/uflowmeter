@@ -1,4 +1,3 @@
-use crate::app::*;
 use crate::*;
 use bitflags::bitflags;
 use core::fmt;
@@ -67,7 +66,7 @@ pub struct Button<IN> {
     button: IN,
     flag: ButtonFlags,
     state: bool,
-    active: u64,
+    active: u32,
 }
 
 impl<IN, PinError> Button<IN>
@@ -75,29 +74,31 @@ where
     IN: InputPin<Error = PinError>,
     PinError: core::fmt::Debug,
 {
-    const REPEAT_DELAY: u64 = 1000_u64;
-    const REPEAT_INTERVAL: u64 = 150_u64;
+    const REPEAT_DELAY: u32 = 1000;
+    const REPEAT_INTERVAL: u32 = 150;
 
     pub fn new(button: IN, flag: ButtonFlags) -> Self {
         Self {
             button,
             flag,
             state: false,
-            active: 0_u64,
+            active: 0,
         }
     }
 
     pub fn read(&mut self) -> Option<ButtonEvent> {
+        let now = crate::hardware::now_ms();
         if self.button.is_low().unwrap() && !self.state {
             self.state = true;
-            self.active = monotonics::now().ticks() + Self::REPEAT_DELAY;
+            self.active = now.wrapping_add(Self::REPEAT_DELAY);
             return Some(ButtonEvent::Pressed(self.flag));
         } else if self.button.is_high().unwrap() && self.state {
             self.state = false;
             return Some(ButtonEvent::Released(self.flag));
         }
-        if self.state && monotonics::now().ticks() >= self.active {
-            self.active = monotonics::now().ticks() + Self::REPEAT_INTERVAL;
+        // Wrapping comparison: signed cast detects "elapsed >= 0" through wrap.
+        if self.state && (now.wrapping_sub(self.active) as i32) >= 0 {
+            self.active = now.wrapping_add(Self::REPEAT_INTERVAL);
             return Some(ButtonEvent::Pressed(self.flag));
         }
         None
