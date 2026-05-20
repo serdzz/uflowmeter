@@ -75,6 +75,49 @@ Three coupled bugs that **together** keep the device from crashing but break the
 
 Until then, the file `src/main.rs:467` ordering and the `write()` at `src/hardware/power.rs:138` are **load-bearing** — do not "fix" them in isolation. The `// gpio_power.up() skipped` style stale comments around `exit_sleep` already led to one bad commit (`4c4776b`, reverted by `e70d707`).
 
+### Embassy port (branch `rework/embassy`, 2026-05-21)
+
+Sidestepping all three bugs by replacing the runtime entirely. Branch
+state at commit `1c07268`:
+
+- Cargo.toml: embassy-{executor 0.10, stm32 0.6, time 0.5, sync 0.8,
+  futures, embedded-hal} pinned to `serdzz/embassy` via
+  `[patch.crates-io]`. cortex-m-rtic, stm32l1xx-hal, shared-bus-rtic
+  dropped.
+- `src/main.rs.rtic-backup`: verbatim copy of the prior RTIC main.
+- `src/drivers/hd44780.rs`: async 4-bit parallel HD44780 driver using
+  `embassy_stm32::gpio::Output` + `embassy_time::Timer`. Verified on
+  hardware — text renders on the LCD.
+- `src/drivers/keypad.rs`: 20 Hz async polling task for PB6..PB9,
+  emits `KeyEvent::Pressed` into a static channel with the legacy
+  1 s / 150 ms repeat timing. Verified — all four buttons detected
+  and reflected on the LCD.
+- `src/lib.rs`: trimmed to the pure-Rust modules (apps, calibration,
+  gui, history_lib, ui). The legacy `hardware/*`, `measurement/*`,
+  `history.rs`, `mbus.rs`, `modbus*.rs`, `options.rs`, `shell.rs` are
+  gated off — they still use embedded-hal 0.2 + the old HAL.
+
+**Still TODO on the embassy branch:**
+
+- RTC datetime + backup registers (embassy-stm32 exposes this — wire
+  up `Rtc::new`, port the `app.last_uptime_rtc` backup-register dance).
+- STOP mode. Embassy's `low-power` feature is gated on L4/L5/U5/U3/
+  WB/WL/U0 — **not L1**. Two real options:
+    1. Add `stm32l1` to the cfg gates in `embassy-stm32/src/low_power.rs`
+       + write an L1 RTC-based LPTimeDriver. Hours of work, uncertain.
+    2. Skip the embassy executor integration and call `pwr.stop_mode()`
+       manually via the `embassy_stm32::pac::pwr` crate inside an idle
+       watchdog task. embassy_time stops ticking during STOP (TIM3 is
+       gated), which matches the prior SysTick behavior — readers
+       already handle it. Cheap.
+- Port EEPROM (25LC1024) — shared SPI2 between EEPROM / TDC1000 /
+  TDC7200. Use `embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice`.
+- TDC1000 + TDC7200 drivers. Will need to be rewritten on
+  embedded-hal 1.0 (the old ones used `blocking::spi::Transfer/Write`
+  + `digital::v2::OutputPin`).
+- USART1 for Modbus RTU + shell.
+- Wire the existing `ui.rs` event loop on top of the new `KEYS` channel.
+
 ### Failed fix attempt (2026-05-19, do not retry as-is)
 
 Tried this combination expecting it to close #3 without the deeper refactor:
