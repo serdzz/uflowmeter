@@ -121,7 +121,8 @@ async fn main(spawner: Spawner) {
     let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
     // Backlight OFF at boot — first key press wakes it; idle timeout
     // turns it back off so the device spends most of its life in STOP.
-    let mut backlight = Output::new(p.PC5, Level::Low, Speed::Low);
+    // Active-LOW: Level::High = off, set_low() = on.
+    let mut backlight = Output::new(p.PC5, Level::High, Speed::Low);
 
     let rs = Output::new(p.PC1, Level::Low, Speed::Low);
     let rw = Output::new(p.PC2, Level::Low, Speed::Low);
@@ -318,8 +319,9 @@ async fn main(spawner: Spawner) {
         {
             Either6::First(KeyEvent::Pressed(flag)) => {
                 // Any key wakes the LCD (if not already lit) and resets
-                // the idle countdown.
-                backlight.set_high();
+                // the idle countdown. Active-LOW backlight → set_low()
+                // turns it on.
+                backlight.set_low();
                 idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
 
                 let ui_event = if flag.contains(ButtonFlags::ENTER) {
@@ -398,7 +400,7 @@ async fn main(spawner: Spawner) {
             }
             Either6::Sixth(()) => {
                 defmt::info!("idle: backlight off");
-                backlight.set_low();
+                backlight.set_high();
                 idle_deadline = None;
                 lcd_rendered = false;
                 continue;
@@ -491,10 +493,11 @@ fn handle_app_request(
             cortex_m::peripheral::SCB::sys_reset();
         }
         AppRequest::LcdLed(on) => {
+            // Active-LOW backlight: on → set_low, off → set_high.
             if on {
-                backlight.set_high();
-            } else {
                 backlight.set_low();
+            } else {
+                backlight.set_high();
             }
         }
         AppRequest::DeepSleep => {
