@@ -109,6 +109,11 @@ async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.enable_debug_during_sleep = true;
     config.min_stop_pause = Duration::from_millis(10);
+    // MSI 2 MHz instead of the default 4 MHz — halves active-phase
+    // current draw. UART at 115200 needs ~1.84 MHz min for 16x
+    // oversampling and SPI at 1 MHz needs core ≥2 MHz, so this is
+    // the lowest safe range for our workload.
+    config.rcc.msi = Some(embassy_stm32::rcc::MSIRange::RANGE2M);
     let p = embassy_stm32::init(config);
     info!("uflowmeter (embassy): boot");
 
@@ -119,7 +124,11 @@ async fn main(spawner: Spawner) {
     // without holding the lock.
     let (rtc_container, rtc_now) = Rtc::new(p.RTC);
 
-    let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
+    // LCD power (PC0, active-LOW). ON at boot so init runs against a
+    // live panel; switched off together with the backlight on idle
+    // timeout to drop the HD44780 controller's ~0.5–1 mA idle draw.
+    // A re-init runs on the next key press (~50 ms wake budget).
+    let mut lcd_power = Output::new(p.PC0, Level::Low, Speed::Low);
     // Backlight OFF at boot — first key press wakes it; idle timeout
     // turns it back off so the device spends most of its life in STOP.
     // Active-LOW: Level::High = off, set_low() = on.
@@ -285,12 +294,15 @@ async fn main(spawner: Spawner) {
     // next request.
     let mut modbus = ModbusHandler::new(options.slave_address());
 
-    // Idle timeout: backlight goes off `IDLE_TIMEOUT` after the last
-    // key press. `idle_deadline = None` means "no UI session active"
-    // → no timer armed → executor is free to enter STOP.
+    // Idle timeout: backlight + LCD power both go off `IDLE_TIMEOUT`
+    // after the last key press. `idle_deadline = None` means "no UI
+    // session active" → no timer armed → executor is free to enter STOP.
     const IDLE_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_secs(15);
     let mut idle_deadline: Option<Instant> = None;
-    let mut lcd_rendered = false;
+    // Whether the HD44780 currently holds valid state. Cleared when
+    // we cut LCD power; the next key press re-runs lcd.init() before
+    // the first render.
+    let mut lcd_initialized = true;
 
     loop {
         // Build the idle-timeout future. When no session is active we
@@ -315,8 +327,15 @@ async fn main(spawner: Spawner) {
         {
             Either6::First(KeyEvent::Pressed(flag)) => {
                 // Any key wakes the LCD (if not already lit) and resets
-                // the idle countdown. Active-LOW backlight → set_low()
-                // turns it on.
+                // the idle countdown. If the panel was powered down on
+                // the previous idle, bring it back up before the first
+                // render this iteration.
+                if !lcd_initialized {
+                    lcd_power.set_low();
+                    embassy_time::Timer::after_millis(50).await;
+                    lcd.init().await;
+                    lcd_initialized = true;
+                }
                 backlight.set_low();
                 idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
 
@@ -395,26 +414,24 @@ async fn main(spawner: Spawner) {
                 opt_sender.send(options);
             }
             Either6::Sixth(()) => {
-                defmt::info!("idle: backlight off");
+                defmt::info!("idle: backlight + LCD power off");
                 backlight.set_high();
+                lcd_power.set_high();
+                lcd_initialized = false;
                 idle_deadline = None;
-                lcd_rendered = false;
                 continue;
             }
         }
 
         sync_app_datetime(&mut app, &rtc_now);
 
-        // Skip the LCD re-render when the panel is dark — nothing
-        // visible, and skipping saves a flush().await that would
-        // otherwise add ms of busy work per background event.
-        if idle_deadline.is_some() {
+        // Skip the LCD re-render when the panel is dark / powered
+        // down — nothing visible, and skipping saves a flush().await
+        // that would otherwise drive the (now power-gated) HD44780.
+        if idle_deadline.is_some() && lcd_initialized {
             ui.update(&app);
             ui.render(&app, &mut frame);
             frame.flush(&mut lcd).await;
-            lcd_rendered = true;
-        } else {
-            let _ = lcd_rendered;
         }
     }
 }
