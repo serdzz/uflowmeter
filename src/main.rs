@@ -170,6 +170,7 @@ async fn main(spawner: Spawner) {
         uart_cfg,
     ));
     spawner.spawn(unwrap!(drivers::uart::uart_task(uart)));
+    spawner.spawn(unwrap!(drivers::uart::shell_task()));
 
     let btn_config = ExtiInput::new(p.PB6, p.EXTI6, Pull::Up, Irqs);
     let btn_enter = ExtiInput::new(p.PB7, p.EXTI7, Pull::Up, Irqs);
@@ -296,8 +297,10 @@ fn handle_modbus_frame(
                 defmt::warn!("modbus: UART_TX queue full, reply dropped");
             }
         }
-        Err(uflowmeter::modbus::ModbusError::InvalidSlaveAddress) => {
-            // Not for us — silent on the wire is correct.
+        Err(uflowmeter::modbus::ModbusError::InvalidSlaveAddress)
+        | Err(uflowmeter::modbus::ModbusError::InvalidLength)
+        | Err(uflowmeter::modbus::ModbusError::InvalidCrc) => {
+            // Not for us / shell text / line noise — silent.
         }
         Err(e) => defmt::warn!("modbus: handler error {:?}", defmt::Debug2Format(&e)),
     }

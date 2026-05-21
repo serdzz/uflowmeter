@@ -21,6 +21,7 @@ pub mod measurement;
 pub mod modbus;
 pub mod modbus_handler;
 pub mod options;
+pub mod shell;
 pub mod ui;
 
 pub use apps::{Actions, App, AppRequest};

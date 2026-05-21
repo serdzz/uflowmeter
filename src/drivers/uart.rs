@@ -96,3 +96,38 @@ pub async fn uart_task(mut uart: Uart<'static, Async>) {
         }
     }
 }
+
+/// Shell dispatcher: pulls lines from SHELL_LINES, runs them through
+/// `uflowmeter::shell::process_line`, writes the response back via
+/// UART_TX. NotAShellCommand lines are silently dropped — they'll
+/// have already been picked up by the Modbus framer on the same
+/// USART.
+#[embassy_executor::task]
+pub async fn shell_task() {
+    use uflowmeter::shell::{ShellResult, process_line};
+    loop {
+        let line = SHELL_LINES.receive().await;
+        match process_line(&line) {
+            ShellResult::Ok(reply) => {
+                let mut buf: ModbusFrame = Vec::new();
+                if buf.extend_from_slice(reply.as_bytes()).is_ok() {
+                    if UART_TX.try_send(buf).is_err() {
+                        defmt::warn!("shell: UART_TX full, reply dropped");
+                    }
+                } else {
+                    defmt::warn!("shell: reply > {} B, dropped", MAX_FRAME);
+                }
+            }
+            ShellResult::Error(msg) => {
+                let mut buf: ModbusFrame = Vec::new();
+                let _ = buf.extend_from_slice(b"ERR: ");
+                let _ = buf.extend_from_slice(msg.as_bytes());
+                let _ = buf.extend_from_slice(b"\r\n");
+                let _ = UART_TX.try_send(buf);
+            }
+            ShellResult::NotAShellCommand => {
+                // Likely Modbus or noise — drop quietly.
+            }
+        }
+    }
+}
