@@ -5,5 +5,8 @@
 //! 0.2 traits; new code lives here against embassy-stm32 + embedded-hal
 //! 1.0 + async APIs.
 
+pub mod cyrillic;
+pub mod deferred_display;
 pub mod hd44780;
+pub mod hd44780_blocking;
 pub mod keypad;

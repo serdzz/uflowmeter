@@ -144,6 +144,12 @@ impl<'d> Hd44780<'d> {
         Timer::after_micros(40).await;
     }
 
+    /// Public alias for `data()` — used by `drivers::deferred_display`
+    /// to flush per-character ops captured from the sync render path.
+    pub async fn write_byte_pub(&mut self, byte: u8) {
+        self.data(byte).await;
+    }
+
     async fn write_byte(&mut self, byte: u8) {
         self.write_nibble(byte >> 4).await;
         self.write_nibble(byte & 0x0F).await;
