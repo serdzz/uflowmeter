@@ -12,7 +12,8 @@
 //! `Keyboard::read` behavior in src/hardware/keyboard.rs.
 
 use bitflags::bitflags;
-use embassy_stm32::gpio::Input;
+use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::mode::Async;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Instant, Timer};
@@ -59,15 +60,17 @@ impl ButtonState {
 }
 
 /// Embassy task: poll the four button pins, emit press / repeat events
-/// into the global KEYS channel.
+/// into the global KEYS channel. Pins are `ExtiInput` rather than plain
+/// `Input` so the EXTI line stays armed and a button press wakes the
+/// MCU from STOP mode (see drivers/lowpower.rs).
 #[embassy_executor::task]
 pub async fn keypad_task(
-    btn_config: Input<'static>,
-    btn_enter: Input<'static>,
-    btn_down: Input<'static>,
-    btn_up: Input<'static>,
+    btn_config: ExtiInput<'static, Async>,
+    btn_enter: ExtiInput<'static, Async>,
+    btn_down: ExtiInput<'static, Async>,
+    btn_up: ExtiInput<'static, Async>,
 ) {
-    let pins: [(Input<'static>, ButtonFlags); 4] = [
+    let pins: [(ExtiInput<'static, Async>, ButtonFlags); 4] = [
         (btn_config, ButtonFlags::CONFIG),
         (btn_enter, ButtonFlags::ENTER),
         (btn_down, ButtonFlags::DOWN),

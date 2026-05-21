@@ -3,22 +3,43 @@
 
 //! Embassy-based firmware skeleton.
 //!
-//! Status: WIP migration from RTIC. Backup of the prior implementation
-//! lives in `src/main.rs.rtic-backup`.
+//! Uses `embassy_stm32::executor::Executor` so transparent STOP-mode
+//! integration via the `low-power` feature kicks in automatically when
+//! all tasks are blocked. STM32L1 support for that path lives on the
+//! `stm32l1_low_power` branch of `serdzz/embassy` (pinned via
+//! `[patch.crates-io]` in Cargo.toml).
 
 mod drivers;
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
+use embassy_stm32::exti::{self, ExtiInput};
+use embassy_stm32::gpio::{Level, Output, Pull, Speed};
+use embassy_stm32::{Config, bind_interrupts, interrupt};
+use embassy_time::Duration;
 use {defmt_rtt as _, panic_probe as _};
 
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 
-#[embassy_executor::main]
+bind_interrupts!(
+    pub struct Irqs {
+        EXTI9_5 => exti::InterruptHandler<interrupt::typelevel::EXTI9_5>;
+    }
+);
+
+#[embassy_executor::main(executor = "embassy_stm32::executor::Executor", entry = "cortex_m_rt::entry")]
 async fn main(spawner: Spawner) {
-    let p = embassy_stm32::init(Default::default());
+    let mut config = Config::default();
+    // Keep the debugger alive across STOP so probe-rs RTT stays
+    // connected during bring-up. Costs power — flip off for shipped
+    // builds.
+    config.enable_debug_during_sleep = true;
+    // Minimum idle window that justifies STOP entry. Has to be SMALLER
+    // than the keypad polling interval (50 ms) or every poll-period
+    // gap stays "too short" and we never enter STOP.
+    config.min_stop_pause = Duration::from_millis(10);
+    let p = embassy_stm32::init(config);
     info!("uflowmeter (embassy): boot");
 
     // LCD power + backlight. PC0 (LcdOn) is active-LOW.
@@ -38,11 +59,13 @@ async fn main(spawner: Spawner) {
     lcd.init().await;
     info!("lcd init done");
 
-    // Buttons: PB6=Config, PB7=Enter, PB8=Down, PB9=Up (all pull-up).
-    let btn_config = Input::new(p.PB6, Pull::Up);
-    let btn_enter = Input::new(p.PB7, Pull::Up);
-    let btn_down = Input::new(p.PB8, Pull::Up);
-    let btn_up = Input::new(p.PB9, Pull::Up);
+    // Buttons: PB6=Config, PB7=Enter, PB8=Down, PB9=Up (pull-up).
+    // ExtiInput so the EXTI lines stay armed — a falling edge wakes the
+    // MCU from STOP mode (embassy's executor handles entry/exit).
+    let btn_config = ExtiInput::new(p.PB6, p.EXTI6, Pull::Up, Irqs);
+    let btn_enter = ExtiInput::new(p.PB7, p.EXTI7, Pull::Up, Irqs);
+    let btn_down = ExtiInput::new(p.PB8, p.EXTI8, Pull::Up, Irqs);
+    let btn_up = ExtiInput::new(p.PB9, p.EXTI9, Pull::Up, Irqs);
     spawner.spawn(unwrap!(keypad_task(btn_config, btn_enter, btn_down, btn_up)));
 
     lcd.set_position(0, 0).await;
