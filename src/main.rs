@@ -40,6 +40,7 @@ use embassy_futures::select::{Either4, select4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
+use embassy_sync::watch::{Receiver, Watch};
 use uflowmeter::calibration::{CalibData, CalibTable, Calculator, MeterConfig};
 use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
@@ -72,6 +73,13 @@ static HISTORY_TICK: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
 /// resolves to a finite value. Signal coalesces — main loop reads
 /// the freshest value and updates `app.flow`.
 static FLOW_RESULT: Signal<CriticalSectionRawMutex, f32> = Signal::new();
+
+/// Latest Options snapshot. Main loop publishes after every event
+/// that can mutate Options (UI Set* dispatches, Modbus writes);
+/// measurement_task subscribes and rebuilds its calibration
+/// table + MeterConfig whenever `try_changed` fires. Two-slot capacity
+/// leaves room for a second consumer (e.g. a future thermal task).
+static OPTIONS_WATCH: Watch<CriticalSectionRawMutex, Options, 2> = Watch::new();
 
 #[embassy_executor::task]
 async fn history_tick_task() {
@@ -158,6 +166,12 @@ async fn main(spawner: Spawner) {
         options.sensor_type()
     );
 
+    // Publish the boot snapshot before spawning any consumer; subsequent
+    // mutations re-publish via `opt_sender.send(options)`.
+    let opt_sender = OPTIONS_WATCH.sender();
+    opt_sender.send(options);
+    let opt_receiver = unwrap!(OPTIONS_WATCH.receiver());
+
     // Bring up the three history rings — recover existing service
     // metadata from EEPROM where present, fall back to empty state
     // otherwise (also covers the first-power-on case where the EEPROM
@@ -221,7 +235,12 @@ async fn main(spawner: Spawner) {
     // Spawn the measurement loop — runs forever, triggers a TDC1000
     // TX pulse + TDC7200 measurement once per second, logs the raw
     // 24-bit ToF.
-    spawner.spawn(unwrap!(measurement_task(tdc1000, tdc7200, tdc_int, options)));
+    spawner.spawn(unwrap!(measurement_task(
+        tdc1000,
+        tdc7200,
+        tdc_int,
+        opt_receiver
+    )));
 
     // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
     // PC9 (RsPowerEn, active-LOW) powers the RS485 transceiver.
@@ -305,6 +324,9 @@ async fn main(spawner: Spawner) {
                         );
                         // Slave address may have changed.
                         modbus.modbus_mut().set_slave_address(options.slave_address());
+                        // Republish so measurement_task picks up the
+                        // new calibration on its next cycle.
+                        opt_sender.send(options);
                     }
                 }
             }
@@ -319,6 +341,9 @@ async fn main(spawner: Spawner) {
                     &mut month_history,
                     &app,
                 );
+                // Modbus writes mutate Options in-place; republish so
+                // the measurement task sees the change.
+                opt_sender.send(options);
             }
             Either4::Third(()) => {
                 handle_history_tick(
@@ -555,24 +580,35 @@ async fn single_measurement(
 /// Background measurement loop: for each cycle, takes a downstream
 /// and an upstream ToF reading, runs the result through the
 /// `calibration::Calculator`, and signals the resulting flow (m³/h)
-/// to the main loop. The calibration table comes from `Options`
-/// (zero1, v1*, k1* for channel 1 — single-channel mode for now;
-/// channel 2 fields are still wired into Options for future use).
+/// to the main loop. Calibration (table + MeterConfig) is rebuilt
+/// whenever the main loop publishes new Options via OPTIONS_WATCH,
+/// so menu / Modbus tweaks take effect on the next cycle without a
+/// reboot.
 #[embassy_executor::task]
 async fn measurement_task(
     mut tdc1000: Tdc1000Dev,
     mut tdc7200: Tdc7200Dev,
     mut tdc_int: ExtiInput<'static, embassy_stm32::mode::Async>,
-    options: Options,
+    mut opt_rx: Receiver<'static, CriticalSectionRawMutex, Options, 2>,
 ) {
-    // Snapshot the calibration table at startup. Live re-reads from
-    // Options would require shared state with the main loop; for now
-    // a re-flash / power-cycle picks up SetCalibration changes.
-    let table = options_to_calib_table(&options);
-    let calc = Calculator::new(options_to_meter_config(&options));
+    // Pull the initial snapshot (the main loop publishes before
+    // spawning us, so this should always be Some).
+    let mut options = opt_rx.try_get().unwrap_or_default();
+    let mut table = options_to_calib_table(&options);
+    let mut calc = Calculator::new(options_to_meter_config(&options));
 
     loop {
         embassy_time::Timer::after_secs(1).await;
+
+        // Pick up any live calibration changes before kicking off the
+        // next measurement pair.
+        if let Some(new_opts) = opt_rx.try_changed() {
+            options = new_opts;
+            table = options_to_calib_table(&options);
+            calc = Calculator::new(options_to_meter_config(&options));
+            defmt::info!("measurement: calibration refreshed from OPTIONS_WATCH");
+        }
+
         let _ = tdc1000.clear_error_flags();
 
         // Downstream first (channel 0).
