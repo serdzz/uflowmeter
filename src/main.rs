@@ -36,7 +36,7 @@ use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 use uflowmeter::ui::MenuController;
-use uflowmeter::{App, AppRequest, UiEvent};
+use uflowmeter::{App, AppRequest, Options, UiEvent};
 
 bind_interrupts!(
     pub struct Irqs {
@@ -94,11 +94,24 @@ async fn main(spawner: Spawner) {
         spi2_bus,
         Output::new(p.PC10, Level::High, Speed::VeryHigh),
     ));
-    let mut buf = [0u8; 16];
-    match eeprom.read(0, &mut buf) {
-        Ok(()) => info!("eeprom@0: {=[u8]:x}", buf),
-        Err(_) => error!("eeprom read failed"),
-    }
+    // Load Options from EEPROM at offset 0 (with secondary copy
+    // at offset 1024 — handled by Options::load_with_buf).
+    let mut opt_buf = [0u8; uflowmeter::options::Options::SIZE];
+    let options: Options = match Options::load_with_buf(&mut eeprom, &mut opt_buf) {
+        Ok(opt) => {
+            info!("options: loaded from EEPROM");
+            opt
+        }
+        Err(_) => {
+            warn!("options: load failed, using defaults");
+            Options::default()
+        }
+    };
+    info!(
+        "options serial={=u32} sensor_type={=u8}",
+        options.serial_number(),
+        options.sensor_type()
+    );
 
     // TDC1000 — analog frontend, CS=PB11, EN=PB10, RES=PC6.
     let tdc1000_en = Output::new(p.PB10, Level::High, Speed::Low);

@@ -17,9 +17,11 @@ pub mod history_lib;
 // the TDC drivers are rewritten on embedded-hal 1.0.
 #[cfg(test)]
 pub mod measurement;
+pub mod options;
 pub mod ui;
 
 pub use apps::{Actions, App, AppRequest};
+pub use options::{CommType, Options};
 pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 
 #[cfg(test)]

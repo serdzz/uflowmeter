@@ -3,9 +3,6 @@
 use embedded_storage::Storage;
 use modular_bitfield::prelude::*;
 
-#[cfg(not(test))]
-use super::hal;
-
 /// Communication type — determines which protocol runs on USART1
 /// Matches C++ Configuration::CommType
 #[cfg_attr(not(test), derive(defmt::Format))]
@@ -79,18 +76,9 @@ pub enum Error<E> {
     Spi(E),
 }
 
-#[cfg(not(test))]
-impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, core::convert::Infallible>>
-    for Error<hal::spi::Error>
-{
-    fn from(
-        err: microchip_eeprom_25lcxx::Error<hal::spi::Error, core::convert::Infallible>,
-    ) -> Self {
-        match err {
-            microchip_eeprom_25lcxx::Error::SpiError(e) => Error::Spi(e),
-            microchip_eeprom_25lcxx::Error::PinError(_) => Error::Storage,
-            _ => Error::Storage,
-        }
+impl<E> From<E> for Error<E> {
+    fn from(e: E) -> Self {
+        Error::Spi(e)
     }
 }
 
@@ -126,7 +114,7 @@ impl StaticBuf {
 }
 
 impl Options {
-    const SIZE: usize = 1024;
+    pub const SIZE: usize = 1024;
     const OFFSET_PRIMARY: u32 = 0;
     const OFFSET_SECONDARY: u32 = 1024;
 
