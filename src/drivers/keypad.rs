@@ -59,41 +59,94 @@ impl ButtonState {
     }
 }
 
-/// Embassy task: poll the four button pins, emit press / repeat events
-/// into the global KEYS channel. Pins are `ExtiInput` rather than plain
-/// `Input` so the EXTI line stays armed and a button press wakes the
-/// MCU from STOP mode (see drivers/lowpower.rs).
+/// Embassy task: two-mode keypad driver.
+///
+///   * IDLE — no button currently held. Pure `select4` over the four
+///     ExtiInput falling-edge futures. No timer is armed, so this
+///     branch doesn't keep the embassy time-driver out of STOP and
+///     the MCU sleeps until a physical press wakes EXTI.
+///   * PRESSED — at least one button is down. Falls back to the
+///     legacy 50 ms POLL_INTERVAL so we can detect release + drive
+///     the REPEAT_DELAY / REPEAT_INTERVAL repeat fire. Exits back to
+///     IDLE once every state slot reports `pressed == false`.
+///
+/// Power impact: removes the ~20 Hz wake the constant poll used to
+/// cost while the device sat untouched.
 #[embassy_executor::task]
 pub async fn keypad_task(
-    btn_config: ExtiInput<'static, Async>,
-    btn_enter: ExtiInput<'static, Async>,
-    btn_down: ExtiInput<'static, Async>,
-    btn_up: ExtiInput<'static, Async>,
+    mut btn_config: ExtiInput<'static, Async>,
+    mut btn_enter: ExtiInput<'static, Async>,
+    mut btn_down: ExtiInput<'static, Async>,
+    mut btn_up: ExtiInput<'static, Async>,
 ) {
-    let pins: [(ExtiInput<'static, Async>, ButtonFlags); 4] = [
-        (btn_config, ButtonFlags::CONFIG),
-        (btn_enter, ButtonFlags::ENTER),
-        (btn_down, ButtonFlags::DOWN),
-        (btn_up, ButtonFlags::UP),
+    use embassy_futures::select::{Either4, select4};
+
+    const FLAGS: [ButtonFlags; 4] = [
+        ButtonFlags::CONFIG,
+        ButtonFlags::ENTER,
+        ButtonFlags::DOWN,
+        ButtonFlags::UP,
     ];
-    let mut state = [ButtonState::new(), ButtonState::new(), ButtonState::new(), ButtonState::new()];
+    let mut state = [
+        ButtonState::new(),
+        ButtonState::new(),
+        ButtonState::new(),
+        ButtonState::new(),
+    ];
 
     loop {
+        // IDLE — wait for any falling edge via EXTI. No timer armed.
+        let idx = match select4(
+            btn_config.wait_for_falling_edge(),
+            btn_enter.wait_for_falling_edge(),
+            btn_down.wait_for_falling_edge(),
+            btn_up.wait_for_falling_edge(),
+        )
+        .await
+        {
+            Either4::First(()) => 0,
+            Either4::Second(()) => 1,
+            Either4::Third(()) => 2,
+            Either4::Fourth(()) => 3,
+        };
         let now = Instant::now();
-        for (idx, (pin, flag)) in pins.iter().enumerate() {
-            let is_low = pin.is_low();
-            let st = &mut state[idx];
-            if is_low && !st.pressed {
-                st.pressed = true;
-                st.next_repeat = now + REPEAT_DELAY;
-                KEYS.try_send(KeyEvent::Pressed(*flag)).ok();
-            } else if !is_low && st.pressed {
-                st.pressed = false;
-            } else if st.pressed && now >= st.next_repeat {
-                st.next_repeat = now + REPEAT_INTERVAL;
-                KEYS.try_send(KeyEvent::Pressed(*flag)).ok();
+        state[idx].pressed = true;
+        state[idx].next_repeat = now + REPEAT_DELAY;
+        KEYS.try_send(KeyEvent::Pressed(FLAGS[idx])).ok();
+
+        // PRESSED — keep polling at 20 Hz until all keys go up. This
+        // is the only window where we add a sub-100 ms alarm; the
+        // user is interacting so STOP duty here is expected to drop.
+        loop {
+            Timer::after(POLL_INTERVAL).await;
+            let now = Instant::now();
+            let lows = [
+                btn_config.is_low(),
+                btn_enter.is_low(),
+                btn_down.is_low(),
+                btn_up.is_low(),
+            ];
+            let mut any_pressed = false;
+            for i in 0..4 {
+                let is_low = lows[i];
+                let st = &mut state[i];
+                if is_low && !st.pressed {
+                    st.pressed = true;
+                    st.next_repeat = now + REPEAT_DELAY;
+                    KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).ok();
+                } else if !is_low && st.pressed {
+                    st.pressed = false;
+                } else if st.pressed && now >= st.next_repeat {
+                    st.next_repeat = now + REPEAT_INTERVAL;
+                    KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).ok();
+                }
+                if st.pressed {
+                    any_pressed = true;
+                }
+            }
+            if !any_pressed {
+                break;
             }
         }
-        Timer::after(POLL_INTERVAL).await;
     }
 }
