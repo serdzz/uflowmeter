@@ -28,4 +28,39 @@ impl<'d, D: SpiDevice> Tdc7200<'d, D> {
             .transaction(&mut [Operation::Write(&cmd), Operation::Read(&mut rx)])?;
         Ok(rx[0])
     }
+
+    pub fn write_register(&mut self, address: u8, value: u8) -> Result<(), D::Error> {
+        let cmd = [(address & 0x1F) | 0x40, value];
+        self.spi.write(&cmd)
+    }
+
+    /// Bulk-load a config blob — one byte per register starting at 0x00.
+    /// Matches the legacy `Options::tdc7200_regs` (10 bytes).
+    pub fn load_config(&mut self, regs: &[u8]) -> Result<(), D::Error> {
+        for (i, b) in regs.iter().enumerate() {
+            self.write_register(i as u8, *b)?;
+        }
+        Ok(())
+    }
+
+    /// Read a 24-bit big-endian time value (TIME1/CLOCK_COUNT1/etc.).
+    pub fn read_u24(&mut self, address: u8) -> Result<u32, D::Error> {
+        let cmd = [address & 0x1F];
+        let mut rx = [0u8; 3];
+        self.spi
+            .transaction(&mut [Operation::Write(&cmd), Operation::Read(&mut rx)])?;
+        Ok(((rx[0] as u32) << 16) | ((rx[1] as u32) << 8) | (rx[2] as u32))
+    }
+
+    /// Kick off a single ToF measurement (sets CONFIG1.START_MEAS).
+    /// INT pin (PB0) goes low on completion — wait via ExtiInput.
+    pub fn start_measurement(&mut self) -> Result<(), D::Error> {
+        // CONFIG1 (0x00): START_MEAS=1.
+        self.write_register(0x00, 0x01)
+    }
+
+    /// Read TIME1 (0x10) — 24-bit raw ToF value.
+    pub fn read_time1(&mut self) -> Result<u32, D::Error> {
+        self.read_u24(0x10)
+    }
 }

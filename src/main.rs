@@ -40,6 +40,7 @@ use uflowmeter::{App, AppRequest, Options, UiEvent};
 
 bind_interrupts!(
     pub struct Irqs {
+        EXTI0 => exti::InterruptHandler<interrupt::typelevel::EXTI0>;
         EXTI9_5 => exti::InterruptHandler<interrupt::typelevel::EXTI9_5>;
         USART1 => usart::InterruptHandler<peripherals::USART1>;
         DMA1_CHANNEL4 => embassy_stm32::dma::InterruptHandler<peripherals::DMA1_CH4>;
@@ -121,10 +122,13 @@ async fn main(spawner: Spawner) {
         tdc1000_en,
         tdc1000_res,
     );
-    match tdc1000.read_register(0x07) {
-        Ok(v) => info!("tdc1000 reg 0x07: {:#04x}", v),
-        Err(_) => error!("tdc1000 read failed"),
+    // Load TDC1000 config from options (legacy stored a 10-byte
+    // register dump in options.tdc1000_regs).
+    let tdc1000_regs = options.tdc1000_regs().to_le_bytes();
+    if tdc1000.load_config(&tdc1000_regs[..10]).is_err() {
+        warn!("tdc1000: load_config failed");
     }
+    let _ = tdc1000.clear_error_flags();
 
     // TDC7200 — time-to-digital, CS=PB12, EN=PB1.
     let tdc7200_en = Output::new(p.PB1, Level::High, Speed::Low);
@@ -132,10 +136,19 @@ async fn main(spawner: Spawner) {
         SpiDevice::new(spi2_bus, Output::new(p.PB12, Level::High, Speed::VeryHigh)),
         tdc7200_en,
     );
-    match tdc7200.read_register(0x00) {
-        Ok(v) => info!("tdc7200 reg 0x00: {:#04x}", v),
-        Err(_) => error!("tdc7200 read failed"),
+    let tdc7200_regs = options.tdc7200_regs().to_le_bytes();
+    if tdc7200.load_config(&tdc7200_regs[..10]).is_err() {
+        warn!("tdc7200: load_config failed");
     }
+
+    // TDC7200 INT line (active-LOW) on PB0 → wakes us at end of
+    // measurement via EXTI0.
+    let tdc_int = ExtiInput::new(p.PB0, p.EXTI0, Pull::Up, Irqs);
+
+    // Spawn the measurement loop — runs forever, triggers a TDC1000
+    // TX pulse + TDC7200 measurement once per second, logs the raw
+    // 24-bit ToF.
+    spawner.spawn(unwrap!(measurement_task(tdc1000, tdc7200, tdc_int)));
 
     // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
     // PC9 (RsPowerEn, active-LOW) powers the RS485 transceiver.
@@ -244,6 +257,61 @@ fn handle_app_request(req: AppRequest, backlight: &mut Output<'static>) {
         AppRequest::ExitShell | AppRequest::EnterCalibration => {
             defmt::trace!("AppRequest::Exit/Enter (no-op)");
         }
+    }
+}
+
+/// Background measurement loop: alternate TDC1000 channels (downstream
+/// / upstream), trigger a single ToF measurement, wait for TDC7200
+/// INT, read TIME1, log. First-pass — no flow-velocity calculation,
+/// no app.flow update yet.
+type Tdc1000Dev = drivers::tdc1000::Tdc1000<
+    'static,
+    embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice<
+        'static,
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        embassy_stm32::spi::Spi<'static, Blocking, embassy_stm32::spi::mode::Master>,
+        Output<'static>,
+    >,
+>;
+type Tdc7200Dev = drivers::tdc7200::Tdc7200<
+    'static,
+    embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice<
+        'static,
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        embassy_stm32::spi::Spi<'static, Blocking, embassy_stm32::spi::mode::Master>,
+        Output<'static>,
+    >,
+>;
+
+#[embassy_executor::task]
+async fn measurement_task(
+    mut tdc1000: Tdc1000Dev,
+    mut tdc7200: Tdc7200Dev,
+    mut tdc_int: ExtiInput<'static, embassy_stm32::mode::Async>,
+) {
+    let mut downstream = true;
+    loop {
+        embassy_time::Timer::after_secs(1).await;
+        let _ = tdc1000.set_channel(!downstream);
+        let _ = tdc1000.clear_error_flags();
+        if tdc7200.start_measurement().is_err() {
+            defmt::error!("tdc7200 start failed");
+            continue;
+        }
+        // INT goes LOW on done. Wait at most 50 ms.
+        match embassy_time::with_timeout(
+            embassy_time::Duration::from_millis(50),
+            tdc_int.wait_for_falling_edge(),
+        )
+        .await
+        {
+            Ok(()) => match tdc7200.read_time1() {
+                Ok(t) => defmt::info!("tof ch={=u8} time1={=u32}", downstream as u8, t),
+                Err(_) => defmt::error!("tdc7200 read_time1 failed"),
+            },
+            Err(_) => defmt::warn!("tdc7200 INT timeout (ch={=u8})", downstream as u8),
+        }
+        downstream = !downstream;
     }
 }
 

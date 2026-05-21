@@ -34,4 +34,34 @@ impl<'d, D: SpiDevice> Tdc1000<'d, D> {
             .transaction(&mut [Operation::Write(&cmd), Operation::Read(&mut rx)])?;
         Ok(rx[0])
     }
+
+    pub fn write_register(&mut self, address: u8, value: u8) -> Result<(), D::Error> {
+        let cmd = [(address & 0x7F) | 0x80, value];
+        self.spi.write(&cmd)
+    }
+
+    /// Bulk-load a config blob — one byte per register starting at 0x00.
+    /// Matches the legacy `Options::tdc1000_regs` (10 bytes).
+    pub fn load_config(&mut self, regs: &[u8]) -> Result<(), D::Error> {
+        for (i, b) in regs.iter().enumerate() {
+            self.write_register(i as u8, *b)?;
+        }
+        Ok(())
+    }
+
+    /// Select TDC1000 channel. Toggles bit 0 of CONFIG_2 (reg 0x02).
+    pub fn set_channel(&mut self, ch2: bool) -> Result<(), D::Error> {
+        let mut v = self.read_register(0x02)?;
+        if ch2 {
+            v |= 0x01;
+        } else {
+            v &= !0x01;
+        }
+        self.write_register(0x02, v)
+    }
+
+    /// Clear ERROR_FLAGS (reg 0x07).
+    pub fn clear_error_flags(&mut self) -> Result<(), D::Error> {
+        self.write_register(0x07, 0xFF)
+    }
 }
