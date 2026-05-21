@@ -97,6 +97,7 @@ bind_interrupts!(
     pub struct Irqs {
         EXTI0 => exti::InterruptHandler<interrupt::typelevel::EXTI0>;
         EXTI9_5 => exti::InterruptHandler<interrupt::typelevel::EXTI9_5>;
+        EXTI15_10 => exti::InterruptHandler<interrupt::typelevel::EXTI15_10>;
         USART1 => usart::InterruptHandler<peripherals::USART1>;
         DMA1_CHANNEL4 => embassy_stm32::dma::InterruptHandler<peripherals::DMA1_CH4>;
         DMA1_CHANNEL5 => embassy_stm32::dma::InterruptHandler<peripherals::DMA1_CH5>;
@@ -252,23 +253,19 @@ async fn main(spawner: Spawner) {
     // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
     // PC9 (RsPowerEn, active-LOW) powers the RS485 transceiver.
     let _rs_power = Output::new(p.PC9, Level::Low, Speed::Low);
-    let mut uart_cfg = UartConfig::default();
-    uart_cfg.baudrate = 115200;
-    // NOTE: USART1 (DMA-async) pins REFCOUNT_STOP1 > 0 while enabled,
-    // so embassy's transparent STOP mode silently skips STOP entry
-    // for the lifetime of `uart`. Confirmed by experiment: commenting
-    // out this init alone bumps `enter stop` from 1/run to ~35/sec.
-    // Argument order: (peri, rx, tx, tx_dma, rx_dma, irq, config).
-    let uart = unwrap!(Uart::new(
+    // USART1 stays uninitialised at boot. `uart_session_task` brings
+    // it up on demand (EXTI on PA10 wakes us from STOP for the first
+    // incoming start bit; for unsolicited TX we wake from UART_TX
+    // channel push), then tears it down after SESSION_IDLE_TIMEOUT
+    // of quiet so REFCOUNT_STOP1 drops and the executor sleeps.
+    spawner.spawn(unwrap!(drivers::uart::uart_session_task(
         p.USART1,
         p.PA10,
         p.PA9,
         p.DMA1_CH4,
         p.DMA1_CH5,
-        Irqs,
-        uart_cfg,
-    ));
-    spawner.spawn(unwrap!(drivers::uart::uart_task(uart)));
+        p.EXTI10,
+    )));
     spawner.spawn(unwrap!(drivers::uart::shell_task()));
     spawner.spawn(unwrap!(history_tick_task()));
 

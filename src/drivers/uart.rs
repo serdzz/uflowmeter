@@ -15,12 +15,17 @@
 //! 3.5 char time is ~305 µs but the spec floor wins, so we use 1.75 ms.
 
 use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::gpio::Pull;
 use embassy_stm32::mode::Async;
-use embassy_stm32::usart::Uart;
+use embassy_stm32::usart::{Config as UartConfig, Uart};
+use embassy_stm32::{Peri, peripherals};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use heapless::Vec;
+
+use crate::Irqs;
 
 const FRAME_GAP: Duration = Duration::from_micros(1750);
 const MAX_FRAME: usize = 256;
@@ -44,36 +49,128 @@ pub static UART_TX: ModbusChannel = Channel::new();
 pub static SHELL_ACTIONS: Channel<CriticalSectionRawMutex, uflowmeter::shell::ShellAction, 4> =
     Channel::new();
 
+/// Time the USART stays initialised after the last RX/TX event
+/// before we tear it down again. Long enough for a Modbus master to
+/// retry once after its first attempt loses the wake-byte; short
+/// enough to spend most of the time in STOP.
+const SESSION_IDLE_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// EXTI-wake UART session task. While idle, PA10 is an EXTI input
+/// pulled high — that doesn't bump REFCOUNT_STOP1, so the embassy
+/// low-power layer is free to enter STOP. The first incoming start
+/// bit (PA10 falls) wakes us; we then initialise the USART proper
+/// and run a normal framer session until the line stays quiet for
+/// `SESSION_IDLE_TIMEOUT`, at which point we tear down USART and
+/// drop back to the EXTI wait.
+///
+/// Wake-byte loss: the first byte of every new transmission is lost
+/// (USART is still off when the start bit arrives). Standard Modbus
+/// masters retry on CRC mismatch, so this is acceptable. Shell users
+/// will lose the first character of the first command after idle;
+/// terminal echo helps the operator notice.
 #[embassy_executor::task]
-pub async fn uart_task(mut uart: Uart<'static, Async>) {
+pub async fn uart_session_task(
+    mut usart_peri: Peri<'static, peripherals::USART1>,
+    mut rx_pin: Peri<'static, peripherals::PA10>,
+    mut tx_pin: Peri<'static, peripherals::PA9>,
+    mut tx_dma: Peri<'static, peripherals::DMA1_CH4>,
+    mut rx_dma: Peri<'static, peripherals::DMA1_CH5>,
+    mut exti10: Peri<'static, peripherals::EXTI10>,
+) {
+    loop {
+        // PHASE 1 — idle: pure ExtiInput on PA10. Waits for the line
+        // to fall (start bit) or for a pending TX (something we want
+        // to send unprompted, e.g. an unsolicited shell prompt).
+        let woken_by_tx = {
+            let mut rx_exti = ExtiInput::new(
+                rx_pin.reborrow(),
+                exti10.reborrow(),
+                Pull::Up,
+                Irqs,
+            );
+            match select(rx_exti.wait_for_falling_edge(), UART_TX.receive()).await {
+                Either::First(()) => {
+                    defmt::info!("uart: wake (EXTI on PA10)");
+                    None
+                }
+                Either::Second(tx) => {
+                    defmt::info!("uart: wake (UART_TX pending, {} B)", tx.len());
+                    Some(tx)
+                }
+            }
+        }; // ExtiInput drops here → PA10 / EXTI10 free again
+
+        // PHASE 2 — init USART for a session.
+        let mut cfg = UartConfig::default();
+        cfg.baudrate = 115200;
+        let mut uart = match Uart::new(
+            usart_peri.reborrow(),
+            rx_pin.reborrow(),
+            tx_pin.reborrow(),
+            tx_dma.reborrow(),
+            rx_dma.reborrow(),
+            Irqs,
+            cfg,
+        ) {
+            Ok(u) => u,
+            Err(e) => {
+                defmt::error!("uart: init failed {:?}", defmt::Debug2Format(&e));
+                continue;
+            }
+        };
+
+        // If we were woken by TX, flush it first.
+        if let Some(tx) = woken_by_tx {
+            if let Err(e) = uart.write(&tx).await {
+                defmt::error!("uart write error: {}", e);
+            }
+        }
+
+        // PHASE 3 — run the framer session until the line goes quiet.
+        run_session(&mut uart).await;
+
+        // PHASE 4 — uart dropped at end of loop, releasing USART /
+        // pins / DMA. STOP refcount drops, executor sleeps.
+    }
+}
+
+/// Read/dispatch loop. Returns when the line has been quiet for
+/// SESSION_IDLE_TIMEOUT and there is no pending TX/frame work.
+async fn run_session(uart: &mut Uart<'_, Async>) {
     let mut buf = [0u8; 1];
     let mut line: ShellLine = Vec::new();
     let mut frame: ModbusFrame = Vec::new();
+
     loop {
         if frame.is_empty() && line.is_empty() {
-            // Idle: pure async wait on RX or TX — no timers, so the
-            // executor's low-power layer is free to enter STOP.
-            match select(uart.read(&mut buf), UART_TX.receive()).await {
-                Either::First(r) => handle_read(r, &buf, &mut line, &mut frame, &mut uart).await,
-                Either::Second(tx_data) => write_tx(&tx_data, &mut uart).await,
+            // No frame in progress — wait for RX, TX, or session timeout.
+            match select3(
+                uart.read(&mut buf),
+                Timer::after(SESSION_IDLE_TIMEOUT),
+                UART_TX.receive(),
+            )
+            .await
+            {
+                Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, uart).await,
+                Either3::Second(_) => {
+                    // Quiet for SESSION_IDLE_TIMEOUT → tear down USART.
+                    defmt::info!("uart: session idle, sleep");
+                    return;
+                }
+                Either3::Third(tx_data) => write_tx(&tx_data, uart).await,
             }
         } else {
-            // Have pending bytes — race RX against the Modbus inter-byte
-            // gap timer + pending TX. Only this branch keeps a sub-10ms
-            // alarm armed, which is fine because the master is actively
-            // sending us a frame.
+            // Mid-frame — race FRAME_GAP for modbus boundary detection.
             match select3(uart.read(&mut buf), Timer::after(FRAME_GAP), UART_TX.receive()).await {
-                Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, &mut uart).await,
+                Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, uart).await,
                 Either3::Second(_) => {
-                    // Inter-byte gap exceeded → close out the modbus frame.
-                    // (Shell lines wait for explicit \r/\n.)
                     if !frame.is_empty() {
                         defmt::info!("modbus frame: {=[u8]:x}", frame.as_slice());
                         let _ = MODBUS_FRAMES.try_send(frame.clone());
                         frame.clear();
                     }
                 }
-                Either3::Third(tx_data) => write_tx(&tx_data, &mut uart).await,
+                Either3::Third(tx_data) => write_tx(&tx_data, uart).await,
             }
         }
     }
@@ -84,7 +181,7 @@ async fn handle_read(
     buf: &[u8; 1],
     line: &mut ShellLine,
     frame: &mut ModbusFrame,
-    uart: &mut Uart<'static, Async>,
+    uart: &mut Uart<'_, Async>,
 ) {
     match r {
         Ok(()) => {
@@ -112,7 +209,7 @@ async fn handle_read(
     }
 }
 
-async fn write_tx(tx_data: &ModbusFrame, uart: &mut Uart<'static, Async>) {
+async fn write_tx(tx_data: &ModbusFrame, uart: &mut Uart<'_, Async>) {
     defmt::info!("uart tx {} B", tx_data.len());
     if let Err(e) = uart.write(tx_data).await {
         defmt::error!("uart write error: {}", e);
