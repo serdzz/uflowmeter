@@ -98,7 +98,7 @@ async fn main(spawner: Spawner) {
     // Load Options from EEPROM at offset 0 (with secondary copy
     // at offset 1024 — handled by Options::load_with_buf).
     let mut opt_buf = [0u8; uflowmeter::options::Options::SIZE];
-    let options: Options = match Options::load_with_buf(&mut eeprom, &mut opt_buf) {
+    let mut options: Options = match Options::load_with_buf(&mut eeprom, &mut opt_buf) {
         Ok(opt) => {
             info!("options: loaded from EEPROM");
             opt
@@ -207,7 +207,13 @@ async fn main(spawner: Spawner) {
 
         if let Some(e) = ui_event {
             if let Some(req) = ui.event(e, &app) {
-                handle_app_request(req, &mut backlight);
+                handle_app_request(
+                    req,
+                    &mut backlight,
+                    &mut options,
+                    &mut eeprom,
+                    &mut opt_buf,
+                );
             }
         }
         sync_app_datetime(&mut app, &rtc_now);
@@ -217,13 +223,30 @@ async fn main(spawner: Spawner) {
     }
 }
 
-/// First-pass AppRequest dispatcher. Wire up handlers as the
-/// dependencies (EEPROM-backed options, RTC set_datetime, TDC
-/// measurement orchestration) get ported.
-fn handle_app_request(req: AppRequest, backlight: &mut Output<'static>) {
+type Eeprom = drivers::eeprom::Eeprom25Lc1024<
+    embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice<
+        'static,
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        embassy_stm32::spi::Spi<'static, Blocking, embassy_stm32::spi::mode::Master>,
+        Output<'static>,
+    >,
+>;
+
+/// AppRequest dispatcher. Options-mutating variants update the
+/// in-memory `options` then persist the whole blob to EEPROM via
+/// `Options::save_with_buf` (dual-page CRC layout).
+fn handle_app_request(
+    req: AppRequest,
+    backlight: &mut Output<'static>,
+    options: &mut Options,
+    eeprom: &mut Eeprom,
+    buf: &mut [u8; uflowmeter::options::Options::SIZE],
+) {
     match req {
         AppRequest::SystemReset => {
             defmt::info!("AppRequest::SystemReset");
+            // Save options before reset — matches legacy behavior.
+            let _ = options.save_with_buf(eeprom, buf);
             cortex_m::peripheral::SCB::sys_reset();
         }
         AppRequest::LcdLed(on) => {
@@ -248,15 +271,37 @@ fn handle_app_request(req: AppRequest, backlight: &mut Output<'static>) {
         AppRequest::SetHistory(_, _) => {
             defmt::trace!("AppRequest::SetHistory (unimplemented)");
         }
-        AppRequest::SetCommType(_)
-        | AppRequest::SetAddress(_)
-        | AppRequest::SetMuster(_)
-        | AppRequest::SetNegative(_) => {
-            defmt::warn!("AppRequest::Set* — options persistence not wired yet");
+        AppRequest::SetCommType(v) => {
+            options.set_comm_type(v);
+            persist_options(options, eeprom, buf);
+        }
+        AppRequest::SetAddress(v) => {
+            options.set_slave_address(v);
+            persist_options(options, eeprom, buf);
+        }
+        AppRequest::SetNegative(on) => {
+            options.set_enable_negative(on as u8);
+            persist_options(options, eeprom, buf);
+        }
+        AppRequest::SetMuster(_) => {
+            // Muster is UI-only (EditBoxState) in the legacy code —
+            // doesn't have a dedicated Options field. No-op.
+            defmt::trace!("AppRequest::SetMuster — UI-only, not persisted");
         }
         AppRequest::ExitShell | AppRequest::EnterCalibration => {
             defmt::trace!("AppRequest::Exit/Enter (no-op)");
         }
+    }
+}
+
+fn persist_options(
+    options: &mut Options,
+    eeprom: &mut Eeprom,
+    buf: &mut [u8; uflowmeter::options::Options::SIZE],
+) {
+    match options.save_with_buf(eeprom, buf) {
+        Ok(()) => defmt::info!("options: saved to EEPROM"),
+        Err(_) => defmt::error!("options: save failed"),
     }
 }
 
