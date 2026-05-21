@@ -140,7 +140,6 @@ impl Power {
                 // (e.g. in idle, before the next prepare_sleep) does normal
                 // Sleep, not STOP.
                 self.scb.clear_sleepdeep();
-                defmt::info!("wake");
             }
         }
         ret

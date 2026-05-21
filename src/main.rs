@@ -21,7 +21,7 @@ use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::mode::Blocking;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::rtc::{Rtc, RtcTimeProvider};
+use embassy_stm32::rtc::{DateTime as RtcDateTime, DayOfWeek, Rtc, RtcContainer, RtcTimeProvider};
 use embassy_stm32::usart::{self, Config as UartConfig, Uart};
 use embassy_stm32::{Config, bind_interrupts, interrupt, peripherals};
 use embassy_sync::blocking_mutex::NoopMutex;
@@ -57,10 +57,11 @@ async fn main(spawner: Spawner) {
     info!("uflowmeter (embassy): boot");
 
     // RTC: low-power Rtc::new takes only the peripheral and returns
-    // (container, time_provider). `_rtc_container` lives until end of
-    // main so the low-power executor sees the RTC; `rtc_now` lets us
-    // read DateTime without holding a lock.
-    let (_rtc_container, rtc_now) = Rtc::new(p.RTC);
+    // (container, time_provider). The container holds the Rtc behind
+    // a CriticalSection Mutex so other tasks (like embassy's low-power
+    // executor) can also reach in. `rtc_now` lets us read DateTime
+    // without holding the lock.
+    let (rtc_container, rtc_now) = Rtc::new(p.RTC);
 
     let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
     let mut backlight = Output::new(p.PC5, Level::High, Speed::Low);
@@ -213,6 +214,7 @@ async fn main(spawner: Spawner) {
                     &mut options,
                     &mut eeprom,
                     &mut opt_buf,
+                    &rtc_container,
                 );
             }
         }
@@ -241,6 +243,7 @@ fn handle_app_request(
     options: &mut Options,
     eeprom: &mut Eeprom,
     buf: &mut [u8; uflowmeter::options::Options::SIZE],
+    rtc: &RtcContainer,
 ) {
     match req {
         AppRequest::SystemReset => {
@@ -265,8 +268,8 @@ fn handle_app_request(
             // orchestration is ported. For now just log.
             defmt::trace!("AppRequest::Process (unimplemented)");
         }
-        AppRequest::SetDateTime(_dt) => {
-            defmt::warn!("AppRequest::SetDateTime — RTC set_datetime not wired yet");
+        AppRequest::SetDateTime(dt) => {
+            set_rtc_datetime(rtc, dt);
         }
         AppRequest::SetHistory(_, _) => {
             defmt::trace!("AppRequest::SetHistory (unimplemented)");
@@ -303,6 +306,45 @@ fn persist_options(
         Ok(()) => defmt::info!("options: saved to EEPROM"),
         Err(_) => defmt::error!("options: save failed"),
     }
+}
+
+/// Push a `time::PrimitiveDateTime` (what the UI hands us) into the
+/// embassy RTC. Goes through `critical_section::with` because under
+/// the low-power feature the Rtc lives inside a CS Mutex shared with
+/// embassy's executor.
+fn set_rtc_datetime(rtc: &RtcContainer, dt: time::PrimitiveDateTime) {
+    let dow = match dt.weekday() {
+        time::Weekday::Monday => DayOfWeek::Monday,
+        time::Weekday::Tuesday => DayOfWeek::Tuesday,
+        time::Weekday::Wednesday => DayOfWeek::Wednesday,
+        time::Weekday::Thursday => DayOfWeek::Thursday,
+        time::Weekday::Friday => DayOfWeek::Friday,
+        time::Weekday::Saturday => DayOfWeek::Saturday,
+        time::Weekday::Sunday => DayOfWeek::Sunday,
+    };
+    let rtc_dt = match RtcDateTime::from(
+        dt.year() as u16,
+        dt.month() as u8,
+        dt.day(),
+        dow,
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+        0,
+    ) {
+        Ok(v) => v,
+        Err(_) => {
+            defmt::error!("SetDateTime: invalid components");
+            return;
+        }
+    };
+    critical_section::with(|cs| {
+        let mut borrow = rtc.borrow_mut(cs);
+        match borrow.set_datetime(rtc_dt) {
+            Ok(()) => defmt::info!("RTC datetime updated"),
+            Err(_) => defmt::error!("RTC set_datetime failed"),
+        }
+    });
 }
 
 /// Background measurement loop: alternate TDC1000 channels (downstream
