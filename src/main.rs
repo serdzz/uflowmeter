@@ -653,7 +653,7 @@ async fn measurement_task(
     let mut calc = Calculator::new(options_to_meter_config(&options));
 
     loop {
-        embassy_time::Timer::after_secs(1).await;
+        embassy_time::Timer::after_secs(5).await;
 
         // Pick up any live calibration changes before kicking off the
         // next measurement pair.
