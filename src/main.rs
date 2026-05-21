@@ -36,9 +36,11 @@ use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 use drivers::uart::{MODBUS_FRAMES, UART_TX};
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either4, select4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_sync::signal::Signal;
+use uflowmeter::calibration::{CalibData, CalibTable, Calculator, MeterConfig};
 use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
 use uflowmeter::ui::MenuController;
@@ -64,6 +66,12 @@ pub type MonthHistory = RingStorage<
 /// the dispatcher is busy, the next one will catch up via the
 /// previous-minute comparison.
 static HISTORY_TICK: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
+
+/// Latest computed flow rate (m³/h). measurement_task signals every
+/// time a fresh up+down ToF pair lands and the calibration math
+/// resolves to a finite value. Signal coalesces — main loop reads
+/// the freshest value and updates `app.flow`.
+static FLOW_RESULT: Signal<CriticalSectionRawMutex, f32> = Signal::new();
 
 #[embassy_executor::task]
 async fn history_tick_task() {
@@ -213,7 +221,7 @@ async fn main(spawner: Spawner) {
     // Spawn the measurement loop — runs forever, triggers a TDC1000
     // TX pulse + TDC7200 measurement once per second, logs the raw
     // 24-bit ToF.
-    spawner.spawn(unwrap!(measurement_task(tdc1000, tdc7200, tdc_int)));
+    spawner.spawn(unwrap!(measurement_task(tdc1000, tdc7200, tdc_int, options)));
 
     // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
     // PC9 (RsPowerEn, active-LOW) powers the RS485 transceiver.
@@ -261,14 +269,15 @@ async fn main(spawner: Spawner) {
     frame.flush(&mut lcd).await;
 
     loop {
-        match select3(
+        match select4(
             KEYS.receive(),
             MODBUS_FRAMES.receive(),
             HISTORY_TICK.receive(),
+            FLOW_RESULT.wait(),
         )
         .await
         {
-            Either3::First(KeyEvent::Pressed(flag)) => {
+            Either4::First(KeyEvent::Pressed(flag)) => {
                 let ui_event = if flag.contains(ButtonFlags::ENTER) {
                     Some(UiEvent::Enter)
                 } else if flag.contains(ButtonFlags::CONFIG) {
@@ -299,7 +308,7 @@ async fn main(spawner: Spawner) {
                     }
                 }
             }
-            Either3::Second(frame_bytes) => {
+            Either4::Second(frame_bytes) => {
                 handle_modbus_frame(
                     &modbus,
                     &frame_bytes,
@@ -311,7 +320,7 @@ async fn main(spawner: Spawner) {
                     &app,
                 );
             }
-            Either3::Third(()) => {
+            Either4::Third(()) => {
                 handle_history_tick(
                     &mut app,
                     &rtc_now,
@@ -320,6 +329,9 @@ async fn main(spawner: Spawner) {
                     &mut day_history,
                     &mut month_history,
                 );
+            }
+            Either4::Fourth(volume) => {
+                app.flow = volume;
             }
         }
         sync_app_datetime(&mut app, &rtc_now);
@@ -516,35 +528,99 @@ type Tdc7200Dev = drivers::tdc7200::Tdc7200<
     >,
 >;
 
+/// Run a single TDC measurement on the currently selected TDC1000
+/// channel and return the raw 24-bit TIME1 value. Returns `None` on
+/// SPI error or INT timeout. The 50 ms timeout matches the legacy
+/// budget — at 1480 m/s and 100 mm transducer spacing a real reading
+/// is < 100 µs, so anything over 50 ms is a stuck transducer.
+async fn single_measurement(
+    tdc7200: &mut Tdc7200Dev,
+    tdc_int: &mut ExtiInput<'static, embassy_stm32::mode::Async>,
+) -> Option<u32> {
+    if tdc7200.start_measurement().is_err() {
+        defmt::error!("tdc7200 start failed");
+        return None;
+    }
+    match embassy_time::with_timeout(
+        embassy_time::Duration::from_millis(50),
+        tdc_int.wait_for_falling_edge(),
+    )
+    .await
+    {
+        Ok(()) => tdc7200.read_time1().ok(),
+        Err(_) => None,
+    }
+}
+
+/// Background measurement loop: for each cycle, takes a downstream
+/// and an upstream ToF reading, runs the result through the
+/// `calibration::Calculator`, and signals the resulting flow (m³/h)
+/// to the main loop. The calibration table comes from `Options`
+/// (zero1, v1*, k1* for channel 1 — single-channel mode for now;
+/// channel 2 fields are still wired into Options for future use).
 #[embassy_executor::task]
 async fn measurement_task(
     mut tdc1000: Tdc1000Dev,
     mut tdc7200: Tdc7200Dev,
     mut tdc_int: ExtiInput<'static, embassy_stm32::mode::Async>,
+    options: Options,
 ) {
-    let mut downstream = true;
+    // Snapshot the calibration table at startup. Live re-reads from
+    // Options would require shared state with the main loop; for now
+    // a re-flash / power-cycle picks up SetCalibration changes.
+    let table = options_to_calib_table(&options);
+    let calc = Calculator::new(MeterConfig::default());
+
     loop {
         embassy_time::Timer::after_secs(1).await;
-        let _ = tdc1000.set_channel(!downstream);
         let _ = tdc1000.clear_error_flags();
-        if tdc7200.start_measurement().is_err() {
-            defmt::error!("tdc7200 start failed");
-            continue;
+
+        // Downstream first (channel 0).
+        let _ = tdc1000.set_channel(false);
+        let tof_down = single_measurement(&mut tdc7200, &mut tdc_int).await;
+
+        // Upstream (channel 1).
+        let _ = tdc1000.set_channel(true);
+        let tof_up = single_measurement(&mut tdc7200, &mut tdc_int).await;
+
+        match (tof_down, tof_up) {
+            (Some(d), Some(u)) => {
+                let volume = calc.get_volume(&table, u as f32, d as f32);
+                if volume.is_finite() {
+                    defmt::info!(
+                        "tof down={=u32} up={=u32} flow={=f32} m³/h",
+                        d,
+                        u,
+                        volume
+                    );
+                    FLOW_RESULT.signal(volume);
+                }
+            }
+            _ => defmt::warn!("tof: down={} up={}", tof_down.is_some(), tof_up.is_some()),
         }
-        // INT goes LOW on done. Wait at most 50 ms.
-        match embassy_time::with_timeout(
-            embassy_time::Duration::from_millis(50),
-            tdc_int.wait_for_falling_edge(),
-        )
-        .await
-        {
-            Ok(()) => match tdc7200.read_time1() {
-                Ok(t) => defmt::info!("tof ch={=u8} time1={=u32}", downstream as u8, t),
-                Err(_) => defmt::error!("tdc7200 read_time1 failed"),
+    }
+}
+
+/// Pull the calibration table for channel 1 out of Options. Float
+/// fields are stored as raw u32 bits via the bitfield's B32 slots —
+/// `f32::from_bits` recovers them. Matches the C++ layout.
+fn options_to_calib_table(options: &Options) -> CalibTable {
+    CalibTable {
+        dtof0: f32::from_bits(options.zero1()),
+        data: [
+            CalibData {
+                v: f32::from_bits(options.v11()),
+                k: f32::from_bits(options.k11()),
             },
-            Err(_) => defmt::warn!("tdc7200 INT timeout (ch={=u8})", downstream as u8),
-        }
-        downstream = !downstream;
+            CalibData {
+                v: f32::from_bits(options.v12()),
+                k: f32::from_bits(options.k12()),
+            },
+            CalibData {
+                v: f32::from_bits(options.v13()),
+                k: f32::from_bits(options.k13()),
+            },
+        ],
     }
 }
 
