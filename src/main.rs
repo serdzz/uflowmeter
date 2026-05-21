@@ -38,11 +38,13 @@ use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 use drivers::uart::{MODBUS_FRAMES, SHELL_ACTIONS, UART_TX};
-use embassy_futures::select::{Either5, select5};
+use embassy_futures::select::{Either6, select6};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{Receiver, Watch};
+use embassy_time::{Instant, Timer};
+use core::future::pending;
 use uflowmeter::calibration::{CalibData, CalibTable, Calculator, MeterConfig};
 use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
@@ -117,7 +119,9 @@ async fn main(spawner: Spawner) {
     let (rtc_container, rtc_now) = Rtc::new(p.RTC);
 
     let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
-    let mut backlight = Output::new(p.PC5, Level::High, Speed::Low);
+    // Backlight OFF at boot — first key press wakes it; idle timeout
+    // turns it back off so the device spends most of its life in STOP.
+    let mut backlight = Output::new(p.PC5, Level::Low, Speed::Low);
 
     let rs = Output::new(p.PC1, Level::Low, Speed::Low);
     let rw = Output::new(p.PC2, Level::Low, Speed::Low);
@@ -284,23 +288,40 @@ async fn main(spawner: Spawner) {
     // next request.
     let mut modbus = ModbusHandler::new(options.slave_address());
 
-    // Initial render so the user sees something even before the first
-    // key press.
-    ui.update(&app);
-    ui.render(&app, &mut frame);
-    frame.flush(&mut lcd).await;
+    // Idle timeout: backlight goes off `IDLE_TIMEOUT` after the last
+    // key press. `idle_deadline = None` means "no UI session active"
+    // → no timer armed → executor is free to enter STOP.
+    const IDLE_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_secs(15);
+    let mut idle_deadline: Option<Instant> = None;
+    let mut lcd_rendered = false;
 
     loop {
-        match select5(
+        // Build the idle-timeout future. When no session is active we
+        // park on `pending()` (never resolves) so the select arm is
+        // inert and no sub-IDLE_TIMEOUT alarm sits in the time driver.
+        let idle_fut = async {
+            match idle_deadline {
+                Some(deadline) => Timer::at(deadline).await,
+                None => pending::<()>().await,
+            }
+        };
+
+        match select6(
             KEYS.receive(),
             MODBUS_FRAMES.receive(),
             HISTORY_TICK.receive(),
             FLOW_RESULT.wait(),
             SHELL_ACTIONS.receive(),
+            idle_fut,
         )
         .await
         {
-            Either5::First(KeyEvent::Pressed(flag)) => {
+            Either6::First(KeyEvent::Pressed(flag)) => {
+                // Any key wakes the LCD (if not already lit) and resets
+                // the idle countdown.
+                backlight.set_high();
+                idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
+
                 let ui_event = if flag.contains(ButtonFlags::ENTER) {
                     Some(UiEvent::Enter)
                 } else if flag.contains(ButtonFlags::CONFIG) {
@@ -334,7 +355,7 @@ async fn main(spawner: Spawner) {
                     }
                 }
             }
-            Either5::Second(frame_bytes) => {
+            Either6::Second(frame_bytes) => {
                 handle_modbus_frame(
                     &modbus,
                     &frame_bytes,
@@ -349,7 +370,7 @@ async fn main(spawner: Spawner) {
                 // the measurement task sees the change.
                 opt_sender.send(options);
             }
-            Either5::Third(()) => {
+            Either6::Third(()) => {
                 handle_history_tick(
                     &mut app,
                     &rtc_now,
@@ -360,10 +381,10 @@ async fn main(spawner: Spawner) {
                     &rtc_container,
                 );
             }
-            Either5::Fourth(volume) => {
+            Either6::Fourth(volume) => {
                 app.flow = volume;
             }
-            Either5::Fifth(action) => {
+            Either6::Fifth(action) => {
                 handle_shell_action(
                     action,
                     &mut options,
@@ -375,11 +396,28 @@ async fn main(spawner: Spawner) {
                 // so measurement_task picks it up.
                 opt_sender.send(options);
             }
+            Either6::Sixth(()) => {
+                defmt::info!("idle: backlight off");
+                backlight.set_low();
+                idle_deadline = None;
+                lcd_rendered = false;
+                continue;
+            }
         }
+
         sync_app_datetime(&mut app, &rtc_now);
-        ui.update(&app);
-        ui.render(&app, &mut frame);
-        frame.flush(&mut lcd).await;
+
+        // Skip the LCD re-render when the panel is dark — nothing
+        // visible, and skipping saves a flush().await that would
+        // otherwise add ms of busy work per background event.
+        if idle_deadline.is_some() {
+            ui.update(&app);
+            ui.render(&app, &mut frame);
+            frame.flush(&mut lcd).await;
+            lcd_rendered = true;
+        } else {
+            let _ = lcd_rendered;
+        }
     }
 }
 

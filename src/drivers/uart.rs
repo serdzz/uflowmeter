@@ -14,12 +14,12 @@
 //! is fixed at 1.75 ms (3.5 char times at 19200). At 115200 the real
 //! 3.5 char time is ~305 µs but the spec floor wins, so we use 1.75 ms.
 
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_stm32::mode::Async;
 use embassy_stm32::usart::Uart;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, with_timeout};
+use embassy_time::{Duration, Timer};
 use heapless::Vec;
 
 const FRAME_GAP: Duration = Duration::from_micros(1750);
@@ -50,56 +50,72 @@ pub async fn uart_task(mut uart: Uart<'static, Async>) {
     let mut line: ShellLine = Vec::new();
     let mut frame: ModbusFrame = Vec::new();
     loop {
-        // Race RX (with inter-byte timeout) against any pending TX. If
-        // TX wins, we stop reading just long enough to flush — for a
-        // Modbus slave that's correct: the master is already waiting
-        // for our reply before it sends the next request.
-        let read_fut = with_timeout(FRAME_GAP, uart.read(&mut buf));
-        let tx_fut = UART_TX.receive();
-        match select(read_fut, tx_fut).await {
-            Either::First(Ok(Ok(()))) => {
-                let b = buf[0];
-
-                // Shell-line accumulator.
-                if b == b'\r' || b == b'\n' {
-                    if !line.is_empty() {
-                        defmt::info!("uart line: {=[u8]:a}", line.as_slice());
-                        let _ = SHELL_LINES.try_send(line.clone());
-                        line.clear();
+        if frame.is_empty() && line.is_empty() {
+            // Idle: pure async wait on RX or TX — no timers, so the
+            // executor's low-power layer is free to enter STOP.
+            match select(uart.read(&mut buf), UART_TX.receive()).await {
+                Either::First(r) => handle_read(r, &buf, &mut line, &mut frame, &mut uart).await,
+                Either::Second(tx_data) => write_tx(&tx_data, &mut uart).await,
+            }
+        } else {
+            // Have pending bytes — race RX against the Modbus inter-byte
+            // gap timer + pending TX. Only this branch keeps a sub-10ms
+            // alarm armed, which is fine because the master is actively
+            // sending us a frame.
+            match select3(uart.read(&mut buf), Timer::after(FRAME_GAP), UART_TX.receive()).await {
+                Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, &mut uart).await,
+                Either3::Second(_) => {
+                    // Inter-byte gap exceeded → close out the modbus frame.
+                    // (Shell lines wait for explicit \r/\n.)
+                    if !frame.is_empty() {
+                        defmt::info!("modbus frame: {=[u8]:x}", frame.as_slice());
+                        let _ = MODBUS_FRAMES.try_send(frame.clone());
+                        frame.clear();
                     }
-                } else if line.push(b).is_err() {
-                    line.clear();
-                    let _ = uart.write(b"!OVERFLOW\r\n").await;
                 }
-
-                // Modbus byte accumulator (no boundary trigger here;
-                // frame is closed on the next read-timeout).
-                if frame.push(b).is_err() {
-                    defmt::warn!("modbus frame > {} B, dropped", MAX_FRAME);
-                    frame.clear();
-                }
-            }
-            Either::First(Ok(Err(e))) => {
-                defmt::error!("uart read error: {}", e);
-                line.clear();
-                frame.clear();
-            }
-            Either::First(Err(_)) => {
-                // Inter-byte gap exceeded FRAME_GAP — emit any pending
-                // modbus frame. (Shell lines wait for explicit \r/\n.)
-                if !frame.is_empty() {
-                    defmt::info!("modbus frame: {=[u8]:x}", frame.as_slice());
-                    let _ = MODBUS_FRAMES.try_send(frame.clone());
-                    frame.clear();
-                }
-            }
-            Either::Second(tx_data) => {
-                defmt::info!("uart tx {} B", tx_data.len());
-                if let Err(e) = uart.write(&tx_data).await {
-                    defmt::error!("uart write error: {}", e);
-                }
+                Either3::Third(tx_data) => write_tx(&tx_data, &mut uart).await,
             }
         }
+    }
+}
+
+async fn handle_read(
+    r: Result<(), embassy_stm32::usart::Error>,
+    buf: &[u8; 1],
+    line: &mut ShellLine,
+    frame: &mut ModbusFrame,
+    uart: &mut Uart<'static, Async>,
+) {
+    match r {
+        Ok(()) => {
+            let b = buf[0];
+            if b == b'\r' || b == b'\n' {
+                if !line.is_empty() {
+                    defmt::info!("uart line: {=[u8]:a}", line.as_slice());
+                    let _ = SHELL_LINES.try_send(line.clone());
+                    line.clear();
+                }
+            } else if line.push(b).is_err() {
+                line.clear();
+                let _ = uart.write(b"!OVERFLOW\r\n").await;
+            }
+            if frame.push(b).is_err() {
+                defmt::warn!("modbus frame > {} B, dropped", MAX_FRAME);
+                frame.clear();
+            }
+        }
+        Err(e) => {
+            defmt::error!("uart read error: {}", e);
+            line.clear();
+            frame.clear();
+        }
+    }
+}
+
+async fn write_tx(tx_data: &ModbusFrame, uart: &mut Uart<'static, Async>) {
+    defmt::info!("uart tx {} B", tx_data.len());
+    if let Err(e) = uart.write(tx_data).await {
+        defmt::error!("uart write error: {}", e);
     }
 }
 
