@@ -21,6 +21,7 @@ use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::mode::Blocking;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
+use embassy_stm32::rtc::{Rtc, RtcTimeProvider};
 use embassy_stm32::usart::{self, Config as UartConfig, Uart};
 use embassy_stm32::{Config, bind_interrupts, interrupt, peripherals};
 use embassy_sync::blocking_mutex::NoopMutex;
@@ -53,6 +54,12 @@ async fn main(spawner: Spawner) {
     config.min_stop_pause = Duration::from_millis(10);
     let p = embassy_stm32::init(config);
     info!("uflowmeter (embassy): boot");
+
+    // RTC: low-power Rtc::new takes only the peripheral and returns
+    // (container, time_provider). `_rtc_container` lives until end of
+    // main so the low-power executor sees the RTC; `rtc_now` lets us
+    // read DateTime without holding a lock.
+    let (_rtc_container, rtc_now) = Rtc::new(p.RTC);
 
     let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
     let _backlight = Output::new(p.PC5, Level::High, Speed::Low);
@@ -140,7 +147,8 @@ async fn main(spawner: Spawner) {
     let btn_up = ExtiInput::new(p.PB9, p.EXTI9, Pull::Up, Irqs);
     spawner.spawn(unwrap!(keypad_task(btn_config, btn_enter, btn_down, btn_up)));
 
-    let app = App::new();
+    let mut app = App::new();
+    sync_app_datetime(&mut app, &rtc_now);
     let mut ui = MenuController::new();
     // Sync-fill / async-flush adapter: ui.render writes ops into the
     // buffer in microseconds, then flush().await streams them out to
@@ -177,8 +185,27 @@ async fn main(spawner: Spawner) {
             // embassy port.
             let _ = ui.event(e, &app);
         }
+        sync_app_datetime(&mut app, &rtc_now);
         ui.update(&app);
         ui.render(&app, &mut frame);
         frame.flush(&mut lcd).await;
+    }
+}
+
+/// Pull the current datetime from the STM32 RTC and convert it into
+/// the `time::PrimitiveDateTime` that App / ui.rs expects. Silently
+/// keeps the prior value if the RTC read or conversion fails — most
+/// commonly that means VBAT was lost and the RTC is in its post-reset
+/// default state, which has no valid weekday.
+fn sync_app_datetime(app: &mut App, rtc: &RtcTimeProvider) {
+    if let Ok(dt) = rtc.now() {
+        if let (Ok(month), Ok(date), Ok(time)) = (
+            time::Month::try_from(dt.month()),
+            time::Date::from_calendar_date(dt.year() as i32, time::Month::try_from(dt.month()).unwrap_or(time::Month::January), dt.day()),
+            time::Time::from_hms(dt.hour(), dt.minute(), dt.second()),
+        ) {
+            let _ = month;
+            app.datetime = time::PrimitiveDateTime::new(date, time);
+        }
     }
 }
