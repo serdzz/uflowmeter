@@ -7,6 +7,7 @@
 
 pub mod cyrillic;
 pub mod deferred_display;
+pub mod eeprom;
 pub mod hd44780;
 pub mod hd44780_blocking;
 pub mod keypad;
