@@ -109,11 +109,10 @@ async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.enable_debug_during_sleep = true;
     config.min_stop_pause = Duration::from_millis(10);
-    // MSI 2 MHz instead of the default 4 MHz — halves active-phase
-    // current draw. UART at 115200 needs ~1.84 MHz min for 16x
-    // oversampling and SPI at 1 MHz needs core ≥2 MHz, so this is
-    // the lowest safe range for our workload.
-    config.rcc.msi = Some(embassy_stm32::rcc::MSIRange::RANGE2M);
+    // Default MSI 4 MHz — tried RANGE2M but average current rose
+    // from 4.5 to 7.1 mA on the bench unit. Slower core stretches
+    // every wake task → more time awake → fewer STOP entries because
+    // `time_until_next_alarm < min_stop_pause` fires more often.
     let p = embassy_stm32::init(config);
     info!("uflowmeter (embassy): boot");
 
