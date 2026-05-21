@@ -11,18 +11,26 @@
 
 mod drivers;
 
+use core::cell::RefCell;
+
 use defmt::*;
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
+use embassy_stm32::mode::Blocking;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::{Config, bind_interrupts, interrupt};
+use embassy_sync::blocking_mutex::NoopMutex;
 use embassy_time::Duration;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 use drivers::deferred_display::DeferredDisplay;
 use drivers::eeprom::Eeprom25Lc1024;
+use drivers::tdc1000::Tdc1000;
+use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 use uflowmeter::ui::MenuController;
@@ -56,20 +64,53 @@ async fn main(spawner: Spawner) {
     lcd.init().await;
     info!("lcd init done");
 
-    // SPI2 + 25LC1024 EEPROM smoke test. Pin map per
-    // src/hardware/pins.rs: SCK=PB13, MISO=PB14, MOSI=PB15.
-    // CS=PC10 (MemoryEn, active-low), HOLD=PC11, WP=PC12.
+    // SPI2 shared bus: 25LC1024 EEPROM + TDC1000 + TDC7200.
+    // SCK=PB13, MISO=PB14, MOSI=PB15. CS pins per src/hardware/pins.rs.
     let mut spi2_cfg = SpiConfig::default();
     spi2_cfg.frequency = Hertz(1_000_000);
     let spi2 = Spi::new_blocking(p.SPI2, p.PB13, p.PB15, p.PB14, spi2_cfg);
-    let cs_eeprom = Output::new(p.PC10, Level::High, Speed::VeryHigh);
-    let hold = Output::new(p.PC11, Level::High, Speed::Low);
-    let wp = Output::new(p.PC12, Level::High, Speed::Low);
-    let mut eeprom = Eeprom25Lc1024::new(spi2, cs_eeprom, hold, wp);
+    // Forward declaration: keep HOLD/WP high so EEPROM accepts writes.
+    let _eeprom_hold = Output::new(p.PC11, Level::High, Speed::Low);
+    let _eeprom_wp = Output::new(p.PC12, Level::High, Speed::Low);
+
+    // Static bus so SpiDevice borrows can outlive this scope.
+    static SPI2_BUS: StaticCell<
+        NoopMutex<RefCell<Spi<'static, Blocking, embassy_stm32::spi::mode::Master>>>,
+    > = StaticCell::new();
+    let spi2_bus: &_ = SPI2_BUS.init(NoopMutex::new(RefCell::new(spi2)));
+
+    let mut eeprom = Eeprom25Lc1024::new(SpiDevice::new(
+        spi2_bus,
+        Output::new(p.PC10, Level::High, Speed::VeryHigh),
+    ));
     let mut buf = [0u8; 16];
     match eeprom.read(0, &mut buf) {
         Ok(()) => info!("eeprom@0: {=[u8]:x}", buf),
         Err(_) => error!("eeprom read failed"),
+    }
+
+    // TDC1000 — analog frontend, CS=PB11, EN=PB10, RES=PC6.
+    let tdc1000_en = Output::new(p.PB10, Level::High, Speed::Low);
+    let tdc1000_res = Output::new(p.PC6, Level::High, Speed::Low);
+    let mut tdc1000 = Tdc1000::new(
+        SpiDevice::new(spi2_bus, Output::new(p.PB11, Level::High, Speed::VeryHigh)),
+        tdc1000_en,
+        tdc1000_res,
+    );
+    match tdc1000.read_register(0x07) {
+        Ok(v) => info!("tdc1000 reg 0x07: {:#04x}", v),
+        Err(_) => error!("tdc1000 read failed"),
+    }
+
+    // TDC7200 — time-to-digital, CS=PB12, EN=PB1.
+    let tdc7200_en = Output::new(p.PB1, Level::High, Speed::Low);
+    let mut tdc7200 = Tdc7200::new(
+        SpiDevice::new(spi2_bus, Output::new(p.PB12, Level::High, Speed::VeryHigh)),
+        tdc7200_en,
+    );
+    match tdc7200.read_register(0x00) {
+        Ok(v) => info!("tdc7200 reg 0x00: {:#04x}", v),
+        Err(_) => error!("tdc7200 read failed"),
     }
 
     let btn_config = ExtiInput::new(p.PB6, p.EXTI6, Pull::Up, Irqs);
