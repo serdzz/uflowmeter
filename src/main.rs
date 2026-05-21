@@ -254,6 +254,10 @@ async fn main(spawner: Spawner) {
     let _rs_power = Output::new(p.PC9, Level::Low, Speed::Low);
     let mut uart_cfg = UartConfig::default();
     uart_cfg.baudrate = 115200;
+    // NOTE: USART1 (DMA-async) pins REFCOUNT_STOP1 > 0 while enabled,
+    // so embassy's transparent STOP mode silently skips STOP entry
+    // for the lifetime of `uart`. Confirmed by experiment: commenting
+    // out this init alone bumps `enter stop` from 1/run to ~35/sec.
     // Argument order: (peri, rx, tx, tx_dma, rx_dma, irq, config).
     let uart = unwrap!(Uart::new(
         p.USART1,
