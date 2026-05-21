@@ -21,6 +21,19 @@ use heapless::Vec;
 #[allow(dead_code)]
 const MAX_LINE: usize = 80;
 
+/// Side-effect a successfully-parsed shell command wants the
+/// dispatcher to perform. Returned alongside the text reply so
+/// `shell_task` can route the action without re-parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellAction {
+    /// `date set <unix_ts>` → push to RTC.
+    SetDateUnix(u32),
+    /// `set_serial <N>` → mutate Options.serial_number + save.
+    SetSerial(u32),
+    /// `set_verbose <0|1>` → tweak defmt verbosity (no persistence).
+    SetVerbose(bool),
+}
+
 /// Shell command result
 #[allow(clippy::large_enum_variant)]
 pub enum ShellResult {
@@ -30,6 +43,38 @@ pub enum ShellResult {
     NotAShellCommand,
     /// Command parse error
     Error(&'static str),
+}
+
+/// Re-parse a shell line and extract any side-effect the dispatcher
+/// should perform. Mirrors `process_line` but only emits an action
+/// for the variants that have observable effects beyond the text
+/// reply. Returns `None` for read-only commands (`help`, `date get`,
+/// `get_settings`, `get_calibration`) and for non-shell input.
+pub fn parse_action(line: &[u8]) -> Option<ShellAction> {
+    let trimmed = trim_line(line);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let tokens: Vec<&[u8], 8> = split_tokens(trimmed).ok()?;
+    if tokens.is_empty() {
+        return None;
+    }
+    let cmd = tokens[0];
+    let args = &tokens[1..];
+    if eq(cmd, b"date") && args.len() >= 2 && eq(args[0], b"set") {
+        return parse_u32(args[1]).map(ShellAction::SetDateUnix);
+    }
+    if eq(cmd, b"set_serial") && !args.is_empty() {
+        return parse_u32(args[0]).map(ShellAction::SetSerial);
+    }
+    if eq(cmd, b"set_verbose") && !args.is_empty() {
+        return parse_u8(args[0]).and_then(|v| match v {
+            0 => Some(ShellAction::SetVerbose(false)),
+            1 => Some(ShellAction::SetVerbose(true)),
+            _ => None,
+        });
+    }
+    None
 }
 
 /// Process a line of text input as a shell command.

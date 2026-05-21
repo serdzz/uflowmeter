@@ -21,7 +21,9 @@ use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::mode::Blocking;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::rtc::{DateTime as RtcDateTime, DayOfWeek, Rtc, RtcContainer, RtcTimeProvider};
+use embassy_stm32::rtc::{
+    AnyRtc, DateTime as RtcDateTime, DayOfWeek, Rtc, RtcContainer, RtcTimeProvider,
+};
 use embassy_stm32::usart::{self, Config as UartConfig, Uart};
 use embassy_stm32::{Config, bind_interrupts, interrupt, peripherals};
 use embassy_sync::blocking_mutex::NoopMutex;
@@ -35,8 +37,8 @@ use drivers::tdc1000::Tdc1000;
 use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
-use drivers::uart::{MODBUS_FRAMES, UART_TX};
-use embassy_futures::select::{Either4, select4};
+use drivers::uart::{MODBUS_FRAMES, SHELL_ACTIONS, UART_TX};
+use embassy_futures::select::{Either5, select5};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -269,6 +271,7 @@ async fn main(spawner: Spawner) {
 
     let mut app = App::new();
     sync_app_datetime(&mut app, &rtc_now);
+    load_uptime_from_backup(&mut app, &rtc_container);
     let mut ui = MenuController::new();
     // Sync-fill / async-flush adapter: ui.render writes ops into the
     // buffer in microseconds, then flush().await streams them out to
@@ -288,15 +291,16 @@ async fn main(spawner: Spawner) {
     frame.flush(&mut lcd).await;
 
     loop {
-        match select4(
+        match select5(
             KEYS.receive(),
             MODBUS_FRAMES.receive(),
             HISTORY_TICK.receive(),
             FLOW_RESULT.wait(),
+            SHELL_ACTIONS.receive(),
         )
         .await
         {
-            Either4::First(KeyEvent::Pressed(flag)) => {
+            Either5::First(KeyEvent::Pressed(flag)) => {
                 let ui_event = if flag.contains(ButtonFlags::ENTER) {
                     Some(UiEvent::Enter)
                 } else if flag.contains(ButtonFlags::CONFIG) {
@@ -330,7 +334,7 @@ async fn main(spawner: Spawner) {
                     }
                 }
             }
-            Either4::Second(frame_bytes) => {
+            Either5::Second(frame_bytes) => {
                 handle_modbus_frame(
                     &modbus,
                     &frame_bytes,
@@ -345,7 +349,7 @@ async fn main(spawner: Spawner) {
                 // the measurement task sees the change.
                 opt_sender.send(options);
             }
-            Either4::Third(()) => {
+            Either5::Third(()) => {
                 handle_history_tick(
                     &mut app,
                     &rtc_now,
@@ -353,10 +357,23 @@ async fn main(spawner: Spawner) {
                     &mut hour_history,
                     &mut day_history,
                     &mut month_history,
+                    &rtc_container,
                 );
             }
-            Either4::Fourth(volume) => {
+            Either5::Fourth(volume) => {
                 app.flow = volume;
+            }
+            Either5::Fifth(action) => {
+                handle_shell_action(
+                    action,
+                    &mut options,
+                    &mut eeprom,
+                    &mut opt_buf,
+                    &rtc_container,
+                );
+                // Shell may have mutated Options (set_serial); republish
+                // so measurement_task picks it up.
+                opt_sender.send(options);
             }
         }
         sync_app_datetime(&mut app, &rtc_now);
@@ -488,6 +505,44 @@ fn persist_options(
     match options.save_with_buf(eeprom, buf) {
         Ok(()) => defmt::info!("options: saved to EEPROM"),
         Err(_) => defmt::error!("options: save failed"),
+    }
+}
+
+/// Apply a shell-originated side-effect. Mirrors handle_app_request
+/// for the subset of commands that have observable effects on the
+/// device state (RTC, Options). Verbose toggle is a stub for now —
+/// defmt verbosity is set at compile time via DEFMT_LOG.
+fn handle_shell_action(
+    action: uflowmeter::shell::ShellAction,
+    options: &mut Options,
+    eeprom: &mut Eeprom,
+    buf: &mut [u8; uflowmeter::options::Options::SIZE],
+    rtc: &RtcContainer,
+) {
+    use uflowmeter::shell::ShellAction;
+    match action {
+        ShellAction::SetDateUnix(ts) => {
+            let odt = time::OffsetDateTime::from_unix_timestamp(ts as i64).ok();
+            match odt {
+                Some(d) => {
+                    let pdt = time::PrimitiveDateTime::new(d.date(), d.time());
+                    defmt::info!("shell: set RTC from unix={=u32}", ts);
+                    set_rtc_datetime(rtc, pdt);
+                }
+                None => defmt::warn!("shell: bad unix ts {=u32}", ts),
+            }
+        }
+        ShellAction::SetSerial(n) => {
+            options.set_serial_number(n);
+            persist_options(options, eeprom, buf);
+            defmt::info!("shell: serial set to {=u32}", n);
+        }
+        ShellAction::SetVerbose(on) => {
+            defmt::info!(
+                "shell: verbose toggled to {} (compile-time DEFMT_LOG actually controls this)",
+                on
+            );
+        }
     }
 }
 
@@ -673,9 +728,30 @@ fn options_to_calib_table(options: &Options) -> CalibTable {
     }
 }
 
+/// RTC backup register slots (BKP0..BKP15 on STM32L1).
+/// BKP0 — cumulative uptime in seconds across resets (as long as
+/// VBAT is present).
+/// BKP1 — last unix-timestamp seen by the uptime tracker, used to
+/// compute real elapsed time between ticks.
+const BKP_UPTIME_SECONDS: usize = 0;
+const BKP_LAST_UPTIME_RTC: usize = 1;
+
+/// Load the persisted uptime from backup registers into `app` at
+/// boot. Called once before the main loop starts.
+fn load_uptime_from_backup(app: &mut App, rtc: &RtcContainer) {
+    app.uptime_seconds = rtc.read_backup_register(BKP_UPTIME_SECONDS).unwrap_or(0);
+    app.last_uptime_rtc = rtc.read_backup_register(BKP_LAST_UPTIME_RTC).unwrap_or(0);
+    defmt::info!(
+        "uptime: loaded from BKP — total={=u32} s, last_ts={=u32}",
+        app.uptime_seconds,
+        app.last_uptime_rtc
+    );
+}
+
 /// Tick every ~60 s: accumulate the current flow reading into the
-/// hour/day/month float counters, and when the local datetime crosses
-/// a boundary (minute=0 for hour, hour=0 for day, day=1 for month)
+/// hour/day/month float counters, advance the persisted uptime in
+/// RTC backup registers, and when the local datetime crosses a
+/// boundary (minute=0 for hour, hour=0 for day, day=1 for month)
 /// flush the accumulator into the corresponding ring and reset it.
 /// Mirrors the legacy `AppRequest::Process` callback minus the TDC
 /// trigger (measurement is its own task now).
@@ -686,6 +762,7 @@ fn handle_history_tick(
     hour_history: &mut HourHistory,
     day_history: &mut DayHistory,
     month_history: &mut MonthHistory,
+    rtc_container: &RtcContainer,
 ) {
     let dt = match rtc.now() {
         Ok(v) => v,
@@ -717,6 +794,23 @@ fn handle_history_tick(
     };
     let pdt = time::PrimitiveDateTime::new(date, time_of_day);
     let ts = pdt.assume_utc().unix_timestamp() as u32;
+
+    // Uptime tracking: how many seconds have we *actually* been awake
+    // since the last tick? Use the RTC delta (not a fixed 60 s) so a
+    // missed/late tick doesn't under- or over-count. Anchor on first
+    // tick after boot when last_uptime_rtc is still zero from cold
+    // VBAT or never-initialised backup state.
+    if app.last_uptime_rtc != 0 && ts > app.last_uptime_rtc {
+        let delta = ts - app.last_uptime_rtc;
+        // Clamp absurd deltas (clock jumps from `date set`, etc.) so a
+        // single bad sample can't wreck the counter.
+        if delta < 86_400 {
+            app.uptime_seconds = app.uptime_seconds.saturating_add(delta);
+        }
+    }
+    app.last_uptime_rtc = ts;
+    rtc_container.write_backup_register(BKP_UPTIME_SECONDS, app.uptime_seconds);
+    rtc_container.write_backup_register(BKP_LAST_UPTIME_RTC, app.last_uptime_rtc);
 
     if dt.minute() == 0 {
         match hour_history.add(eeprom, app.hour_flow as i32, ts) {

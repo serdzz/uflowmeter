@@ -37,6 +37,12 @@ pub static MODBUS_FRAMES: ModbusChannel = Channel::new();
 /// Modbus dispatcher pushes its response frames here. uart_task drains
 /// them between RX cycles.
 pub static UART_TX: ModbusChannel = Channel::new();
+/// Shell side-effects parsed out of incoming command lines. shell_task
+/// pushes here whenever `shell::parse_action` returns Some; the main
+/// loop drains them via select5 and applies (set RTC, mutate Options,
+/// etc.) since those resources live in main loop's scope.
+pub static SHELL_ACTIONS: Channel<CriticalSectionRawMutex, uflowmeter::shell::ShellAction, 4> =
+    Channel::new();
 
 #[embassy_executor::task]
 pub async fn uart_task(mut uart: Uart<'static, Async>) {
@@ -104,9 +110,16 @@ pub async fn uart_task(mut uart: Uart<'static, Async>) {
 /// USART.
 #[embassy_executor::task]
 pub async fn shell_task() {
-    use uflowmeter::shell::{ShellResult, process_line};
+    use uflowmeter::shell::{ShellResult, parse_action, process_line};
     loop {
         let line = SHELL_LINES.receive().await;
+        // Side-effects first so the action is queued even if the
+        // reply write blocks momentarily.
+        if let Some(action) = parse_action(&line) {
+            if SHELL_ACTIONS.try_send(action).is_err() {
+                defmt::warn!("shell: SHELL_ACTIONS full, action dropped");
+            }
+        }
         match process_line(&line) {
             ShellResult::Ok(reply) => {
                 let mut buf: ModbusFrame = Vec::new();
