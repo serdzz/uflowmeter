@@ -66,6 +66,12 @@ pub struct Options {
     pub slave_address: B8,
     pub comm_type: B8,
     pub modbus_mode: B8,
+    /// MeterConfig::const_val — speed-of-sound geometry constant
+    /// L²/(2·cos α). Stored as f32 bits in a B32 slot to stay inside
+    /// the modular_bitfield API. Appended to the layout so prior
+    /// EEPROM data still CRC-matches and is read with const_val=0
+    /// (which keeps the legacy "no flow until calibrated" behavior).
+    pub const_val: B32,
 }
 
 #[cfg_attr(not(test), derive(defmt::Format))]

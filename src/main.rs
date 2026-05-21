@@ -569,7 +569,7 @@ async fn measurement_task(
     // Options would require shared state with the main loop; for now
     // a re-flash / power-cycle picks up SetCalibration changes.
     let table = options_to_calib_table(&options);
-    let calc = Calculator::new(MeterConfig::default());
+    let calc = Calculator::new(options_to_meter_config(&options));
 
     loop {
         embassy_time::Timer::after_secs(1).await;
@@ -598,6 +598,19 @@ async fn measurement_task(
             }
             _ => defmt::warn!("tof: down={} up={}", tof_down.is_some(), tof_up.is_some()),
         }
+    }
+}
+
+/// Build the geometry/limit config used by the flow Calculator from
+/// Options. Only `const_val` is persisted; everything else takes
+/// MeterConfig::default() values (tof_min/max bounds, vmin/vmax).
+/// When `const_val` is zero (uncalibrated / pre-existing EEPROM
+/// without the field), the calculator returns 0 — matches legacy
+/// behavior so a stale flash doesn't produce phantom flow.
+fn options_to_meter_config(options: &Options) -> MeterConfig {
+    MeterConfig {
+        const_val: f32::from_bits(options.const_val()),
+        ..MeterConfig::default()
     }
 }
 
