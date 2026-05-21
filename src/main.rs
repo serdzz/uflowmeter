@@ -21,7 +21,8 @@ use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::mode::Blocking;
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{Config, bind_interrupts, interrupt};
+use embassy_stm32::usart::{self, Config as UartConfig, Uart};
+use embassy_stm32::{Config, bind_interrupts, interrupt, peripherals};
 use embassy_sync::blocking_mutex::NoopMutex;
 use embassy_time::Duration;
 use static_cell::StaticCell;
@@ -39,6 +40,9 @@ use uflowmeter::{App, UiEvent};
 bind_interrupts!(
     pub struct Irqs {
         EXTI9_5 => exti::InterruptHandler<interrupt::typelevel::EXTI9_5>;
+        USART1 => usart::InterruptHandler<peripherals::USART1>;
+        DMA1_CHANNEL4 => embassy_stm32::dma::InterruptHandler<peripherals::DMA1_CH4>;
+        DMA1_CHANNEL5 => embassy_stm32::dma::InterruptHandler<peripherals::DMA1_CH5>;
     }
 );
 
@@ -112,6 +116,23 @@ async fn main(spawner: Spawner) {
         Ok(v) => info!("tdc7200 reg 0x00: {:#04x}", v),
         Err(_) => error!("tdc7200 read failed"),
     }
+
+    // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
+    // PC9 (RsPowerEn, active-LOW) powers the RS485 transceiver.
+    let _rs_power = Output::new(p.PC9, Level::Low, Speed::Low);
+    let mut uart_cfg = UartConfig::default();
+    uart_cfg.baudrate = 115200;
+    // Argument order: (peri, rx, tx, tx_dma, rx_dma, irq, config).
+    let uart = unwrap!(Uart::new(
+        p.USART1,
+        p.PA10,
+        p.PA9,
+        p.DMA1_CH4,
+        p.DMA1_CH5,
+        Irqs,
+        uart_cfg,
+    ));
+    spawner.spawn(unwrap!(drivers::uart::uart_task(uart)));
 
     let btn_config = ExtiInput::new(p.PB6, p.EXTI6, Pull::Up, Irqs);
     let btn_enter = ExtiInput::new(p.PB7, p.EXTI7, Pull::Up, Irqs);

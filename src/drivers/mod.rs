@@ -13,3 +13,4 @@ pub mod hd44780_blocking;
 pub mod keypad;
 pub mod tdc1000;
 pub mod tdc7200;
+pub mod uart;
