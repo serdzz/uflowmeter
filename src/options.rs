@@ -72,6 +72,12 @@ pub struct Options {
     /// EEPROM data still CRC-matches and is read with const_val=0
     /// (which keeps the legacy "no flow until calibrated" behavior).
     pub const_val: B32,
+    /// Padding to round the total bitfield up to a whole even number
+    /// of bytes (116) so Modbus holding-register reads at the very
+    /// end of Options (e.g. register 57, which covers const_val's
+    /// high byte) don't trip the "end_byte > options_bytes.len()"
+    /// OOB check in modbus_handler::handle_read_holding_registers.
+    pub reserved: B8,
 }
 
 #[cfg_attr(not(test), derive(defmt::Format))]
