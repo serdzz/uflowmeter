@@ -36,10 +36,42 @@ use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 use drivers::uart::{MODBUS_FRAMES, UART_TX};
-use embassy_futures::select::{Either, select};
-use uflowmeter::modbus_handler::{HistoryAccess, ModbusHandler};
+use embassy_futures::select::{Either3, select3};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
+use uflowmeter::history::RingStorage;
+use uflowmeter::modbus_handler::ModbusHandler;
 use uflowmeter::ui::MenuController;
 use uflowmeter::{App, AppRequest, Options, UiEvent};
+
+// Three retention rings backed by EEPROM, layout chained at compile
+// time via SIZE_ON_FLASH so each slot starts right after the previous.
+// Sizes match the legacy RTIC build:
+//   Hour:  2160 entries × 3600s        = 90 days at 1/h
+//   Day:   31×12×3 = 1116 × 86 400s    = 3 years at 1/d
+//   Month: 10×12 = 120 × 31×86 400s    = 10 years at 1/m
+pub type HourHistory = RingStorage<0, 2160, 3600>;
+pub type DayHistory =
+    RingStorage<{ HourHistory::SIZE_ON_FLASH }, { 31 * 12 * 3 }, { 3600 * 24 }>;
+pub type MonthHistory = RingStorage<
+    { HourHistory::SIZE_ON_FLASH + DayHistory::SIZE_ON_FLASH },
+    { 10 * 12 },
+    { 3600 * 24 * 31 },
+>;
+
+/// Once-a-minute tick used to advance accumulators and possibly emit
+/// a history-ring write. Single-slot — if a tick is missed because
+/// the dispatcher is busy, the next one will catch up via the
+/// previous-minute comparison.
+static HISTORY_TICK: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
+
+#[embassy_executor::task]
+async fn history_tick_task() {
+    loop {
+        embassy_time::Timer::after_secs(60).await;
+        let _ = HISTORY_TICK.try_send(());
+    }
+}
 
 bind_interrupts!(
     pub struct Irqs {
@@ -118,6 +150,35 @@ async fn main(spawner: Spawner) {
         options.sensor_type()
     );
 
+    // Bring up the three history rings — recover existing service
+    // metadata from EEPROM where present, fall back to empty state
+    // otherwise (also covers the first-power-on case where the EEPROM
+    // bytes are uninitialised).
+    let mut hour_history = HourHistory::new(&mut eeprom).unwrap_or_else(|_| {
+        warn!("hour_history: init failed, starting empty");
+        HourHistory {
+            data: uflowmeter::history::ServiceData::default(),
+        }
+    });
+    let mut day_history = DayHistory::new(&mut eeprom).unwrap_or_else(|_| {
+        warn!("day_history: init failed, starting empty");
+        DayHistory {
+            data: uflowmeter::history::ServiceData::default(),
+        }
+    });
+    let mut month_history = MonthHistory::new(&mut eeprom).unwrap_or_else(|_| {
+        warn!("month_history: init failed, starting empty");
+        MonthHistory {
+            data: uflowmeter::history::ServiceData::default(),
+        }
+    });
+    info!(
+        "history: hour_size={=u32} day_size={=u32} month_size={=u32}",
+        hour_history.data.size(),
+        day_history.data.size(),
+        month_history.data.size()
+    );
+
     // TDC1000 — analog frontend, CS=PB11, EN=PB10, RES=PC6.
     let tdc1000_en = Output::new(p.PB10, Level::High, Speed::Low);
     let tdc1000_res = Output::new(p.PC6, Level::High, Speed::Low);
@@ -171,6 +232,7 @@ async fn main(spawner: Spawner) {
     ));
     spawner.spawn(unwrap!(drivers::uart::uart_task(uart)));
     spawner.spawn(unwrap!(drivers::uart::shell_task()));
+    spawner.spawn(unwrap!(history_tick_task()));
 
     let btn_config = ExtiInput::new(p.PB6, p.EXTI6, Pull::Up, Irqs);
     let btn_enter = ExtiInput::new(p.PB7, p.EXTI7, Pull::Up, Irqs);
@@ -199,8 +261,14 @@ async fn main(spawner: Spawner) {
     frame.flush(&mut lcd).await;
 
     loop {
-        match select(KEYS.receive(), MODBUS_FRAMES.receive()).await {
-            Either::First(KeyEvent::Pressed(flag)) => {
+        match select3(
+            KEYS.receive(),
+            MODBUS_FRAMES.receive(),
+            HISTORY_TICK.receive(),
+        )
+        .await
+        {
+            Either3::First(KeyEvent::Pressed(flag)) => {
                 let ui_event = if flag.contains(ButtonFlags::ENTER) {
                     Some(UiEvent::Enter)
                 } else if flag.contains(ButtonFlags::CONFIG) {
@@ -231,8 +299,27 @@ async fn main(spawner: Spawner) {
                     }
                 }
             }
-            Either::Second(frame_bytes) => {
-                handle_modbus_frame(&modbus, &frame_bytes, &mut options, &mut eeprom, &app);
+            Either3::Second(frame_bytes) => {
+                handle_modbus_frame(
+                    &modbus,
+                    &frame_bytes,
+                    &mut options,
+                    &mut eeprom,
+                    &mut hour_history,
+                    &mut day_history,
+                    &mut month_history,
+                    &app,
+                );
+            }
+            Either3::Third(()) => {
+                handle_history_tick(
+                    &mut app,
+                    &rtc_now,
+                    &mut eeprom,
+                    &mut hour_history,
+                    &mut day_history,
+                    &mut month_history,
+                );
             }
         }
         sync_app_datetime(&mut app, &rtc_now);
@@ -242,43 +329,21 @@ async fn main(spawner: Spawner) {
     }
 }
 
-/// Stub history binding for the Modbus handler. The handler still
-/// declares hour/day/month parameters from the legacy register map,
-/// but doesn't actually read them yet — the per-register dispatch in
-/// modbus_handler.rs only knows Options + flow data. When history
-/// rings get re-enabled this can be swapped for real `RingStorage`
-/// references.
-struct NoHistory;
-impl<S, E> HistoryAccess<S, E> for NoHistory {
-    fn find(
-        &mut self,
-        _storage: &mut S,
-        _time: u32,
-    ) -> Result<Option<i32>, uflowmeter::history::Error> {
-        Ok(None)
-    }
-    fn first_timestamp(&mut self) -> u32 {
-        0
-    }
-    fn last_timestamp(&mut self) -> u32 {
-        0
-    }
-}
-
 /// Dispatch a freshly-framed Modbus RTU request: parse, build reply
 /// (or exception), push the reply onto UART_TX so uart_task writes it
 /// out on its next iteration. Silently drops requests not addressed
 /// to us — that's the InvalidSlaveAddress path.
+#[allow(clippy::too_many_arguments)]
 fn handle_modbus_frame(
     modbus: &ModbusHandler,
     frame: &[u8],
     options: &mut Options,
     eeprom: &mut Eeprom,
+    hour_history: &mut HourHistory,
+    day_history: &mut DayHistory,
+    month_history: &mut MonthHistory,
     app: &App,
 ) {
-    let mut hour_h = NoHistory;
-    let mut day_h = NoHistory;
-    let mut month_h = NoHistory;
     let result = modbus.handle_request(
         frame,
         options,
@@ -287,9 +352,9 @@ fn handle_modbus_frame(
         app.hour_flow,
         app.day_flow,
         app.month_flow,
-        &mut hour_h,
-        &mut day_h,
-        &mut month_h,
+        hour_history,
+        day_history,
+        month_history,
     );
     match result {
         Ok(reply) => {
@@ -480,6 +545,82 @@ async fn measurement_task(
             Err(_) => defmt::warn!("tdc7200 INT timeout (ch={=u8})", downstream as u8),
         }
         downstream = !downstream;
+    }
+}
+
+/// Tick every ~60 s: accumulate the current flow reading into the
+/// hour/day/month float counters, and when the local datetime crosses
+/// a boundary (minute=0 for hour, hour=0 for day, day=1 for month)
+/// flush the accumulator into the corresponding ring and reset it.
+/// Mirrors the legacy `AppRequest::Process` callback minus the TDC
+/// trigger (measurement is its own task now).
+fn handle_history_tick(
+    app: &mut App,
+    rtc: &RtcTimeProvider,
+    eeprom: &mut Eeprom,
+    hour_history: &mut HourHistory,
+    day_history: &mut DayHistory,
+    month_history: &mut MonthHistory,
+) {
+    let dt = match rtc.now() {
+        Ok(v) => v,
+        Err(_) => {
+            defmt::warn!("history tick: RTC not ready, skipping");
+            return;
+        }
+    };
+
+    // Accumulate (currently flow is 0.0 until measurement_task starts
+    // writing it — keeps the ring layout exercised regardless).
+    app.hour_flow += app.flow;
+    app.day_flow += app.flow;
+    app.month_flow += app.flow;
+
+    // Build a unix timestamp from the RTC reading. The conversion
+    // mirrors sync_app_datetime — bail out silently if either part
+    // doesn't compute (post-VBAT-loss state).
+    let (date, time_of_day) = match (
+        time::Date::from_calendar_date(
+            dt.year() as i32,
+            time::Month::try_from(dt.month()).unwrap_or(time::Month::January),
+            dt.day(),
+        ),
+        time::Time::from_hms(dt.hour(), dt.minute(), dt.second()),
+    ) {
+        (Ok(d), Ok(t)) => (d, t),
+        _ => return,
+    };
+    let pdt = time::PrimitiveDateTime::new(date, time_of_day);
+    let ts = pdt.assume_utc().unix_timestamp() as u32;
+
+    if dt.minute() == 0 {
+        match hour_history.add(eeprom, app.hour_flow as i32, ts) {
+            Ok(()) => {
+                defmt::info!("hour_history.add({=f32}, {=u32})", app.hour_flow, ts);
+                app.hour_flow = 0.0;
+            }
+            Err(_) => defmt::error!("hour_history.add failed"),
+        }
+
+        if dt.hour() == 0 {
+            match day_history.add(eeprom, app.day_flow as i32, ts) {
+                Ok(()) => {
+                    defmt::info!("day_history.add({=f32}, {=u32})", app.day_flow, ts);
+                    app.day_flow = 0.0;
+                }
+                Err(_) => defmt::error!("day_history.add failed"),
+            }
+
+            if dt.day() == 1 {
+                match month_history.add(eeprom, app.month_flow as i32, ts) {
+                    Ok(()) => {
+                        defmt::info!("month_history.add({=f32}, {=u32})", app.month_flow, ts);
+                        app.month_flow = 0.0;
+                    }
+                    Err(_) => defmt::error!("month_history.add failed"),
+                }
+            }
+        }
     }
 }
 
