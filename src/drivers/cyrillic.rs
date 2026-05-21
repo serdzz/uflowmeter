@@ -53,19 +53,19 @@ pub const FONT: &[(char, [u8; 8])] = &[
     //  #####
     ('в', [0x00, 0x00, 0x1f, 0x11, 0x1f, 0x11, 0x1f, 0x00]),
     ('г', [0x00, 0x00, 0x1e, 0x10, 0x10, 0x10, 0x10, 0x00]),
-    // д — compact mini-Д with two clear legs at corners (NOT a "9"
-    //      with single tail). Body sits low in the cell, baseline bar
-    //      extends to both edges, legs hang as #...# matching the
-    //      side strokes above so the reader sees vertical continuity.
+    // д — leaning shape per operator's ASCII art: top arc offset
+    //      right, walls descending diagonally to a wider baseline,
+    //      legs at the corners. The asymmetric stagger is what
+    //      makes it read as Cyrillic д and not a digit.
     //  .....
     //  .....
     //  .....
-    //  .###.
-    //  #...#
-    //  #...#
+    //  ..###
+    //  .#..#
+    //  .#..#
     //  #####
     //  #...#
-    ('д', [0x00, 0x00, 0x00, 0x0e, 0x11, 0x11, 0x1f, 0x11]),
+    ('д', [0x00, 0x00, 0x00, 0x07, 0x09, 0x09, 0x1f, 0x11]),
     ('е', [0x00, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e, 0x00]),
     ('ж', [0x00, 0x00, 0x15, 0x15, 0x0e, 0x15, 0x15, 0x00]),
     ('з', [0x00, 0x00, 0x0e, 0x01, 0x06, 0x01, 0x0e, 0x00]),
