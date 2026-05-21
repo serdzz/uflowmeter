@@ -10,12 +10,23 @@ use embedded_hal::spi::{Operation, SpiDevice};
 
 pub struct Tdc7200<'d, D> {
     spi: D,
-    _en: Output<'d>,
+    en: Output<'d>,
 }
 
 impl<'d, D: SpiDevice> Tdc7200<'d, D> {
     pub fn new(spi: D, en: Output<'d>) -> Self {
-        Self { spi, _en: en }
+        Self { spi, en }
+    }
+
+    /// Power the chip on (EN HIGH). Caller must wait ~1 ms for the
+    /// internal regulator to settle before issuing SPI commands.
+    pub fn power_on(&mut self) {
+        self.en.set_high();
+    }
+
+    /// Power the chip off (EN LOW). All register state is lost.
+    pub fn power_off(&mut self) {
+        self.en.set_low();
     }
 
     /// 8-bit register space. Command byte is `(addr & 0x1F) | 0x00`

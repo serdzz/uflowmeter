@@ -210,31 +210,26 @@ async fn main(spawner: Spawner) {
     );
 
     // TDC1000 — analog frontend, CS=PB11, EN=PB10, RES=PC6.
-    let tdc1000_en = Output::new(p.PB10, Level::High, Speed::Low);
+    // EN starts LOW so the chip is powered down at boot; measurement_task
+    // turns it on for the duration of each ToF cycle and off again
+    // when done. RES is active-low so we hold it HIGH (out of reset).
+    let tdc1000_en = Output::new(p.PB10, Level::Low, Speed::Low);
     let tdc1000_res = Output::new(p.PC6, Level::High, Speed::Low);
-    let mut tdc1000 = Tdc1000::new(
+    let tdc1000 = Tdc1000::new(
         SpiDevice::new(spi2_bus, Output::new(p.PB11, Level::High, Speed::VeryHigh)),
         tdc1000_en,
         tdc1000_res,
     );
-    // Load TDC1000 config from options (legacy stored a 10-byte
-    // register dump in options.tdc1000_regs).
-    let tdc1000_regs = options.tdc1000_regs().to_le_bytes();
-    if tdc1000.load_config(&tdc1000_regs[..10]).is_err() {
-        warn!("tdc1000: load_config failed");
-    }
-    let _ = tdc1000.clear_error_flags();
 
-    // TDC7200 — time-to-digital, CS=PB12, EN=PB1.
-    let tdc7200_en = Output::new(p.PB1, Level::High, Speed::Low);
-    let mut tdc7200 = Tdc7200::new(
+    // TDC7200 — time-to-digital, CS=PB12, EN=PB1. EN starts LOW
+    // (powered down); measurement_task brings it up per-cycle.
+    let tdc7200_en = Output::new(p.PB1, Level::Low, Speed::Low);
+    let tdc7200 = Tdc7200::new(
         SpiDevice::new(spi2_bus, Output::new(p.PB12, Level::High, Speed::VeryHigh)),
         tdc7200_en,
     );
-    let tdc7200_regs = options.tdc7200_regs().to_le_bytes();
-    if tdc7200.load_config(&tdc7200_regs[..10]).is_err() {
-        warn!("tdc7200: load_config failed");
-    }
+    // Config is loaded inside measurement_task on every cycle (after
+    // power_on), so we don't try to write registers here while EN=low.
 
     // TDC7200 INT line (active-LOW) on PB0 → wakes us at end of
     // measurement via EXTI0.
@@ -706,6 +701,20 @@ async fn measurement_task(
             defmt::info!("measurement: calibration refreshed from OPTIONS_WATCH");
         }
 
+        // Bring both TDC chips up for this cycle. ~1 ms regulator
+        // settle is generous for these parts. Re-load config because
+        // the chips lose all register state when EN was low.
+        tdc1000.power_on();
+        tdc7200.power_on();
+        embassy_time::Timer::after_millis(1).await;
+        let tdc1000_regs = options.tdc1000_regs().to_le_bytes();
+        if tdc1000.load_config(&tdc1000_regs[..10]).is_err() {
+            defmt::warn!("tdc1000: load_config failed");
+        }
+        let tdc7200_regs = options.tdc7200_regs().to_le_bytes();
+        if tdc7200.load_config(&tdc7200_regs[..10]).is_err() {
+            defmt::warn!("tdc7200: load_config failed");
+        }
         let _ = tdc1000.clear_error_flags();
 
         // Downstream first (channel 0).
@@ -715,6 +724,11 @@ async fn measurement_task(
         // Upstream (channel 1).
         let _ = tdc1000.set_channel(true);
         let tof_up = single_measurement(&mut tdc7200, &mut tdc_int).await;
+
+        // Cut chip power before processing the result — calc/log are
+        // pure CPU work and don't need the analog frontend.
+        tdc1000.power_off();
+        tdc7200.power_off();
 
         match (tof_down, tof_up) {
             (Some(d), Some(u)) => {

@@ -16,15 +16,28 @@ const READ_BIT: u8 = 0x00;
 
 pub struct Tdc1000<'d, D> {
     spi: D,
-    _en: Output<'d>,
+    en: Output<'d>,
     _res: Output<'d>,
 }
 
 impl<'d, D: SpiDevice> Tdc1000<'d, D> {
-    /// `en` is the chip enable (held HIGH). `res` is the (active-low)
-    /// reset — held HIGH for normal operation.
+    /// `en` is the chip enable (held HIGH for "on"). `res` is the
+    /// (active-low) reset — held HIGH for normal operation.
     pub fn new(spi: D, en: Output<'d>, res: Output<'d>) -> Self {
-        Self { spi, _en: en, _res: res }
+        Self { spi, en, _res: res }
+    }
+
+    /// Power the chip on (EN HIGH). Caller must wait ~1 ms for the
+    /// internal regulator to settle before issuing SPI commands.
+    pub fn power_on(&mut self) {
+        self.en.set_high();
+    }
+
+    /// Power the chip off (EN LOW). Saves ~0.5 mA. All register state
+    /// is lost — caller must `load_config()` again after the next
+    /// `power_on()`.
+    pub fn power_off(&mut self) {
+        self.en.set_low();
     }
 
     pub fn read_register(&mut self, address: u8) -> Result<u8, D::Error> {
