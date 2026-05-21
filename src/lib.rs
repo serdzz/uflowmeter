@@ -11,12 +11,15 @@ extern crate alloc;
 pub mod apps;
 pub mod calibration;
 pub mod gui;
+pub mod history;
 pub mod history_lib;
 // measurement/ultrasonic_flow.rs still uses embedded-hal 0.2 API
 // (blocking::spi, digital::v2). Gated off for the embassy port until
 // the TDC drivers are rewritten on embedded-hal 1.0.
 #[cfg(test)]
 pub mod measurement;
+pub mod modbus;
+pub mod modbus_handler;
 pub mod options;
 pub mod ui;
 

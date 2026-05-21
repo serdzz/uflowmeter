@@ -35,6 +35,9 @@ use drivers::tdc1000::Tdc1000;
 use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
+use drivers::uart::{MODBUS_FRAMES, UART_TX};
+use embassy_futures::select::{Either, select};
+use uflowmeter::modbus_handler::{HistoryAccess, ModbusHandler};
 use uflowmeter::ui::MenuController;
 use uflowmeter::{App, AppRequest, Options, UiEvent};
 
@@ -182,6 +185,12 @@ async fn main(spawner: Spawner) {
     // the HD44780 between executor yields.
     let mut frame = DeferredDisplay::new();
 
+    // Modbus dispatcher — slave address from Options at boot. The
+    // handler is stateless aside from the address; we hold it across
+    // iterations so updating the address via UI takes effect on the
+    // next request.
+    let mut modbus = ModbusHandler::new(options.slave_address());
+
     // Initial render so the user sees something even before the first
     // key press.
     ui.update(&app);
@@ -189,39 +198,108 @@ async fn main(spawner: Spawner) {
     frame.flush(&mut lcd).await;
 
     loop {
-        let event = KEYS.receive().await;
-        let KeyEvent::Pressed(flag) = event;
-        let ui_event = if flag.contains(ButtonFlags::ENTER) {
-            Some(UiEvent::Enter)
-        } else if flag.contains(ButtonFlags::CONFIG) {
-            Some(UiEvent::Back)
-        } else if flag.contains(ButtonFlags::DOWN) {
-            // Match legacy keyboard.rs: hardware Down → UiEvent::Left,
-            // Up → UiEvent::Right. (Yes the names are inverted vs.
-            // visual intuition; that's the existing UI convention.)
-            Some(UiEvent::Left)
-        } else if flag.contains(ButtonFlags::UP) {
-            Some(UiEvent::Right)
-        } else {
-            None
-        };
+        match select(KEYS.receive(), MODBUS_FRAMES.receive()).await {
+            Either::First(KeyEvent::Pressed(flag)) => {
+                let ui_event = if flag.contains(ButtonFlags::ENTER) {
+                    Some(UiEvent::Enter)
+                } else if flag.contains(ButtonFlags::CONFIG) {
+                    Some(UiEvent::Back)
+                } else if flag.contains(ButtonFlags::DOWN) {
+                    // Match legacy keyboard.rs: hardware Down → Left,
+                    // Up → Right (inverted vs. visual intuition — the
+                    // UI convention is pre-existing).
+                    Some(UiEvent::Left)
+                } else if flag.contains(ButtonFlags::UP) {
+                    Some(UiEvent::Right)
+                } else {
+                    None
+                };
 
-        if let Some(e) = ui_event {
-            if let Some(req) = ui.event(e, &app) {
-                handle_app_request(
-                    req,
-                    &mut backlight,
-                    &mut options,
-                    &mut eeprom,
-                    &mut opt_buf,
-                    &rtc_container,
-                );
+                if let Some(e) = ui_event {
+                    if let Some(req) = ui.event(e, &app) {
+                        handle_app_request(
+                            req,
+                            &mut backlight,
+                            &mut options,
+                            &mut eeprom,
+                            &mut opt_buf,
+                            &rtc_container,
+                        );
+                        // Slave address may have changed.
+                        modbus.modbus_mut().set_slave_address(options.slave_address());
+                    }
+                }
+            }
+            Either::Second(frame_bytes) => {
+                handle_modbus_frame(&modbus, &frame_bytes, &mut options, &mut eeprom, &app);
             }
         }
         sync_app_datetime(&mut app, &rtc_now);
         ui.update(&app);
         ui.render(&app, &mut frame);
         frame.flush(&mut lcd).await;
+    }
+}
+
+/// Stub history binding for the Modbus handler. The handler still
+/// declares hour/day/month parameters from the legacy register map,
+/// but doesn't actually read them yet — the per-register dispatch in
+/// modbus_handler.rs only knows Options + flow data. When history
+/// rings get re-enabled this can be swapped for real `RingStorage`
+/// references.
+struct NoHistory;
+impl<S, E> HistoryAccess<S, E> for NoHistory {
+    fn find(
+        &mut self,
+        _storage: &mut S,
+        _time: u32,
+    ) -> Result<Option<i32>, uflowmeter::history::Error> {
+        Ok(None)
+    }
+    fn first_timestamp(&mut self) -> u32 {
+        0
+    }
+    fn last_timestamp(&mut self) -> u32 {
+        0
+    }
+}
+
+/// Dispatch a freshly-framed Modbus RTU request: parse, build reply
+/// (or exception), push the reply onto UART_TX so uart_task writes it
+/// out on its next iteration. Silently drops requests not addressed
+/// to us — that's the InvalidSlaveAddress path.
+fn handle_modbus_frame(
+    modbus: &ModbusHandler,
+    frame: &[u8],
+    options: &mut Options,
+    eeprom: &mut Eeprom,
+    app: &App,
+) {
+    let mut hour_h = NoHistory;
+    let mut day_h = NoHistory;
+    let mut month_h = NoHistory;
+    let result = modbus.handle_request(
+        frame,
+        options,
+        eeprom,
+        app.flow,
+        app.hour_flow,
+        app.day_flow,
+        app.month_flow,
+        &mut hour_h,
+        &mut day_h,
+        &mut month_h,
+    );
+    match result {
+        Ok(reply) => {
+            if UART_TX.try_send(reply).is_err() {
+                defmt::warn!("modbus: UART_TX queue full, reply dropped");
+            }
+        }
+        Err(uflowmeter::modbus::ModbusError::InvalidSlaveAddress) => {
+            // Not for us — silent on the wire is correct.
+        }
+        Err(e) => defmt::warn!("modbus: handler error {:?}", defmt::Debug2Format(&e)),
     }
 }
 
