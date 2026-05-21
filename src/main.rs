@@ -36,7 +36,7 @@ use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
 use uflowmeter::ui::MenuController;
-use uflowmeter::{App, UiEvent};
+use uflowmeter::{App, AppRequest, UiEvent};
 
 bind_interrupts!(
     pub struct Irqs {
@@ -62,7 +62,7 @@ async fn main(spawner: Spawner) {
     let (_rtc_container, rtc_now) = Rtc::new(p.RTC);
 
     let _lcd_on = Output::new(p.PC0, Level::Low, Speed::Low);
-    let _backlight = Output::new(p.PC5, Level::High, Speed::Low);
+    let mut backlight = Output::new(p.PC5, Level::High, Speed::Low);
 
     let rs = Output::new(p.PC1, Level::Low, Speed::Low);
     let rw = Output::new(p.PC2, Level::Low, Speed::Low);
@@ -180,15 +180,57 @@ async fn main(spawner: Spawner) {
         };
 
         if let Some(e) = ui_event {
-            // Returned AppRequest currently ignored — driver tasks
-            // (Process, DeepSleep, etc.) aren't wired up yet on the
-            // embassy port.
-            let _ = ui.event(e, &app);
+            if let Some(req) = ui.event(e, &app) {
+                handle_app_request(req, &mut backlight);
+            }
         }
         sync_app_datetime(&mut app, &rtc_now);
         ui.update(&app);
         ui.render(&app, &mut frame);
         frame.flush(&mut lcd).await;
+    }
+}
+
+/// First-pass AppRequest dispatcher. Wire up handlers as the
+/// dependencies (EEPROM-backed options, RTC set_datetime, TDC
+/// measurement orchestration) get ported.
+fn handle_app_request(req: AppRequest, backlight: &mut Output<'static>) {
+    match req {
+        AppRequest::SystemReset => {
+            defmt::info!("AppRequest::SystemReset");
+            cortex_m::peripheral::SCB::sys_reset();
+        }
+        AppRequest::LcdLed(on) => {
+            if on {
+                backlight.set_high();
+            } else {
+                backlight.set_low();
+            }
+        }
+        AppRequest::DeepSleep => {
+            // No-op — embassy's executor enters STOP automatically
+            // when all tasks idle (see embassy-stm32 low_power feature).
+        }
+        AppRequest::Process => {
+            // Trigger TDC measurement once the full TDC1000/7200
+            // orchestration is ported. For now just log.
+            defmt::trace!("AppRequest::Process (unimplemented)");
+        }
+        AppRequest::SetDateTime(_dt) => {
+            defmt::warn!("AppRequest::SetDateTime — RTC set_datetime not wired yet");
+        }
+        AppRequest::SetHistory(_, _) => {
+            defmt::trace!("AppRequest::SetHistory (unimplemented)");
+        }
+        AppRequest::SetCommType(_)
+        | AppRequest::SetAddress(_)
+        | AppRequest::SetMuster(_)
+        | AppRequest::SetNegative(_) => {
+            defmt::warn!("AppRequest::Set* — options persistence not wired yet");
+        }
+        AppRequest::ExitShell | AppRequest::EnterCalibration => {
+            defmt::trace!("AppRequest::Exit/Enter (no-op)");
+        }
     }
 }
 

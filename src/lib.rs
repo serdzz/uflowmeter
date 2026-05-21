@@ -19,7 +19,7 @@ pub mod history_lib;
 pub mod measurement;
 pub mod ui;
 
-pub use apps::{Actions, App};
+pub use apps::{Actions, App, AppRequest};
 pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
 
 #[cfg(test)]
