@@ -41,11 +41,31 @@ pub const FONT: &[(char, [u8; 8])] = &[
     ('а', [0x00, 0x00, 0x0e, 0x01, 0x0f, 0x11, 0x0f, 0x00]),
     // б — proper top curl going up-right + clean closed bowl below.
     ('б', [0x00, 0x07, 0x08, 0x1e, 0x12, 0x12, 0x1e, 0x00]),
-    // в — original legacy bitmap from src/hardware/display.rs:176.
-    ('в', [0x00, 0x00, 0x17, 0x19, 0x17, 0x19, 0x17, 0x00]),
+    // в — full-width B/β: three horizontal bars + two side strokes,
+    //      everything aligned in cols 0..4 so the bowls actually
+    //      look like bowls instead of the legacy's offset stripes.
+    //  .....
+    //  .....
+    //  #####
+    //  #...#
+    //  #####
+    //  #...#
+    //  #####
+    ('в', [0x00, 0x00, 0x1f, 0x11, 0x1f, 0x11, 0x1f, 0x00]),
     ('г', [0x00, 0x00, 0x1e, 0x10, 0x10, 0x10, 0x10, 0x00]),
-    // д — original legacy bitmap from src/hardware/display.rs:178.
-    ('д', [0x00, 0x00, 0x0e, 0x11, 0x11, 0x0f, 0x01, 0x1f]),
+    // д — compact mini-Д with two clear legs at corners (NOT a "9"
+    //      with single tail). Body sits low in the cell, baseline bar
+    //      extends to both edges, legs hang as #...# matching the
+    //      side strokes above so the reader sees vertical continuity.
+    //  .....
+    //  .....
+    //  .....
+    //  .###.
+    //  #...#
+    //  #...#
+    //  #####
+    //  #...#
+    ('д', [0x00, 0x00, 0x00, 0x0e, 0x11, 0x11, 0x1f, 0x11]),
     ('е', [0x00, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e, 0x00]),
     ('ж', [0x00, 0x00, 0x15, 0x15, 0x0e, 0x15, 0x15, 0x00]),
     ('з', [0x00, 0x00, 0x0e, 0x01, 0x06, 0x01, 0x0e, 0x00]),
