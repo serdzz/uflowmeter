@@ -2,6 +2,13 @@
 
 Embedded ultrasonic flow measurement system based on STM32L151 microcontroller.
 
+> **Branch note** — `rework/embassy` ports the firmware from RTIC to
+> the [embassy](https://github.com/embassy-rs/embassy) async runtime.
+> Most of the device-feature documentation in this README still
+> applies; for what's different (task layout, power management,
+> EXTI-wake UART, Modbus map extensions, build changes), see
+> [`docs/EMBASSY_PORT.md`](docs/EMBASSY_PORT.md).
+
 ## Description
 
 uFlowmeter is a transit-time-of-flight liquid flow measurement system implemented in Rust for the STM32 platform. The system uses TDC1000/TDC7200 chipsets for precise ultrasonic signal transit time measurement and flow velocity calculation.
