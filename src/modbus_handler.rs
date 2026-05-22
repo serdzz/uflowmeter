@@ -458,10 +458,12 @@ mod tests {
         }
     }
 
-    // Mock history for testing
+    // Mock history for testing. Pins the inner error type to `()` to
+    // match `MockStorage::Error = options::Error<()>` so the compiler
+    // can resolve `handle_request`'s E generic at call-sites below.
     struct MockHistory;
 
-    impl<S, E> HistoryAccess<S, E> for MockHistory {
+    impl<S> HistoryAccess<S, ()> for MockHistory {
         fn find(
             &mut self,
             _storage: &mut S,

@@ -14,10 +14,9 @@ pub mod gui;
 pub mod history;
 pub mod history_lib;
 // measurement/ultrasonic_flow.rs still uses embedded-hal 0.2 API
-// (blocking::spi, digital::v2). Gated off for the embassy port until
-// the TDC drivers are rewritten on embedded-hal 1.0.
-#[cfg(test)]
-pub mod measurement;
+// (blocking::spi, digital::v2) — superseded by the embassy port's
+// `drivers/tdc{1000,7200}.rs` + `calibration.rs` Calculator pair.
+// No tests of its own, so just leave it out of the module tree.
 pub mod modbus;
 pub mod modbus_handler;
 pub mod options;

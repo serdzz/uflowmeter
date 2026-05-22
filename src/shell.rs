@@ -423,4 +423,98 @@ mod tests {
         assert!(eq(tokens[1], b"set"));
         assert!(eq(tokens[2], b"123"));
     }
+
+    // ─── parse_action coverage ────────────────────────────────────────
+
+    #[test]
+    fn test_parse_action_date_set() {
+        assert_eq!(
+            parse_action(b"date set 1700000000\r\n"),
+            Some(ShellAction::SetDateUnix(1700000000))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_date_set_missing_ts() {
+        // "date set" with no timestamp → not an actionable command.
+        assert_eq!(parse_action(b"date set\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_date_set_bad_ts() {
+        assert_eq!(parse_action(b"date set abc\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_date_get_is_readonly() {
+        // `date get` is a textual query, no side-effect to dispatch.
+        assert_eq!(parse_action(b"date get\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_set_serial() {
+        assert_eq!(
+            parse_action(b"set_serial 12345\r\n"),
+            Some(ShellAction::SetSerial(12345))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_serial_missing() {
+        assert_eq!(parse_action(b"set_serial\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_set_serial_zero() {
+        assert_eq!(
+            parse_action(b"set_serial 0\r\n"),
+            Some(ShellAction::SetSerial(0))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_verbose_on() {
+        assert_eq!(
+            parse_action(b"set_verbose 1\r\n"),
+            Some(ShellAction::SetVerbose(true))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_verbose_off() {
+        assert_eq!(
+            parse_action(b"set_verbose 0\r\n"),
+            Some(ShellAction::SetVerbose(false))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_verbose_bad_value() {
+        // Anything other than 0 or 1 is rejected.
+        assert_eq!(parse_action(b"set_verbose 2\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_help_is_readonly() {
+        // `help` prints text only.
+        assert_eq!(parse_action(b"help\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_empty() {
+        assert_eq!(parse_action(b""), None);
+        assert_eq!(parse_action(b"\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_unknown_command() {
+        assert_eq!(parse_action(b"frobnicate 42\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_binary_noise() {
+        // Random binary (e.g. mis-routed Modbus bytes) must not be
+        // mistaken for a shell action.
+        assert_eq!(parse_action(b"\x01\x03\x00\x00\x00\x0a"), None);
+    }
 }

@@ -22,7 +22,33 @@ embassy-futures = { git = "https://github.com/serdzz/embassy", branch = "stm32l1
 embassy-embedded-hal = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
 
 [dependencies]
+# Pure-Rust / target-agnostic deps. These build for both
+# thumbv7m-none-eabi and the host (for `cargo test --lib`).
 defmt = "1.0.1"
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+embedded-storage = "0.3.1"
+embedded-storage-async = "0.4"
+time = { version = "0.3.22", default-features = false, features = ["macros"] }
+microchip-eeprom-25lcxx = { git = "https://github.com/serdzz/microchip-eeprom-25x.git", rev = "b169fe4", features = ["25lc1024"] }
+nb = "1.1.0"
+bitflags = "2.9.0"
+bit_field = "~0.10"
+heapless = { version = "0.9", default-features = false }
+static_cell = "2.1"
+critical-section = "1.1"
+lcd = "0.4.1"
+paste = "1.0.9"
+crc16 = "0.4.0"
+modular-bitfield = "0.13.0"
+compile-time = "0.2.0"
+rand_core = "0.9.3"
+rand_pcg = "0.9.0"
+
+# ARM-only deps. Pulled in for the `thumbv7m-none-eabi` build of the
+# binary; not needed for host-side `cargo test --lib`, which only
+# touches the pure-Rust modules.
+[target.'cfg(target_arch = "arm")'.dependencies]
 defmt-rtt = "1.0.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
@@ -43,27 +69,6 @@ embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime
 embassy-sync = { version = "0.8.0", features = ["defmt"] }
 embassy-futures = "0.1.2"
 embassy-embedded-hal = "0.6.0"
-
-embedded-hal = "1.0"
-embedded-hal-async = "1.0"
-embedded-storage = "0.3.1"
-embedded-storage-async = "0.4"
-
-time = { version = "0.3.22", default-features = false, features = ["macros"] }
-microchip-eeprom-25lcxx = { git = "https://github.com/serdzz/microchip-eeprom-25x.git", rev = "b169fe4", features = ["25lc1024"] }
-nb = "1.1.0"
-bitflags = "2.9.0"
-bit_field = "~0.10"
-heapless = { version = "0.9", default-features = false }
-static_cell = "2.1"
-critical-section = "1.1"
-lcd = "0.4.1"
-paste = "1.0.9"
-crc16 = "0.4.0"
-modular-bitfield = "0.13.0"
-compile-time = "0.2.0"
-rand_core = "0.9.3"
-rand_pcg = "0.9.0"
 
 [features]
 default = []
