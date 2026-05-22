@@ -113,8 +113,29 @@ async fn main(spawner: Spawner) {
     // from 4.5 to 7.1 mA on the bench unit. Slower core stretches
     // every wake task → more time awake → fewer STOP entries because
     // `time_until_next_alarm < min_stop_pause` fires more often.
+
+    // Enable the 24 MHz HSE crystal so we can drive it out on the
+    // MCO pin (PA8) as the TDC1000 / TDC7200 reference clock. SYSCLK
+    // stays on MSI; HSE is only used as the MCO source. Matches the
+    // legacy RTIC config (`PLLSource::HSE(24.mhz()) + configure_mco(
+    // MCOSel::Hse, Div1, mco)`).
+    config.rcc.hse = Some(embassy_stm32::rcc::Hse {
+        freq: embassy_stm32::time::Hertz(24_000_000),
+        mode: embassy_stm32::rcc::HseMode::Oscillator,
+    });
     let p = embassy_stm32::init(config);
     info!("uflowmeter (embassy): boot");
+
+    // MCO out on PA8 → TDC1000 / TDC7200 CLOCK pins. HSE source, /1
+    // prescaler = 24 MHz on the pin. The `Mco` instance just needs
+    // to stay alive (its drop would tristate PA8); shove into `_mco`
+    // so the AF stays driven for the lifetime of `main`.
+    let _mco = embassy_stm32::rcc::Mco::new(
+        p.MCO,
+        p.PA8,
+        embassy_stm32::rcc::McoSource::HSE,
+        embassy_stm32::rcc::McoConfig::default(),
+    );
 
     // RTC: low-power Rtc::new takes only the peripheral and returns
     // (container, time_provider). The container holds the Rtc behind
