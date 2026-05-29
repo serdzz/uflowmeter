@@ -8,10 +8,12 @@
 #   ./build-tests/uflowmeter_tests
 #
 # What's covered: src/modbus.cpp, src/shell.cpp, src/calibration.cpp,
-#                 src/crc.cpp.
+#                 src/crc.cpp, src/history_lib.hpp (via Zephyr include
+#                 shims under tests/shims/ + RAM-backed FakeEeprom).
 # What's NOT: src/datetime.cpp (STM32L1 RTC registers),
-#             src/options.cpp (Zephyr eeprom_read/write),
-#             src/history.cpp, src/history_lib.hpp (Zephyr eeprom),
+#             src/options.cpp (Zephyr eeprom_read/write — only the
+#               extracted CRC is tested, not the dual-page protocol),
+#             src/history.cpp (Zephyr threads + datetime + RTC),
 #             src/power.cpp, src/timer/* (chip registers + Zephyr PM),
 #             everything under src/drivers/* and src/ui/render.cpp
 #             (Zephyr HAL).
@@ -37,19 +39,23 @@ add_compile_options(
 
 add_executable(uflowmeter_tests
     framework.cpp
+    fake_eeprom.cpp
     test_modbus.cpp
     test_shell.cpp
     test_calibration.cpp
     test_crc.cpp
+    test_history_lib.cpp
     # Production sources under test
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/modbus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/shell.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/calibration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/crc.cpp
+    # history_lib.hpp is header-only — included by test_history_lib.cpp
 )
 
 target_include_directories(uflowmeter_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/shims    # zephyr/* host shims for history_lib.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 

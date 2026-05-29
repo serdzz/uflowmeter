@@ -118,18 +118,27 @@ public:
 	bool empty() const { return data_.size == 0; }
 
 	/* Look up the value at `time` (rounded down to 60s). Returns
-	 * nullopt if no slot matches. */
+	 * nullopt if no slot matches.
+	 *
+	 * Walks backwards from the just-written slot ((offset_of_last - 1
+	 * + SIZE) % SIZE) for `size` steps, expected_time advancing back
+	 * by ELEMENT_SIZE each step. The earlier formula (from a verbatim
+	 * embassy port) keyed `expected_time` off the slot index — it
+	 * happened to land correct values for the fully-populated +
+	 * offset_of_last==0 case but underflowed for partial rings.
+	 * Caught by tests/test_history_lib.cpp::add_then_find_roundtrip. */
 	std::optional<std::int32_t> find(const struct device* eeprom, std::uint32_t time)
 	{
 		if (data_.size == 0) {
 			return std::nullopt;
 		}
 		const std::uint32_t target = time - (time % 60u);
-		std::int32_t index = static_cast<std::int32_t>(data_.offset_of_last);
+		std::int32_t index = (data_.offset_of_last == 0)
+			? SIZE - 1
+			: static_cast<std::int32_t>(data_.offset_of_last) - 1;
 		for (std::uint32_t step = 0; step < data_.size; step++) {
 			const std::uint32_t expected_time = data_.time_of_last -
-				(data_.size - 1u - static_cast<std::uint32_t>(index)) *
-				static_cast<std::uint32_t>(ELEMENT_SIZE);
+				step * static_cast<std::uint32_t>(ELEMENT_SIZE);
 			if (expected_time == target) {
 				std::int32_t value = 0;
 				const std::uint32_t addr =

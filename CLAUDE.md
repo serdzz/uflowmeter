@@ -34,7 +34,7 @@ This repo IS the Zephyr application. The first build clones Zephyr + HALs into s
 | **Host tests** (no Zephyr) | `cmake -S tests -B build-tests && cmake --build build-tests && ./build-tests/uflowmeter_tests` |
 | Host tests via ctest | `ctest --test-dir build-tests --output-on-failure` |
 
-Host tests cover the pure-logic modules — modbus codec, shell parser, calibration. 46/46 cases pass at HEAD. See `tests/README.md` for what's NOT covered and why (the HAL-bound files need Zephyr decoupling or a fake EEPROM device).
+Host tests cover the pure-logic modules — modbus codec, shell parser, calibration, CRC primitives — plus the EEPROM-ring template (`history_lib.hpp`, via a tiny `<zephyr/drivers/eeprom.h>` shim + a RAM-backed `FakeEeprom`). 62/62 cases pass at HEAD. See `tests/README.md` for what's NOT covered and why (the remaining HAL-bound files — `history.cpp`'s thread + datetime, `options.cpp`'s dual-page protocol — need further Zephyr decoupling).
 
 ## Repo layout
 
