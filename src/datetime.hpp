@@ -31,11 +31,24 @@ struct DateTimeFields {
 	std::uint8_t  second; /* 0..59 */
 };
 
-/* Current wall-clock datetime. Cheap — single uptime read + math. */
+/* Initialize datetime — checks the RTC BKP0 magic; if valid (warm
+ * boot with VBAT), trusts the live RTC TR/DR. If invalid (cold boot
+ * without VBAT, or first power-on), writes a 2024-01-01 baseline and
+ * stamps the magic. Call once from main at boot, before any consumer
+ * (history_tick, UI, UART worker) reads now().
+ *
+ * Returns 0 on success, negative errno if the RTC init-mode write
+ * failed (rare — would mean the RTC clock is missing). */
+int init();
+
+/* Current wall-clock datetime. Reads RTC TR/DR via direct CMSIS
+ * access — sub-microsecond, no mutex needed. */
 DateTimeFields now();
 
-/* Anchor the wall clock so now() returns `dt` (approximately —
- * truncated to second resolution). */
+/* Anchor the wall clock: writes BCD → RTC TR/DR. Internally serialized
+ * with a mutex (multiple writers: UI dispatcher + shell SetDateUnix).
+ * Truncated to 1 s resolution. Persists across STOP automatically and
+ * across reboot if VBAT is present. */
 void set(const DateTimeFields& dt);
 
 /* Per-field arithmetic. inc_day cascades into month/year via the

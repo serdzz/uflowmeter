@@ -243,6 +243,14 @@ int main(void)
 		LOG_INF("power: STOP mode armed (RTC WUT wake)");
 	}
 
+	/* Datetime — check RTC BKP0 magic, restore live RTC TR/DR or
+	 * apply 2024-01-01 baseline. Must run before history_tick reads
+	 * datetime::now(). */
+	rc = uflow::datetime::init();
+	if (rc < 0) {
+		LOG_WRN("datetime init failed (%d) — wall clock unreliable", rc);
+	}
+
 	uflow::ui::MenuController controller;
 	render_under_mutex(controller);
 
