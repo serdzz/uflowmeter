@@ -30,6 +30,8 @@
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/interrupt_controller/gpio_intc_stm32.h>
+#include <zephyr/dt-bindings/pinctrl/stm32-pinctrl-common.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -78,6 +80,30 @@ struct k_thread uart_thread_data;
 k_tid_t uart_tid = nullptr;
 
 std::uint8_t options_save_scratch[options::OPTIONS_PAGE_SIZE];
+
+/* STOP-mode wake callback. STM32L1 USART has no UESM (that's L0/L4+
+ * only), so the chip's USART clock dies when we enter STOP via the
+ * PM hook in src/power.cpp. PA10 (USART1_RX) is still a live GPIO
+ * input regardless — EXTI line 10 samples the pad voltage AND
+ * triggers wake from STOP on any enabled edge. We arm the falling
+ * edge: peer's start bit pulls PA10 low, EXTI wakes the chip,
+ * pm_state_exit_post_ops restores HSE+PLL+USART clock (~50 ms),
+ * and subsequent bytes are captured by the standard uart_isr.
+ *
+ * The wake-byte is lost (USART clock was off when the start edge
+ * arrived). Modbus master notices the missing/garbled byte via CRC
+ * and retries on its own timeout. Shell users see the first
+ * character of the wake-up command swallowed; terminal echo helps
+ * the operator notice and re-type.
+ *
+ * The callback itself does nothing — the EXTI dispatcher clears
+ * the pending bit, the USART driver picks up bytes via its own IRQ.
+ * We register a no-op so Zephyr's intc dispatcher has something to
+ * call (otherwise the line would be unclaimed). */
+void pa10_wake_cb(gpio_port_pins_t, void*)
+{
+	/* Intentionally empty. See comment above. */
+}
 
 void uart_isr(const struct device* dev, void* /*user*/)
 {
@@ -265,6 +291,26 @@ int start()
 		return rc;
 	}
 	uart_irq_rx_enable(uart_dev_);
+
+	/* Arm PA10 (USART1 RX) as a STOP-mode wake source. PA10 is in
+	 * USART AF — Zephyr's USART driver owns the pin config — but
+	 * EXTI samples the pad voltage independent of GPIO mode, so
+	 * the wake works without taking the pin away from USART. */
+	const stm32_gpio_irq_line_t pa10_line =
+		stm32_gpio_intc_get_pin_irq_line(STM32_PORTA, 10);
+	stm32_exti_set_line_src_port(10, STM32_PORTA);
+	stm32_gpio_intc_select_line_trigger(pa10_line,
+		STM32_GPIO_IRQ_TRIG_FALLING);
+	int wake_rc = stm32_gpio_intc_set_irq_callback(pa10_line,
+		pa10_wake_cb, nullptr);
+	if (wake_rc < 0) {
+		LOG_WRN("PA10 wake callback registration failed (%d) — "
+		        "UART bytes during STOP will be lost without "
+		        "wake from other sources", wake_rc);
+	} else {
+		stm32_gpio_intc_enable_line(pa10_line);
+		LOG_INF("uart STOP-wake armed on PA10 falling edge");
+	}
 
 	uart_tid = k_thread_create(
 		&uart_thread_data,
