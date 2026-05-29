@@ -113,6 +113,21 @@ LoadResult load(const struct device* eeprom,
                 Options&             out,
                 std::uint8_t         scratch[OPTIONS_PAGE_SIZE]);
 
+/* Save the global g_options through the standard EEPROM DP wake/sleep
+ * cycle, serialized against the other writers (UI dispatcher,
+ * Modbus 0x06/0x10 handler, history ring writes) via
+ * drivers::eeprom_mutex.
+ *
+ * This is the canonical write path — main.cpp / modbus_handler.cpp /
+ * uart.cpp (shell SetSerial) all call here instead of duplicating the
+ * wake/save/sleep block.
+ *
+ * Returns 0 on success, negative errno from eeprom wake or save on
+ * failure. Re-parks the chip in DP even if the save itself fails,
+ * to avoid leaving the chip burning extra current. */
+int save_through_dp(const struct device* eeprom,
+                    std::uint8_t         scratch[OPTIONS_PAGE_SIZE]);
+
 /* Update the CRC field, then write both 1024-byte copies. Returns 0 on
  * success, negative errno from eeprom_write on failure. */
 int save(const struct device* eeprom,

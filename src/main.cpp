@@ -59,35 +59,6 @@ void render_under_mutex(uflow::ui::MenuController& mc)
 	k_mutex_unlock(&uflow::drivers::lcd_mutex);
 }
 
-/* Wake the EEPROM, save Options, re-park the chip in DP. Two SPI
- * transactions per call — DP exit + RDP wait (~100 µs) plus the actual
- * eeprom_write (page-split + WIP poll). Keeps the EEPROM in DP for
- * the rest of the runtime; we only pay this cost on edit-commit. */
-int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
-{
-	/* Serialize against modbus_handler and history_tick — all three
-	 * pump in_dp_state through eeprom_power. */
-	k_mutex_lock(&uflow::drivers::eeprom_mutex, K_FOREVER);
-	int rc = uflow::drivers::eeprom_exit_deep_power_down();
-	if (rc < 0) {
-		LOG_ERR("eeprom wake failed (%d) — skipping save", rc);
-		k_mutex_unlock(&uflow::drivers::eeprom_mutex);
-		return rc;
-	}
-	rc = uflow::options::save(eeprom, uflow::options::g_options, scratch);
-	if (rc < 0) {
-		LOG_ERR("options save failed (%d)", rc);
-	} else {
-		LOG_INF("options saved");
-	}
-	int rc2 = uflow::drivers::eeprom_enter_deep_power_down();
-	if (rc2 < 0) {
-		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", rc2);
-	}
-	k_mutex_unlock(&uflow::drivers::eeprom_mutex);
-	return rc;
-}
-
 void handle_app_request(uflow::ui::MenuController& mc,
                         uflow::ui::AppRequest req,
                         const struct device* eeprom,
@@ -119,22 +90,22 @@ void handle_app_request(uflow::ui::MenuController& mc,
 	case AppRequest::SetCommType:
 		LOG_INF("SetCommType: %u", v);
 		opts.comm_type = v;
-		(void)save_options_through_dp(eeprom, scratch);
+		(void)uflow::options::save_through_dp(eeprom, scratch);
 		return;
 	case AppRequest::SetSlaveAddress:
 		LOG_INF("SetSlaveAddress: %u", v);
 		opts.slave_address = v;
-		(void)save_options_through_dp(eeprom, scratch);
+		(void)uflow::options::save_through_dp(eeprom, scratch);
 		return;
 	case AppRequest::SetNegative:
 		LOG_INF("SetNegative: %u", v);
 		opts.enable_negative = v;
-		(void)save_options_through_dp(eeprom, scratch);
+		(void)uflow::options::save_through_dp(eeprom, scratch);
 		return;
 	case AppRequest::SetSensorType:
 		LOG_INF("SetSensorType: %u", v);
 		opts.sensor_type = v;
-		(void)save_options_through_dp(eeprom, scratch);
+		(void)uflow::options::save_through_dp(eeprom, scratch);
 		return;
 	case AppRequest::SetMuster:
 		/* No Options home — log only. State lives on the

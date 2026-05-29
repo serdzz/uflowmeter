@@ -11,7 +11,10 @@
 
 #include <zephyr/device.h>
 #include <zephyr/drivers/eeprom.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+
+#include "drivers/eeprom_power.hpp"
 
 LOG_MODULE_REGISTER(options, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -109,6 +112,35 @@ int save(const struct device* eeprom, Options& opts, std::uint8_t* scratch)
 		return rc;
 	}
 	return 0;
+}
+
+int save_through_dp(const struct device* eeprom, std::uint8_t* scratch)
+{
+	if (eeprom == nullptr || scratch == nullptr) {
+		return -EINVAL;
+	}
+	/* Serialize against modbus_handler save + history_tick ring
+	 * writes — all four call sites lock the same mutex around
+	 * their wake/op/sleep block. */
+	k_mutex_lock(&drivers::eeprom_mutex, K_FOREVER);
+	int rc = drivers::eeprom_exit_deep_power_down();
+	if (rc < 0) {
+		LOG_ERR("eeprom wake failed (%d) — skipping save", rc);
+		k_mutex_unlock(&drivers::eeprom_mutex);
+		return rc;
+	}
+	rc = save(eeprom, g_options, scratch);
+	if (rc < 0) {
+		LOG_ERR("options save failed (%d)", rc);
+	}
+	/* Re-park even on save failure — don't leave the chip burning
+	 * the extra 4 µA. */
+	int rc2 = drivers::eeprom_enter_deep_power_down();
+	if (rc2 < 0) {
+		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", rc2);
+	}
+	k_mutex_unlock(&drivers::eeprom_mutex);
+	return rc;
 }
 
 } /* namespace uflow::options */

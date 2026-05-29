@@ -265,15 +265,13 @@ Three call sites reach the chip through `drivers::eeprom_power`'s
 3. `history.cpp::with_eeprom_awake` — history_tick boundary writes
 
 A fourth caller (`shell::dispatch_shell_action` in `uart.cpp`) also
-saves Options on `set_serial`. All four acquire
-`drivers::eeprom_mutex` (`K_MUTEX_DEFINE` in eeprom_power.cpp) before
-the wake call and release after the sleep call. This prevents the
-`in_dp_state` flag from going out of sync — the Zephyr SPI bus mutex
-already serializes wire-level access.
-
-**Cleanup TODO**: the wake/save/sleep block is duplicated in three
-files. Natural refactor is `options::save_through_dp(eeprom, scratch)`
-in `options.cpp`. Was deferred to keep the shell commit focused.
+saves Options on `set_serial`. **All four go through the shared
+`options::save_through_dp(eeprom, scratch)` helper** in `options.cpp`,
+which acquires `drivers::eeprom_mutex` (`K_MUTEX_DEFINE` in
+eeprom_power.cpp), wakes the chip from DP, calls `save()`, re-parks
+in DP, and releases the mutex. The mutex prevents `in_dp_state` from
+going out of sync — the Zephyr SPI bus mutex already serializes
+wire-level access.
 
 ## Flash recovery — SwdApWait / SwdDpWait
 
@@ -326,7 +324,7 @@ without ritual.
 | ~~1~~ | ~~`CONFIG_PM=n` — no STOP mode~~ | **Closed.** Zephyr 4.4 has upstream L1 PM. Re-enabled `CONFIG_PM=y`; our power.cpp overrides keep LCD gating. |
 | ~~2~~ | ~~UART STOP-wake~~ | **Closed.** STM32L1 has no UESM (L0/L4+ only), so we wake the chip via EXTI line 10 on PA10's falling edge. Wake-byte lost (USART clock dead ≈ 50 ms while clocks restore); Modbus retries handle it. |
 | ~~3~~ | ~~MCO on PA8~~ | **Closed.** Direct CMSIS register poke in `src/mco.{hpp,cpp}` (no L1 DT binding). HSE/1 = 8 MHz. |
-| 4 | `options::save_through_dp` cleanup | Consolidate the three duplicated wake/save/sleep blocks |
+| ~~4~~ | ~~`options::save_through_dp` cleanup~~ | **Closed.** Single helper in `options.cpp`; four callers (main, modbus_handler, uart shell, history) consume it. |
 | 5 | Set-verbose log filter | `log_filter_set()` wiring; currently log-only |
 | 6 | Formatted `date get` shell reply | Thread `datetime::now()` into the shell |
 | 7 | Keypad repeat (1 s delay, 150 ms interval) | UI commit 2's hold-down doesn't fire; embassy had it |

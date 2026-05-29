@@ -46,34 +46,6 @@ void f32_to_be(float v, std::uint8_t out[4])
 	out[3] = static_cast<std::uint8_t>((bits      ) & 0xFFu);
 }
 
-/* Save Options through DP wake/sleep — identical pattern to main's
- * save_options_through_dp. Hoisted here so the Modbus write handlers
- * don't depend on main.cpp internals. */
-int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
-{
-	if (eeprom == nullptr || scratch == nullptr) {
-		return -EINVAL;
-	}
-	/* Same mutex as main's UI dispatcher + history_tick. */
-	k_mutex_lock(&drivers::eeprom_mutex, K_FOREVER);
-	int rc = drivers::eeprom_exit_deep_power_down();
-	if (rc < 0) {
-		LOG_ERR("eeprom wake failed (%d)", rc);
-		k_mutex_unlock(&drivers::eeprom_mutex);
-		return rc;
-	}
-	rc = options::save(eeprom, options::g_options, scratch);
-	if (rc < 0) {
-		LOG_ERR("options save failed (%d)", rc);
-	}
-	int rc2 = drivers::eeprom_enter_deep_power_down();
-	if (rc2 < 0) {
-		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", rc2);
-	}
-	k_mutex_unlock(&drivers::eeprom_mutex);
-	return rc;
-}
-
 } /* namespace */
 
 Handler::Handler() : codec_{options::g_options.slave_address} {}
@@ -290,7 +262,7 @@ modbus::Error Handler::handle_write_single(const modbus::Request& req,
 	opts_bytes[byte_offset]     = req.write_data[0];
 	opts_bytes[byte_offset + 1] = req.write_data[1];
 
-	int rc = save_options_through_dp(eeprom, scratch);
+	int rc = options::save_through_dp(eeprom, scratch);
 	if (rc < 0) {
 		return emit_exception(req.slave_address,
 			static_cast<std::uint8_t>(req.function_code),
@@ -343,7 +315,7 @@ modbus::Error Handler::handle_write_multiple(const modbus::Request& req,
 	}
 	std::memcpy(opts_bytes + start_byte, req.write_data, expected_bytes);
 
-	int rc = save_options_through_dp(eeprom, scratch);
+	int rc = options::save_through_dp(eeprom, scratch);
 	if (rc < 0) {
 		return emit_exception(req.slave_address,
 			static_cast<std::uint8_t>(req.function_code),

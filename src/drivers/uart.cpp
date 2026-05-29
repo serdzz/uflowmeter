@@ -127,24 +127,6 @@ void uart_write_blocking(const std::uint8_t* data, std::size_t len)
 	}
 }
 
-/* Save Options to EEPROM through the DP wake/sleep cycle — same
- * pattern as main.cpp and modbus_handler.cpp; consolidating to a
- * shared helper is a future cleanup. */
-int save_options(const struct device* eeprom)
-{
-	if (eeprom == nullptr) return -EINVAL;
-	k_mutex_lock(&drivers::eeprom_mutex, K_FOREVER);
-	int rc = drivers::eeprom_exit_deep_power_down();
-	if (rc < 0) {
-		k_mutex_unlock(&drivers::eeprom_mutex);
-		return rc;
-	}
-	rc = options::save(eeprom, options::g_options, options_save_scratch);
-	drivers::eeprom_enter_deep_power_down();
-	k_mutex_unlock(&drivers::eeprom_mutex);
-	return rc;
-}
-
 void dispatch_shell_action(shell::Action action, const struct device* eeprom)
 {
 	switch (action.kind) {
@@ -163,7 +145,7 @@ void dispatch_shell_action(shell::Action action, const struct device* eeprom)
 	}
 	case shell::ActionKind::SetSerial:
 		options::g_options.serial_number = action.value;
-		(void)save_options(eeprom);
+		(void)options::save_through_dp(eeprom, options_save_scratch);
 		LOG_INF("shell: SetSerial %u", action.value);
 		return;
 	case shell::ActionKind::SetVerbose:
