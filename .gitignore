@@ -7,6 +7,9 @@
 /bootloader/
 /tools/
 
+# Host test build dir
+/build-tests/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/

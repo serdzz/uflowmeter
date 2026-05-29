@@ -31,8 +31,10 @@ This repo IS the Zephyr application. The first build clones Zephyr + HALs into s
 | Report binary size | `arm-zephyr-eabi-size build/zephyr/zephyr.elf` |
 | Read DT bindings consumed | `west build -t dts_report` |
 | Open menuconfig | `west build -t menuconfig` |
+| **Host tests** (no Zephyr) | `cmake -S tests -B build-tests && cmake --build build-tests && ./build-tests/uflowmeter_tests` |
+| Host tests via ctest | `ctest --test-dir build-tests --output-on-failure` |
 
-There's no host-side test target yet. The Rust tree had host-runnable unit tests (`make test`); reintroducing them on Zephyr means adding a `tests/` sibling that builds via Zephyr's twister or a separate GoogleTest target.
+Host tests cover the pure-logic modules — modbus codec, shell parser, calibration. 46/46 cases pass at HEAD. See `tests/README.md` for what's NOT covered and why (the HAL-bound files need Zephyr decoupling or a fake EEPROM device).
 
 ## Repo layout
 
