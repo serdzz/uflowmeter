@@ -5,3 +5,10 @@
 
 config BOARD_UFLOWMETER_V1
 	select SOC_STM32L151XC
+	# Our custom RTC sys_clock driver (src/timer/uflowmeter_rtc_timer.c)
+	# fully implements the tickless API (sys_clock_set_timeout +
+	# sys_clock_idle_exit + sys_clock_elapsed + sys_clock_cycle_get_32).
+	# CORTEX_M_SYSTICK is disabled in prj.conf — our driver takes its
+	# place. Declaring TICKLESS_CAPABLE here unblocks CONFIG_PM + the
+	# kernel's tickless mode for STOP-mode integration.
+	select TICKLESS_CAPABLE

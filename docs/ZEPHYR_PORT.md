@@ -164,47 +164,77 @@ are `std::atomic<float>` (one-writer flow publication), `k_msgq`
 | Shell on USART1 | ✓ Dual-buffer w/ Modbus on same wire | `src/shell.{hpp,cpp}` + `src/drivers/uart.cpp` |
 | RTC datetime persistence | ✓ TR/DR + BKP0 magic; survives reset with VBAT | `src/datetime.{hpp,cpp}` |
 | Custom RTC sys_clock | ✓ Replaces SysTick (subseconds at 1024 Hz, WUT for tickless) | `src/timer/uflowmeter_rtc_timer.c` |
-| STOP-mode PM | ✗ **BLOCKED** — see Power management below | `src/power.{hpp,cpp}` (dead code) |
+| STOP-mode PM | ✓ Enabled. Zephyr 4.4 has upstream L1 power.c; our `src/power.cpp` strong symbols override the upstream `__weak` versions to add LCD power-gating around STOP entry. | `src/power.{hpp,cpp}` + `boards/.../Kconfig.uflowmeter_v1` (`select TICKLESS_CAPABLE`) |
 | UART STOP-wake | ✗ Deferred — PA10 EXTI + USART CR1.UESM coexistence with Zephyr pinctrl is its own commit | — |
 | MCO output on PA8 | ✗ Deferred — `st,stm32-clock-mco` binding doesn't exist on L1 in upstream Zephyr; direct RCC poke in C++ is the planned path | — |
 | Host test harness | ✓ Custom 80-line framework; 46/46 pass for modbus + shell + calibration | `tests/` |
 
 ## Power management
 
-**STOP mode is currently disabled.** `prj.conf` has `CONFIG_PM=n`.
-The hooks in `src/power.cpp` (`pm_state_set` + `pm_state_exit_post_ops`)
-are still in the binary as dead code, ready for the unblock.
+**STOP mode is enabled.** `prj.conf` has `CONFIG_PM=y` +
+`CONFIG_TICKLESS_KERNEL=y`. Zephyr's PM policy chooses
+`PM_STATE_SUSPEND_TO_IDLE` (mapped to STOP via the
+`stop_mode` node in our DTS) whenever the next k_sleep deadline
+is ≥ `min-residency-us = 2000`. Our custom RTC sys_clock driver
+programs WUT for the wake.
 
-### Why it's blocked
+### How it works (Zephyr 4.4)
 
-Zephyr's `CONFIG_PM` Kconfig:
+Zephyr 4.4 has upstream STM32L1 PM support
+(`soc/st/stm32/stm32l1x/power.c`, by Oleh Kravchenko 2025). Provides
+`__weak pm_state_set` + `pm_state_exit_post_ops` that:
 
-```kconfig
-config PM
-    bool "System Power Management"
-    depends on SYS_CLOCK_EXISTS && HAS_PM
-```
+- enter STOP via `LL_PWR_SetPowerMode(LL_PWR_MODE_STOP)` +
+  `LL_PWR_SetRegulModeLP(LL_PWR_REGU_LPMODES_LOW_POWER)` +
+  `LL_LPM_EnableDeepSleep()` + `k_cpu_idle()`
+- restore the system clock on wake via `stm32_clock_control_init(NULL)`
 
-STM32L1 doesn't declare `HAS_PM` in `soc/st/stm32/stm32l1x/Kconfig.soc`.
-This is the **same upstream gap** that ended the embassy port (their
-`low-power` feature cfg-gates only L4/L5/U5/U3/WB/WL/U0 — no L1).
+`src/power.cpp` provides **strong-symbol overrides** for both
+`pm_state_set` and `pm_state_exit_post_ops`. Strong wins over weak at
+link time — verified via `arm-zephyr-eabi-addr2line` on the linked
+ELF that both symbols resolve to our source file.
 
-### Two-pronged unblock
+Our overrides keep the same CMSIS sequence as upstream's L1 power.c
+PLUS:
 
-Either path is a meaningful follow-up commit:
+- cut LCD backlight + VCC before WFI (under lcd_mutex)
+- restore LCD VCC + re-run `lcd().init()` + restore backlight after
+  clock restoration
 
-1. **Patch Zephyr** — add `HAS_PM` to `soc/st/stm32/stm32l1x/Kconfig.soc`,
-   provide `soc/st/stm32/stm32l1x/power.c` mirroring the L4 implementation
-   (CMSIS-level STOP/Sleep/Standby helpers). This lets the framework
-   schedule PM transitions normally; our `pm_state_set` hook stays
-   exactly as-is.
+LCD goes from "shows last frame in standby" to "completely powered
+down (HD44780 idle current ≈ 0.5-1 mA saved)" at the cost of a ~50 ms
+re-init on every STOP exit. The `min-residency-us = 2000` threshold
+in the DT power-states keeps Zephyr from entering STOP for k_sleeps
+shorter than 2 ms (where the LCD re-init dwarfs the savings).
 
-2. **Bypass Zephyr PM** — drop `CONFIG_PM` for good and call our
-   `power::*` hooks from a custom idle thread or from the
-   measurement-loop boundary. Skip the framework's tickless +
-   policy + residency layers. Smaller code, less integration, but
-   gives up Zephyr's per-device PM (which the project doesn't
-   exercise heavily today anyway).
+### Earlier blocker (historical)
+
+Zephyr 4.1.99 did NOT declare `HAS_PM` for stm32l1x. `CONFIG_PM=y`
+failed the Kconfig dependency check. We shipped commit `133cc93`
+with `CONFIG_PM=n` as a 4.1-targeted workaround. The 4.4 jump
+(commit `9aac675`) inherited that workaround silently — this commit
+unwinds it now that the upstream gap is closed.
+
+### Earlier blocker (different angle: embassy)
+
+The embassy port's `low-power` feature cfg-gates only L4/L5/U5/U3/
+WB/WL/U0 — no L1. They patched their `embassy-stm32` fork to add
+L1 to the gates. Zephyr 4.4 doing the equivalent upstream is the
+clean win here.
+
+### Custom sys_clock driver
+
+`src/timer/uflowmeter_rtc_timer.c` (the custom RTC-based system
+clock) is what makes tickless+PM work on this chip. SysTick stops in
+STOP mode; the RTC keeps running on LSI. The driver:
+
+- counts at 1024 Hz via the RTC subseconds counter (HW config in
+  init: PREDIV_A=35, PREDIV_S=1023)
+- programs RTC WUT (clocked from RTC/16 ≈ 2312 Hz) for the next
+  kernel deadline via `sys_clock_set_timeout`
+- announces elapsed ticks on WUT IRQ via `sys_clock_announce`
+- selects `TICKLESS_CAPABLE` from `boards/.../Kconfig.uflowmeter_v1`,
+  which lets `CONFIG_TICKLESS_KERNEL=y` enable + `CONFIG_PM=y` work
 
 ### What's already low-power-friendly
 
@@ -293,7 +323,7 @@ without ritual.
 
 | # | Gap | Plan |
 |---|---|---|
-| 1 | `CONFIG_PM=n` — no STOP mode | Patch Zephyr `HAS_PM` for L1 + provide `power.c`, OR bypass framework |
+| ~~1~~ | ~~`CONFIG_PM=n` — no STOP mode~~ | **Closed.** Zephyr 4.4 has upstream L1 PM. Re-enabled `CONFIG_PM=y`; our power.cpp overrides keep LCD gating. |
 | 2 | UART STOP-wake | PA10 EXTI + USART CR1.UESM coexistence with Zephyr pinctrl |
 | 3 | MCO on PA8 | Direct RCC poke in main.cpp (no DT binding on L1) |
 | 4 | `options::save_through_dp` cleanup | Consolidate the three duplicated wake/save/sleep blocks |
