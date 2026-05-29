@@ -203,12 +203,21 @@ int main(void)
 		opts.serial_number, opts.sensor_type,
 		opts.slave_address, opts.comm_type);
 
+	/* Load history rings before parking the EEPROM. CRC mismatch on
+	 * any ring → that ring starts empty (harmless). */
+	rc = uflow::history::init(eeprom);
+	if (rc < 0) {
+		LOG_ERR("history init failed (%d) — rings will be unavailable", rc);
+	}
+
 	rc = uflow::drivers::eeprom_enter_deep_power_down();
 	if (rc < 0) {
 		LOG_WRN("eeprom DP entry failed (%d) — chip stays in standby", rc);
 	} else {
 		LOG_INF("eeprom: deep power-down");
 	}
+
+	(void)uflow::history::start();
 
 	rc = uflow::drivers::keypad_init();
 	if (rc < 0) {

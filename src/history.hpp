@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <optional>
 
+struct device;
+
 namespace uflow::history {
 
 enum class HistoryType : std::uint8_t {
@@ -51,5 +53,16 @@ const QueryResult& last_result();
 /* Update the cached last_result. Called by main after each query()
  * so the renderer can read the value on the next refresh tick. */
 void set_last_result(const QueryResult& r);
+
+/* Load all three ring buffers from EEPROM. Call once at boot AFTER
+ * Options load + BEFORE EEPROM enters deep-power-down. Returns 0 on
+ * success — CRC mismatches start that ring fresh (harmless). */
+int init(const struct device* eeprom);
+
+/* Spawn the history_tick thread. Idempotent. Reads
+ * measurement::latest_flow_m3h every 60 s, accumulates into hour/day/
+ * month buckets, writes to the corresponding ring on minute=0 /
+ * hour=0 / day=1 boundaries. */
+int start();
 
 } /* namespace uflow::history */
