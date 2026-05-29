@@ -36,6 +36,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
 
+#include <cstdio>
+
 #include "../datetime.hpp"
 #include "../modbus.hpp"
 #include "../modbus_handler.hpp"
@@ -81,6 +83,25 @@ struct k_thread uart_thread_data;
 k_tid_t uart_tid = nullptr;
 
 std::uint8_t options_save_scratch[options::OPTIONS_PAGE_SIZE];
+
+/* Shell datetime provider. Threaded into shell.cpp at boot so the
+ * `date get` command can print the live wall clock without shell.cpp
+ * pulling in Zephyr or datetime.hpp directly. Format matches the
+ * SetDateTime LOG_INF in handle_app_request (ISO-8601 with space
+ * instead of 'T'). */
+std::size_t shell_datetime_provider(char* dst, std::size_t cap)
+{
+	const auto dt = datetime::now();
+	const int n = snprintf(dst, cap, "%04u-%02u-%02u %02u:%02u:%02u",
+		static_cast<unsigned>(dt.year),
+		static_cast<unsigned>(dt.month),
+		static_cast<unsigned>(dt.day),
+		static_cast<unsigned>(dt.hour),
+		static_cast<unsigned>(dt.minute),
+		static_cast<unsigned>(dt.second));
+	return (n > 0 && static_cast<std::size_t>(n) < cap)
+		? static_cast<std::size_t>(n) : 0;
+}
 
 /* STOP-mode wake callback. STM32L1 USART has no UESM (that's L0/L4+
  * only), so the chip's USART clock dies when we enter STOP via the
@@ -295,6 +316,13 @@ int start()
 		return rc;
 	}
 	uart_irq_rx_enable(uart_dev_);
+
+	/* Install the shell's datetime provider so `date get` returns a
+	 * formatted live wall clock instead of the legacy "use Modbus"
+	 * pointer. Has to happen before any inbound frame is processed,
+	 * but it's a pure pointer assign so order vs uart_irq_rx_enable
+	 * above doesn't matter. */
+	shell::set_datetime_provider(&shell_datetime_provider);
 
 	/* Arm PA10 (USART1 RX) as a STOP-mode wake source. PA10 is in
 	 * USART AF — Zephyr's USART driver owns the pin config — but

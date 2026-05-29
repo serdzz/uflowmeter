@@ -15,6 +15,9 @@ namespace uflow::shell {
 
 namespace {
 
+/* Optional datetime provider (set by uart.cpp at boot). */
+DateTimeProvider g_dt_provider = nullptr;
+
 /* Maximum tokens accepted per line. Anything more is "too many
  * tokens" and produces a parse error. */
 constexpr std::size_t MAX_TOKENS = 8;
@@ -148,7 +151,24 @@ Result cmd_date(const Token* args, std::size_t argc)
 {
 	if (argc == 0) return err_lit("Usage: date get | date set <N>");
 	if (eq(args[0], "get")) {
-		return ok_lit("date get: use Modbus reg 0x0064\r\n");
+		Result r{};
+		r.kind = ResultKind::Ok;
+		if (g_dt_provider != nullptr) {
+			/* Provider writes formatted timestamp; we append the
+			 * trailing \r\n. Leave room for "\r\n\0" (3 bytes). */
+			constexpr std::size_t TAIL = 3;
+			const std::size_t n = g_dt_provider(r.text,
+				REPLY_CAP - TAIL);
+			r.text[n + 0] = '\r';
+			r.text[n + 1] = '\n';
+			r.text_len = n + 2;
+		} else {
+			/* Pre-provider fallback — kept so unit tests that
+			 * don't install a provider still see a parseable
+			 * reply. */
+			return ok_lit("date get: provider not installed\r\n");
+		}
+		return r;
 	}
 	if (eq(args[0], "set")) {
 		if (argc < 2) return err_lit("Usage: date set <unix_ts>");
@@ -213,6 +233,11 @@ Result cmd_set_verbose(const Token* args, std::size_t argc)
 }
 
 } /* namespace */
+
+void set_datetime_provider(DateTimeProvider fn)
+{
+	g_dt_provider = fn;
+}
 
 Result process_line(const std::uint8_t* line, std::size_t len)
 {

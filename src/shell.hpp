@@ -59,6 +59,16 @@ struct Action {
 	std::uint32_t value;
 };
 
+/* Optional callback the shell uses for `date get` formatting. Filled
+ * by uart.cpp at boot to thread datetime::now() into the parser
+ * without dragging Zephyr headers into shell.cpp (keeps the parser
+ * pure-logic + host-testable). Signature: write up to `cap` bytes
+ * into `dst`, return bytes written (excluding any null terminator).
+ * If unset, `date get` falls back to the "use Modbus reg 0x0064"
+ * pointer it emitted before this hook existed. */
+using DateTimeProvider = std::size_t (*)(char* dst, std::size_t cap);
+void set_datetime_provider(DateTimeProvider fn);
+
 /* Process a line of input (without trailing \r/\n). Returns a Result
  * with the reply text composed in `text` (text_len bytes). For
  * NotAShellCommand, text_len = 0 and caller should drop. */
