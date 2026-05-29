@@ -96,8 +96,14 @@ const char* sensor_type_label(std::uint8_t v)
 const char* on_off(bool on) { return on ? "ON" : "OFF"; }
 
 /* Value line (row 1). Returns by value to keep call sites short.
- * Buffer must be ≥ LINE_WIDTH+1; we cap formats at LINE_WIDTH. */
-void format_value(ScreenId s, char* buf, std::size_t cap)
+ * Buffer must be ≥ LINE_WIDTH+1; we cap formats at LINE_WIDTH.
+ *
+ * `editing` + `edit_cursor` are the controller's view of the in-
+ * progress edit. When `editing`, value gets wrapped in [brackets]
+ * and reflects the cursor instead of the persisted Options field.
+ * No blink animation yet (CGRAM commit territory). */
+void format_value(ScreenId s, char* buf, std::size_t cap,
+                  bool editing, std::uint8_t edit_cursor)
 {
 	const auto& opts = options::g_options;
 	const float flow = measurement::latest_flow_m3h.load(std::memory_order_relaxed);
@@ -143,27 +149,60 @@ void format_value(ScreenId s, char* buf, std::size_t cap)
 	case ScreenId::Bootloader:
 		snprintf(buf, cap, "    press Enter");
 		break;
-	case ScreenId::CommType:
-		snprintf(buf, cap, "%s", comm_type_label(opts.comm_type));
+	case ScreenId::CommType: {
+		const std::uint8_t v = editing ? edit_cursor : opts.comm_type;
+		if (editing) {
+			snprintf(buf, cap, "[%s]", comm_type_label(v));
+		} else {
+			snprintf(buf, cap, "%s", comm_type_label(v));
+		}
 		break;
-	case ScreenId::SlaveAddress:
-		snprintf(buf, cap, "%u", opts.slave_address);
+	}
+	case ScreenId::SlaveAddress: {
+		const std::uint8_t v = editing ? edit_cursor : opts.slave_address;
+		if (editing) {
+			snprintf(buf, cap, "[%u]", v);
+		} else {
+			snprintf(buf, cap, "%u", v);
+		}
 		break;
-	case ScreenId::Muster:
-		/* `enable_negative` doubles as the Muster slot in legacy;
-		 * the edit-mode commit untangles the actual fields. */
-		snprintf(buf, cap, "%s", on_off(false));
+	}
+	case ScreenId::Muster: {
+		/* Memory-only flag (no Options home this commit). When not
+		 * editing we still show the controller's last state, which
+		 * is what the user just confirmed. Display passes through
+		 * `editing+edit_cursor` for both modes. */
+		const std::uint8_t v = edit_cursor;
+		if (editing) {
+			snprintf(buf, cap, "[%s]", on_off(v != 0));
+		} else {
+			snprintf(buf, cap, "%s", on_off(v != 0));
+		}
 		break;
-	case ScreenId::Negative:
-		snprintf(buf, cap, "%s", on_off(opts.enable_negative != 0));
+	}
+	case ScreenId::Negative: {
+		const std::uint8_t v = editing ? edit_cursor :
+			(opts.enable_negative != 0 ? 1 : 0);
+		if (editing) {
+			snprintf(buf, cap, "[%s]", on_off(v != 0));
+		} else {
+			snprintf(buf, cap, "%s", on_off(v != 0));
+		}
 		break;
+	}
 	case ScreenId::Channel1:
 	case ScreenId::Channel2:
 		snprintf(buf, cap, "absent");
 		break;
-	case ScreenId::SensorType:
-		snprintf(buf, cap, "%s", sensor_type_label(opts.sensor_type));
+	case ScreenId::SensorType: {
+		const std::uint8_t v = editing ? edit_cursor : opts.sensor_type;
+		if (editing) {
+			snprintf(buf, cap, "[%s]", sensor_type_label(v));
+		} else {
+			snprintf(buf, cap, "%s", sensor_type_label(v));
+		}
 		break;
+	}
 	case ScreenId::SerialNumber:
 		snprintf(buf, cap, "%u", opts.serial_number);
 		break;
@@ -194,7 +233,9 @@ void render(const MenuController& mc, drivers::Hd44780& lcd)
 
 	char value_buf[LINE_WIDTH + 1];
 	value_buf[0] = '\0';
-	format_value(screen, value_buf, sizeof(value_buf));
+	format_value(screen, value_buf, sizeof(value_buf),
+		mc.is_editing_current(),
+		mc.edit_cursor_for_current());
 
 	lcd.set_cursor(1, 0);
 	print_line(lcd, value_buf);

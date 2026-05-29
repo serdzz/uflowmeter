@@ -54,14 +54,78 @@ void render_under_mutex(const uflow::ui::MenuController& mc)
 	k_mutex_unlock(&uflow::drivers::lcd_mutex);
 }
 
-void log_app_request(uflow::ui::AppRequest req)
+/* Wake the EEPROM, save Options, re-park the chip in DP. Two SPI
+ * transactions per call — DP exit + RDP wait (~100 µs) plus the actual
+ * eeprom_write (page-split + WIP poll). Keeps the EEPROM in DP for
+ * the rest of the runtime; we only pay this cost on edit-commit. */
+int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
+{
+	int rc = uflow::drivers::eeprom_exit_deep_power_down();
+	if (rc < 0) {
+		LOG_ERR("eeprom wake failed (%d) — skipping save", rc);
+		return rc;
+	}
+	rc = uflow::options::save(eeprom, uflow::options::g_options, scratch);
+	if (rc < 0) {
+		LOG_ERR("options save failed (%d)", rc);
+	} else {
+		LOG_INF("options saved");
+	}
+	/* Re-park even on save failure — we don't want to leave the
+	 * chip awake burning the extra 4 µA. */
+	int rc2 = uflow::drivers::eeprom_enter_deep_power_down();
+	if (rc2 < 0) {
+		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", rc2);
+	}
+	return rc;
+}
+
+void handle_app_request(uflow::ui::MenuController& mc,
+                        uflow::ui::AppRequest req,
+                        const struct device* eeprom,
+                        std::uint8_t* scratch)
 {
 	using uflow::ui::AppRequest;
+	auto& opts = uflow::options::g_options;
+	const std::uint8_t v = mc.last_edit_value();
+
 	switch (req) {
-	case AppRequest::None:             return;
-	case AppRequest::DeepSleep:        LOG_INF("AppRequest: DeepSleep (no handler yet)"); return;
-	case AppRequest::EnterCalibration: LOG_INF("AppRequest: EnterCalibration (no handler yet)"); return;
-	case AppRequest::SystemReset:      LOG_INF("AppRequest: SystemReset (no handler yet)"); return;
+	case AppRequest::None:
+		return;
+	case AppRequest::DeepSleep:
+		LOG_INF("AppRequest: DeepSleep (no handler yet)");
+		return;
+	case AppRequest::EnterCalibration:
+		LOG_INF("AppRequest: EnterCalibration (no handler yet)");
+		return;
+	case AppRequest::SystemReset:
+		LOG_INF("AppRequest: SystemReset (no handler yet)");
+		return;
+	case AppRequest::SetCommType:
+		LOG_INF("SetCommType: %u", v);
+		opts.comm_type = v;
+		(void)save_options_through_dp(eeprom, scratch);
+		return;
+	case AppRequest::SetSlaveAddress:
+		LOG_INF("SetSlaveAddress: %u", v);
+		opts.slave_address = v;
+		(void)save_options_through_dp(eeprom, scratch);
+		return;
+	case AppRequest::SetNegative:
+		LOG_INF("SetNegative: %u", v);
+		opts.enable_negative = v;
+		(void)save_options_through_dp(eeprom, scratch);
+		return;
+	case AppRequest::SetSensorType:
+		LOG_INF("SetSensorType: %u", v);
+		opts.sensor_type = v;
+		(void)save_options_through_dp(eeprom, scratch);
+		return;
+	case AppRequest::SetMuster:
+		/* No Options home — log only. State lives on the
+		 * MenuController and resets across reboot. */
+		LOG_INF("SetMuster (memory-only): %u", v);
+		return;
 	}
 }
 
@@ -143,7 +207,7 @@ int main(void)
 			uflow::ui::UiEvent ui_ev;
 			if (uflow::ui::ui_event_from_input_code(ev.code, ui_ev)) {
 				const auto req = controller.event(ui_ev);
-				log_app_request(req);
+				handle_app_request(controller, req, eeprom, options_scratch);
 			}
 		}
 		render_under_mutex(controller);

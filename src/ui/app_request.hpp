@@ -2,11 +2,10 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * AppRequest — system-level actions the UI emits in response to
- * specific key events on specific screens. The embassy version
- * carries data (datetime payload, history kind+timestamp, etc) but
- * this commit only handles display-only screens, so the variants
- * that need data are stubbed without payload. We'll grow them in
- * the follow-up commits as the edit-mode logic lands.
+ * specific key events on specific screens. Carries no payload
+ * directly; for the Set* variants, MenuController exposes the
+ * committed value via last_edit_value() — read it on the same tick
+ * as the AppRequest is returned.
  *
  * Source: git show rework/embassy:src/apps.rs.
  */
@@ -18,13 +17,19 @@
 namespace uflow::ui {
 
 enum class AppRequest : std::uint8_t {
-	None = 0,        /* no action — keep this so callers can default-init */
-	DeepSleep,       /* user pressed Back at root */
-	EnterCalibration,
-	SystemReset,     /* Bootloader screen Enter */
-	/* Data-bearing requests (SetDateTime, SetHistory, SetCommType,
-	 * SetAddress, SetMuster, SetNegative) come in the edit-mode
-	 * commit alongside their consumers. */
+	None = 0,
+	DeepSleep,             /* Back at root */
+	EnterCalibration,      /* Calibration screen Enter */
+	SystemReset,           /* Bootloader screen Enter */
+
+	/* Set* — caller reads MenuController::last_edit_value() to
+	 * recover the committed u8. The handler is responsible for
+	 * type-checking the field (e.g. SetCommType expects 0..3). */
+	SetCommType,           /* options.comm_type   ← cursor 0..3 */
+	SetSlaveAddress,       /* options.slave_address ← 1..250 */
+	SetMuster,             /* memory-only this commit (no Options home) */
+	SetNegative,           /* options.enable_negative ← cursor 0..1 */
+	SetSensorType,         /* options.sensor_type ← cursor 0..4 */
 };
 
 } /* namespace uflow::ui */
