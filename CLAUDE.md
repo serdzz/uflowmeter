@@ -83,6 +83,56 @@ The single source of truth for the pin map is **`boards/uflowmeter/uflowmeter_v1
 
 The roadmap for the next few commits sits in `/Users/sergejlepin/.claude/plans/zephyr-linked-snowflake.md`.
 
+## Power management
+
+This branch implements full STOP-mode low-power via Zephyr's PM
+framework + a custom STM32L1 RTC system clock driver:
+
+- **CPU**: `pm_state_set(SUSPEND_TO_IDLE)` (defined in `src/power.cpp`)
+  drops the chip into STOP — main regulator → low-power, PLL+HSE off,
+  SLEEPDEEP + WFI. Wakes on RTC WUT (the kernel timer) or any keypad
+  EXTI (PB6-PB9).
+- **System clock**: `src/timer/uflowmeter_rtc_timer.c` replaces the
+  default SysTick driver. Backed by the STM32L1 RTC running off LSI
+  (~37 kHz, ±10-15% accuracy); subseconds counter at ~1024 Hz is the
+  kernel cycle source; WUT on RTC/16 (~2312 Hz, ~28 s max sleep)
+  programs the next wake. `CONFIG_CORTEX_M_SYSTICK=n`,
+  `CONFIG_TICKLESS_KERNEL=y`, `CONFIG_PM=y`.
+- **LCD**: VCC (PC0 active-LOW) + backlight (PC5 active-LOW) both
+  cut on STOP entry. HD44780 logic loses state — `pm_state_exit_post_ops`
+  re-runs `lcd().init()` (~50 ms blocking) on every wake. Tradeoff
+  worth ~1 mA standby for the 1% wake-time hit at 5-second cycles.
+- **EEPROM**: already in deep power-down since boot — no per-STOP
+  action needed.
+- **TDC1000/TDC7200**: already EN=LOW between measurement cycles —
+  no per-STOP action needed.
+
+### Accuracy caveat
+
+LSI is uncalibrated and drifts ±10-15%. `k_uptime` and any
+`k_sleep(N)` duration will slip accordingly. Acceptable for a
+5-second measurement cadence; not acceptable for time-of-day. When
+calendar accuracy matters (history rings, RTC datetime display),
+either add an LSE crystal on the next board rev or periodically
+calibrate LSI against HSE via RCC CIR (not implemented).
+
+### Wake sources
+
+| EXTI line | Source | Behavior |
+|---|---|---|
+| 6  | PB6 (keypad Config) | Wakes; keypad ISR pushes KeyEvent → main thread |
+| 7  | PB7 (keypad Enter)  | same |
+| 8  | PB8 (keypad Down)   | same |
+| 9  | PB9 (keypad Up)     | same |
+| 22 | RTC WUT             | Wakes; sys_clock_announce drains pending_ticks |
+
+When a keypad wake interrupts a long sleep, the kernel returns to
+`measurement` thread early — measurement runs its cycle, returns to
+`k_sleep(K_SECONDS(5))`, the timer driver programs WUT for a fresh
+5 s. Net effect: the 5 s cadence resets on every keypress, which is
+acceptable but not strictly periodic. Fix: track absolute target time
+in measurement thread, re-sleep for the remainder. Deferred.
+
 ## EEPROM access invariants
 
 The 25LC1024 sits in **deep power-down (~1 µA)** after the boot-time

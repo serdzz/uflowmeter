@@ -29,6 +29,7 @@
 #include "drivers/keypad.hpp"
 #include "measurement.hpp"
 #include "options.hpp"
+#include "power.hpp"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -120,6 +121,13 @@ int main(void)
 	if (rc < 0) {
 		LOG_ERR("measurement start failed (%d)", rc);
 		/* Non-fatal — keep serving keypad + LCD even with no flow. */
+	}
+
+	rc = uflow::power::init();
+	if (rc < 0) {
+		LOG_WRN("power init failed (%d) — STOP mode disabled", rc);
+	} else {
+		LOG_INF("power: STOP mode armed (RTC WUT wake)");
 	}
 
 	char sn_line[17];

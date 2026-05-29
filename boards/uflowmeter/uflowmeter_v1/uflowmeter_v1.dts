@@ -124,6 +124,39 @@
 };
 
 /*
+ * Power states — SUSPEND_TO_IDLE maps to STM32L1 STOP via the hooks
+ * in src/power.cpp. min-residency-us is the threshold below which the
+ * default PM policy stays in plain idle (WFI without deep-sleep);
+ * 2 ms covers the LCD re-init cost on wake (~50 ms) so we don't STOP
+ * for sub-millisecond k_sleeps that happen during driver setup.
+ *
+ * exit-latency-us is documentational — the PM policy uses it to bias
+ * state selection but the kernel doesn't enforce it. Real wake-to-
+ * userspace latency is the LCD re-init + HSE/PLL restore ≈ 51 ms.
+ */
+&cpu0 {
+	cpu-power-states = <&stop_mode>;
+};
+
+/ {
+	power-states {
+		stop_mode: stop_mode {
+			compatible = "zephyr,power-state";
+			power-state-name = "suspend-to-idle";
+			min-residency-us = <2000>;
+			exit-latency-us  = <51000>;
+		};
+	};
+};
+
+/* LSI: low-speed internal RC (~37 kHz). Drives the RTC + WUT; survives
+ * STOP mode. Accuracy is ±10-15% uncalibrated; sleep duration drifts
+ * accordingly. */
+&clk_lsi {
+	status = "okay";
+};
+
+/*
  * Clock tree: 8 MHz HSE crystal → MCO out on PA8 at /1 (drives TDC chips).
  * SYSCLK on HSE×2/1 via PLL = 16 MHz (Zephyr issue #22078: do NOT exceed
  * 16 MHz on L1 with shell + SysTick).
@@ -215,9 +248,15 @@
 	};
 };
 
-/* RTC: STM32L1 internal, LSI/LSE clocked. Backup registers usable. */
+/* RTC: STM32L1 internal, LSI-clocked. Backup registers usable.
+ * Zephyr's stm32 rtc driver is OFF (CONFIG_RTC=n in prj.conf) — we
+ * manage the RTC directly from src/timer/uflowmeter_rtc_timer.c
+ * because it doubles as the kernel system clock. The node stays
+ * `okay` so the pinctrl + interrupt declarations resolve. */
 &rtc {
 	status = "okay";
+	clocks = <&rcc STM32_CLOCK_BUS_APB1 0x10000000>,
+		 <&rcc STM32_SRC_LSI RTC_SEL(2)>;
 };
 
 /*

@@ -58,4 +58,13 @@ private:
 /* Singleton — there's exactly one LCD on this board, declared in DT. */
 Hd44780& lcd();
 
+/* Power gate control. PC0 (active-LOW) drops LCD VCC; PC5 (active-LOW)
+ * drops the backlight. Cutting VCC loses display state — caller is
+ * responsible for re-running lcd().init() after lcd_power_on(). The
+ * STOP-mode pm hook in power.cpp drives both. */
+void lcd_power_on();
+void lcd_power_off();
+void lcd_backlight_on();
+void lcd_backlight_off();
+
 } /* namespace uflow::drivers */

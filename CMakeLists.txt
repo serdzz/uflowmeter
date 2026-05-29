@@ -17,6 +17,8 @@ target_sources(app PRIVATE
     src/calibration.cpp
     src/measurement.cpp
     src/options.cpp
+    src/power.cpp
+    src/timer/uflowmeter_rtc_timer.c
     src/drivers/eeprom_power.cpp
     src/drivers/hd44780.cpp
     src/drivers/keypad.cpp

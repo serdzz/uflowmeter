@@ -175,4 +175,53 @@ Hd44780& lcd()
 	return instance;
 }
 
+/* Power-gate pins. Sourced from the same DT aliases declared in the
+ * board overlay — gpio-leds children whose default state is "off"
+ * (electrically HIGH on active-LOW pins). gpio_pin_set_dt() with
+ * value 1 = "on" = electrically LOW; value 0 = "off" = electrically
+ * HIGH. */
+namespace {
+
+const struct gpio_dt_spec lcd_power_spec     = GPIO_DT_SPEC_GET(DT_NODELABEL(lcd_power), gpios);
+const struct gpio_dt_spec lcd_backlight_spec = GPIO_DT_SPEC_GET(DT_NODELABEL(backlight), gpios);
+
+void ensure_power_pins_configured()
+{
+	static bool configured = false;
+	if (configured) {
+		return;
+	}
+	if (gpio_is_ready_dt(&lcd_power_spec)) {
+		(void)gpio_pin_configure_dt(&lcd_power_spec, GPIO_OUTPUT_ACTIVE);
+	}
+	if (gpio_is_ready_dt(&lcd_backlight_spec)) {
+		(void)gpio_pin_configure_dt(&lcd_backlight_spec, GPIO_OUTPUT_INACTIVE);
+	}
+	configured = true;
+}
+
+} /* namespace */
+
+void lcd_power_on()
+{
+	ensure_power_pins_configured();
+	gpio_pin_set_dt(&lcd_power_spec, 1);
+}
+
+void lcd_power_off()
+{
+	gpio_pin_set_dt(&lcd_power_spec, 0);
+}
+
+void lcd_backlight_on()
+{
+	ensure_power_pins_configured();
+	gpio_pin_set_dt(&lcd_backlight_spec, 1);
+}
+
+void lcd_backlight_off()
+{
+	gpio_pin_set_dt(&lcd_backlight_spec, 0);
+}
+
 } /* namespace uflow::drivers */
