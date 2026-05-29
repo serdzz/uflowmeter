@@ -11,7 +11,7 @@
 
 /dts-v1/;
 #include <st/l1/stm32l151Xc.dtsi>
-#include <st/l1/stm32l151r(8-b-c)tx-pinctrl.dtsi>
+#include <st/l1/stm32l151rctx-pinctrl.dtsi>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 
 / {
@@ -25,7 +25,7 @@
 		zephyr,flash        = &flash0;
 		uflowmeter,lcd      = &hd44780;
 		uflowmeter,keypad   = &keypad;
-		uflowmeter,eeprom   = &eeprom;
+		uflowmeter,eeprom   = &ext_eeprom;
 		uflowmeter,tdc1000  = &tdc1000;
 		uflowmeter,tdc7200  = &tdc7200;
 	};
@@ -181,14 +181,11 @@
 	apb2-prescaler = <1>;
 };
 
-/* MCO output on PA8 — HSE / 1 = 8 MHz reference for TDC1000 / TDC7200. */
-&mco1 {
-	clocks = <&rcc STM32_SRC_HSE MCO1_SEL(0)>;
-	prescaler = <1>;
-	pinctrl-0 = <&rcc_mco_pa8>;
-	pinctrl-names = "default";
-	status = "okay";
-};
+/* MCO output on PA8 — HSE/1 = 8 MHz reference for TDC chips. Zephyr's
+ * stm32-clock-mco binding exists on L4+ but NOT on L1 in upstream
+ * 4.1, so we configure RCC->CFGR.MCOSEL + GPIOA PA8 AF0 from C++ at
+ * boot (see src/main.cpp). PA8 is otherwise unused — declaring it
+ * here would just collide with the runtime configuration. */
 
 /* USART1: TX=PA9, RX=PA10. 115200 baud. Console for now; Modbus later. */
 &usart1 {
@@ -212,7 +209,7 @@
 		   <&gpiob 12 GPIO_ACTIVE_LOW>;  /* TDC7200 (reserved) */
 	status = "okay";
 
-	eeprom: eeprom@0 {
+	ext_eeprom: eeprom@0 {
 		/*
 		 * 25LC1024 is command-compatible with the Atmel AT25 family
 		 * (READ 0x03 / WRITE 0x02 / WREN 0x06 / RDSR 0x05). Zephyr's

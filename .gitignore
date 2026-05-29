@@ -10,6 +10,9 @@
 # Host test build dir
 /build-tests/
 
+# clangd index cache
+.cache/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/

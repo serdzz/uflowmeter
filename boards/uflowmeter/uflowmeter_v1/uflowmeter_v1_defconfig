@@ -2,9 +2,8 @@
 #
 # Board-level Kconfig defaults. Application overrides via prj.conf.
 
-CONFIG_SOC_SERIES_STM32L1X=y
-CONFIG_SOC_STM32L151XC=y
-CONFIG_BOARD_UFLOWMETER_V1=y
+# HWMv2 auto-selects SOC_SERIES_STM32L1X, SOC_STM32L151XC, and
+# BOARD_UFLOWMETER_V1 from board.yml — don't redeclare them here.
 
 # Cortex-M3 architecture is implicit via the SoC. Use the chip's HSI/HSE
 # clocks per the device tree.

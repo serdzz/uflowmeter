@@ -284,7 +284,9 @@ static int sys_clock_driver_init(void)
 	cycle_count_high = 0;
 	pending_ticks = 0;
 
-	IRQ_DIRECT_CONNECT(RTC_WKUP_IRQn, 0, rtc_wakeup_isr, IRQ_ZERO_LATENCY);
+	/* Normal-priority direct ISR — IRQ_ZERO_LATENCY requires
+	 * CONFIG_ZERO_LATENCY_IRQS which isn't on by default. */
+	IRQ_DIRECT_CONNECT(RTC_WKUP_IRQn, 0, rtc_wakeup_isr, 0);
 	irq_enable(RTC_WKUP_IRQn);
 
 	return 0;
