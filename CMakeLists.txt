@@ -22,6 +22,7 @@ target_sources(app PRIVATE
     src/modbus.cpp
     src/modbus_handler.cpp
     src/options.cpp
+    src/shell.cpp
     src/power.cpp
     src/timer/uflowmeter_rtc_timer.c
     src/drivers/cyrillic.cpp

@@ -33,9 +33,12 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "../datetime.hpp"
 #include "../modbus.hpp"
 #include "../modbus_handler.hpp"
 #include "../options.hpp"
+#include "../shell.hpp"
+#include "eeprom_power.hpp"
 
 LOG_MODULE_REGISTER(uart_transport, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -97,86 +100,150 @@ void uart_write_blocking(const std::uint8_t* data, std::size_t len)
 	}
 }
 
+/* Save Options to EEPROM through the DP wake/sleep cycle — same
+ * pattern as main.cpp and modbus_handler.cpp; consolidating to a
+ * shared helper is a future cleanup. */
+int save_options(const struct device* eeprom)
+{
+	if (eeprom == nullptr) return -EINVAL;
+	k_mutex_lock(&drivers::eeprom_mutex, K_FOREVER);
+	int rc = drivers::eeprom_exit_deep_power_down();
+	if (rc < 0) {
+		k_mutex_unlock(&drivers::eeprom_mutex);
+		return rc;
+	}
+	rc = options::save(eeprom, options::g_options, options_save_scratch);
+	drivers::eeprom_enter_deep_power_down();
+	k_mutex_unlock(&drivers::eeprom_mutex);
+	return rc;
+}
+
+void dispatch_shell_action(shell::Action action, const struct device* eeprom)
+{
+	switch (action.kind) {
+	case shell::ActionKind::None:
+		return;
+	case shell::ActionKind::SetDateUnix: {
+		/* Embassy used the Unix epoch directly; our datetime
+		 * utility uses seconds-since-2000-01-01 internally.
+		 * Convert: 2000-01-01T00:00:00Z = 946684800 (Unix). */
+		constexpr std::uint32_t UNIX_TO_2000 = 946684800u;
+		std::uint32_t ts_2000 = (action.value > UNIX_TO_2000)
+			? (action.value - UNIX_TO_2000) : 0u;
+		datetime::set(datetime::from_timestamp(ts_2000));
+		LOG_INF("shell: SetDateUnix %u", action.value);
+		return;
+	}
+	case shell::ActionKind::SetSerial:
+		options::g_options.serial_number = action.value;
+		(void)save_options(eeprom);
+		LOG_INF("shell: SetSerial %u", action.value);
+		return;
+	case shell::ActionKind::SetVerbose:
+		LOG_INF("shell: SetVerbose %u (log-only)", action.value);
+		return;
+	}
+}
+
+/* Hand a completed line to the shell. Writes reply (if any) back over
+ * USART and dispatches the side-effect action. */
+void handle_shell_line(const std::uint8_t* line, std::size_t len,
+                       const struct device* eeprom)
+{
+	shell::Result r = shell::process_line(line, len);
+	if (r.kind != shell::ResultKind::NotAShellCommand && r.text_len > 0) {
+		uart_write_blocking(reinterpret_cast<const std::uint8_t*>(r.text),
+			r.text_len);
+	}
+	shell::Action a = shell::parse_action(line, len);
+	dispatch_shell_action(a, eeprom);
+}
+
+/* Hand a completed Modbus frame to the handler. Writes response over
+ * USART when one is generated. */
+void handle_modbus_frame(const std::uint8_t* frame, std::size_t len,
+                         const struct device* eeprom)
+{
+	std::uint8_t response[MAX_FRAME];
+	std::size_t resp_len = 0;
+	modbus::Error err = modbus_handler::instance().process(
+		frame, len,
+		eeprom, options_save_scratch,
+		response, sizeof(response), &resp_len);
+	if (resp_len > 0) {
+		uart_write_blocking(response, resp_len);
+		LOG_DBG("modbus: rx %zu B → tx %zu B", len, resp_len);
+	} else if (err == modbus::Error::InvalidSlaveAddr) {
+		/* Silent drop — not for us. */
+	} else if (err != modbus::Error::Ok) {
+		LOG_DBG("modbus drop (err %d)", static_cast<int>(err));
+	}
+}
+
 void uart_worker(void*, void*, void*)
 {
 	LOG_INF("uart worker up");
 
 	const struct device* eeprom = DEVICE_DT_GET(DT_CHOSEN(uflowmeter_eeprom));
+
+	/* Dual buffers per embassy's heuristic. Bytes are appended to
+	 * both; \r\n flushes the line buffer (shell path), FRAME_GAP
+	 * silence flushes the frame buffer (Modbus path). Shell input
+	 * with inter-byte pauses still works because the Modbus framer's
+	 * partial flushes get rejected by CRC and silently dropped. */
 	std::uint8_t frame[MAX_FRAME];
 	std::size_t  frame_len = 0;
-	std::uint8_t response[MAX_FRAME];
+	std::uint8_t line[shell::MAX_LINE];
+	std::size_t  line_len = 0;
 
 	for (;;) {
 		std::uint8_t byte;
-		k_timeout_t timeout;
-		if (frame_len == 0) {
-			/* No frame in progress — wait forever. The chip
-			 * may enter STOP between sessions; UART IRQ will
-			 * wake us (if USART clock was alive) or the next
-			 * keypress/RTC tick will (if STOP gated USART). */
-			timeout = K_FOREVER;
-		} else {
-			/* Mid-frame — race FRAME_GAP for boundary. */
-			timeout = FRAME_GAP;
-		}
-
+		const k_timeout_t timeout =
+			(frame_len == 0) ? K_FOREVER : FRAME_GAP;
 		int rc = k_msgq_get(&rx_byte_msgq, &byte, timeout);
+
 		if (rc == 0) {
-			/* New byte — append to frame. Overflow → drop and
-			 * reset; peer will retry. */
-			if (frame_len >= MAX_FRAME) {
-				LOG_WRN("frame overflow > %zu B, dropping", MAX_FRAME);
+			/* New byte — append to frame buffer (overflow →
+			 * drop frame, reset). */
+			if (frame_len < MAX_FRAME) {
+				frame[frame_len++] = byte;
+			} else {
+				LOG_WRN("frame overflow > %zu B, dropping",
+					MAX_FRAME);
 				frame_len = 0;
-				continue;
 			}
-			frame[frame_len++] = byte;
+
+			/* Line buffer dispatch on \r or \n. */
+			if (byte == '\r' || byte == '\n') {
+				if (line_len > 0) {
+					handle_shell_line(line, line_len, eeprom);
+					line_len = 0;
+				}
+			} else if (line_len < shell::MAX_LINE) {
+				line[line_len++] = byte;
+			} else {
+				/* Line overflow — reset; user re-types. */
+				static const char overflow_msg[] = "ERR: line too long\r\n";
+				uart_write_blocking(
+					reinterpret_cast<const std::uint8_t*>(overflow_msg),
+					sizeof(overflow_msg) - 1);
+				line_len = 0;
+			}
 			continue;
 		}
 
-		/* Timeout. If we have a frame in flight, dispatch it. */
-		if (frame_len == 0) {
-			continue;  /* spurious K_FOREVER timeout — shouldn't happen */
+		/* Timeout — emit Modbus frame if non-empty. */
+		if (frame_len > 0) {
+			handle_modbus_frame(frame, frame_len, eeprom);
+			frame_len = 0;
 		}
 
-		std::size_t resp_len = 0;
-		modbus::Error err = modbus_handler::instance().process(
-			frame, frame_len,
-			eeprom, options_save_scratch,
-			response, sizeof(response), &resp_len);
-		frame_len = 0;
-
-		if (err == modbus::Error::Ok && resp_len > 0) {
-			uart_write_blocking(response, resp_len);
-			LOG_DBG("modbus: rx %zu B → tx %zu B",
-				static_cast<std::size_t>(0), resp_len);
-		} else if (err == modbus::Error::InvalidSlaveAddr) {
-			/* Silent drop — frame was for a different slave. */
-		} else if (err != modbus::Error::Ok) {
-			/* Codec returned an exception frame even on
-			 * error paths (e.g. IllegalFunction). resp_len > 0
-			 * means there's something to send. */
-			if (resp_len > 0) {
-				uart_write_blocking(response, resp_len);
-			}
-			LOG_DBG("modbus error %d", static_cast<int>(err));
-		}
-
-		/* After handling a frame, idle out the session window
-		 * before going back to K_FOREVER block. Mirrors embassy's
-		 * SESSION_IDLE_TIMEOUT — gives the peer time to send the
-		 * next request without us deep-sleeping between bytes. */
-		const std::int64_t deadline = k_uptime_get() + 800;
-		while (k_uptime_get() < deadline) {
-			rc = k_msgq_get(&rx_byte_msgq, &byte, K_MSEC(50));
-			if (rc == 0) {
-				frame[frame_len++] = byte;
-				goto next_frame;  /* re-enter outer loop mid-frame */
-			}
-		}
-		continue;
-	next_frame:
-		continue;
+		/* Note: line buffer is NOT cleared on FRAME_GAP timeout.
+		 * Human typing produces inter-byte pauses > 1.75 ms; the
+		 * line keeps accumulating until \r\n. The Modbus partial
+		 * frame gets dispatched + CRC-rejected silently each time. */
 	}
+	(void)SESSION_IDLE;  /* reserved for future STOP-wake integration */
 }
 
 } /* namespace */
