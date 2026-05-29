@@ -1,0 +1,7 @@
+# Application-specific Kconfig — empty for now. Re-introduce module-level
+# toggles (e.g. UFLOWMETER_ENABLE_MODBUS, UFLOWMETER_MOCK_TDC) when those
+# subsystems land.
+
+mainmenu "uflowmeter"
+
+source "Kconfig.zephyr"

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Binding for an HD44780-class character LCD wired up in 4-bit parallel
+# mode. RW is optional — if you tied it to ground in hardware just leave
+# the rw-gpios property out.
+
+description: HD44780-compatible character LCD (4-bit parallel)
+
+compatible: "uflowmeter,hd44780"
+
+properties:
+  rs-gpios:
+    type: phandle-array
+    required: true
+    description: Register Select line.
+
+  rw-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      Read/Write line. Optional — omit if your hardware ties RW to
+      ground (write-only mode).
+
+  e-gpios:
+    type: phandle-array
+    required: true
+    description: Enable strobe.
+
+  d4-gpios:
+    type: phandle-array
+    required: true
+  d5-gpios:
+    type: phandle-array
+    required: true
+  d6-gpios:
+    type: phandle-array
+    required: true
+  d7-gpios:
+    type: phandle-array
+    required: true
+
+  rows:
+    type: int
+    required: true
+    description: Display row count (typically 1, 2, or 4).
+
+  cols:
+    type: int
+    required: true
+    description: Display column count (typically 16 or 20).

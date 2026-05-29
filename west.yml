@@ -1,0 +1,33 @@
+# west manifest for the uflowmeter Zephyr application.
+#
+# T2-star layout: this repository IS the application. west fetches Zephyr +
+# HALs as siblings (../zephyr, ../modules/...) into the workspace.
+#
+# Pin Zephyr to v3.7 LTS — that's the line that still builds against zpp
+# (lowlander/zpp last touched Zephyr 3.x APIs in Jan 2023). Bump after we
+# verify zpp compiles on a newer release.
+
+manifest:
+  version: "0.13"
+
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  defaults:
+    remote: zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      repo-path: zephyr
+      revision: v3.7.0
+      import:
+        # Only pull modules we actually need (keeps workspace lean on this
+        # constrained host). HAL_STM32 is required for the STM32L1 SoC
+        # support; cmsis is required by every ARM port; hal_cmsis_6 only
+        # comes in via cmsis itself.
+        name-allowlist:
+          - cmsis
+          - hal_stm32
+          - segger
+          - picolibc

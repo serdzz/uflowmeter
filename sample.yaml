@@ -1,0 +1,12 @@
+sample:
+  name: uflowmeter
+  description: Ultrasonic flow meter firmware for the STM32L151RC custom board
+
+tests:
+  app.uflowmeter:
+    platform_allow:
+      - uflowmeter_v1
+    integration_platforms:
+      - uflowmeter_v1
+    tags:
+      - uflowmeter

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# HWMv2 board descriptor — minimum Zephyr 3.7.
+
+board:
+  name: uflowmeter_v1
+  full_name: uflowmeter v1 (STM32L151RC custom board)
+  vendor: uflowmeter
+  socs:
+    - name: stm32l151xc

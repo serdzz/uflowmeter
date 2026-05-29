@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Board-level Kconfig defaults. Application overrides via prj.conf.
+
+CONFIG_SOC_SERIES_STM32L1X=y
+CONFIG_SOC_STM32L151XC=y
+CONFIG_BOARD_UFLOWMETER_V1=y
+
+# Cortex-M3 architecture is implicit via the SoC. Use the chip's HSI/HSE
+# clocks per the device tree.
+CONFIG_CLOCK_CONTROL=y
+
+# Serial console is on USART1 (PA9/PA10).
+CONFIG_SERIAL=y
+CONFIG_CONSOLE=y
+CONFIG_UART_CONSOLE=y
+
+# GPIO — every peripheral here uses gpio_dt_spec.
+CONFIG_GPIO=y
+
+# Console driver hooks for printk + logging.
+CONFIG_PRINTK=y

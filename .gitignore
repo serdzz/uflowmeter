@@ -1,8 +1,20 @@
-/target
-/target-embed
-**/*.rs.bk
-Cargo.lock
-microchip-eeprom-25x-local
+# Zephyr / west
+/build/
+/build*/
+/.west/
+/zephyr/
+/modules/
+/bootloader/
+/tools/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# editors
+*.swp
+*~
 
 # Claude Code / agent tooling artifacts
 /.claude/
