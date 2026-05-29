@@ -7,7 +7,8 @@
 #   cmake --build build-tests
 #   ./build-tests/uflowmeter_tests
 #
-# What's covered: src/modbus.cpp, src/shell.cpp, src/calibration.cpp.
+# What's covered: src/modbus.cpp, src/shell.cpp, src/calibration.cpp,
+#                 src/crc.cpp.
 # What's NOT: src/datetime.cpp (STM32L1 RTC registers),
 #             src/options.cpp (Zephyr eeprom_read/write),
 #             src/history.cpp, src/history_lib.hpp (Zephyr eeprom),
@@ -39,10 +40,12 @@ add_executable(uflowmeter_tests
     test_modbus.cpp
     test_shell.cpp
     test_calibration.cpp
+    test_crc.cpp
     # Production sources under test
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/modbus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/shell.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/calibration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/crc.cpp
 )
 
 target_include_directories(uflowmeter_tests PRIVATE

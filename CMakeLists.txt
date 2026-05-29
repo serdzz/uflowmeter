@@ -15,6 +15,7 @@ project(uflowmeter LANGUAGES C CXX)
 target_sources(app PRIVATE
     src/main.cpp
     src/calibration.cpp
+    src/crc.cpp
     src/datetime.cpp
     src/history.cpp
     src/mco.cpp

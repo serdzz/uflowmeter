@@ -329,7 +329,7 @@ without ritual.
 | ~~6~~ | ~~Formatted `date get` shell reply~~ | **Closed (`cebf509`).** `shell::set_datetime_provider(fn)` lets uart.cpp install a callback that formats `datetime::now()` as `YYYY-MM-DD HH:MM:SS`. Parser stays Zephyr-free (host-testable). |
 | ~~7~~ | ~~Keypad repeat (1 s delay, 150 ms interval)~~ | **Closed.** `src/drivers/keypad.cpp` now uses GPIO_INT_EDGE_BOTH + per-button `k_work_delayable`. Press posts first event + arms 1 s delayed work; work handler re-reads pin, posts another event + reschedules 150 ms if still held; release cancels the work. Matches embassy `REPEAT_DELAY` / `REPEAT_INTERVAL`. |
 | ~~8~~ | ~~LCD power-cycling on idle~~ | **Closed.** Main loop tracks `last_input_ms`; after 15 s without keypad input, cuts backlight + VCC and sets `drivers::lcd_user_wants_on = false`. The PM hook reads that flag and SKIPS the LCD re-init on STOP exit while idle — saves the ~50 ms re-init + the backlight current across every measurement-cycle wake. First keypress restores the LCD and resets the timer. |
-| 9 | Extract `crc.{hpp,cpp}` | Unlocks Options-CRC host tests + cleans up duplicate CRC literal in options.cpp |
+| ~~9~~ | ~~Extract `crc.{hpp,cpp}`~~ | **Closed.** `crc16_ccitt_false` moved to `src/crc.{hpp,cpp}` under `uflow::crc::` — pure logic, no Zephyr includes. `options.cpp` keeps a thin source-compat wrapper; `history_lib.hpp` now includes `crc.hpp` directly. Added `tests/test_crc.cpp` with the canonical IBM-3740 "123456789" → 0x29B1 vector + 5 more (52 host tests total). |
 | 10 | History tests against fake EEPROM | Zephyr `eeprom_fake` driver — would test `history_lib.hpp` + `history.cpp` host-side |
 
 None of the gaps block the basic firmware function — measurement,

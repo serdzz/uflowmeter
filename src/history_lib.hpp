@@ -37,7 +37,7 @@
 #include <zephyr/drivers/eeprom.h>
 #include <zephyr/logging/log.h>
 
-#include "options.hpp"  /* for crc16_ccitt_false */
+#include "crc.hpp"
 
 namespace uflow::history_lib {
 
@@ -73,7 +73,7 @@ struct ServiceData {
 	{
 		std::uint8_t buf[SERVICE_DATA_BYTES];
 		to_bytes(buf);
-		return options::crc16_ccitt_false(buf, 12);
+		return crc::crc16_ccitt_false(buf, 12);
 	}
 };
 
