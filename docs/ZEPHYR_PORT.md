@@ -327,7 +327,7 @@ without ritual.
 | ~~4~~ | ~~`options::save_through_dp` cleanup~~ | **Closed.** Single helper in `options.cpp`; four callers (main, modbus_handler, uart shell, history) consume it. |
 | ~~5~~ | ~~Set-verbose log filter~~ | **Closed.** `shell> set_verbose 1` now raises runtime log level to DBG across all sources via `log_filter_set(NULL, …)`; `set_verbose 0` drops to INF. Requires `CONFIG_LOG_RUNTIME_FILTERING=y` (added). |
 | ~~6~~ | ~~Formatted `date get` shell reply~~ | **Closed (`cebf509`).** `shell::set_datetime_provider(fn)` lets uart.cpp install a callback that formats `datetime::now()` as `YYYY-MM-DD HH:MM:SS`. Parser stays Zephyr-free (host-testable). |
-| 7 | Keypad repeat (1 s delay, 150 ms interval) | UI commit 2's hold-down doesn't fire; embassy had it |
+| ~~7~~ | ~~Keypad repeat (1 s delay, 150 ms interval)~~ | **Closed.** `src/drivers/keypad.cpp` now uses GPIO_INT_EDGE_BOTH + per-button `k_work_delayable`. Press posts first event + arms 1 s delayed work; work handler re-reads pin, posts another event + reschedules 150 ms if still held; release cancels the work. Matches embassy `REPEAT_DELAY` / `REPEAT_INTERVAL`. |
 | 8 | LCD power-cycling on idle | Helpers exist in hd44780.cpp; not wired to an idle timer |
 | 9 | Extract `crc.{hpp,cpp}` | Unlocks Options-CRC host tests + cleans up duplicate CRC literal in options.cpp |
 | 10 | History tests against fake EEPROM | Zephyr `eeprom_fake` driver — would test `history_lib.hpp` + `history.cpp` host-side |
