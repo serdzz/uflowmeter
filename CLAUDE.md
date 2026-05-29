@@ -72,7 +72,7 @@ The single source of truth for the pin map is **`boards/uflowmeter/uflowmeter_v1
 
 | Subsystem | Rust source on rework/embassy | Status |
 |-----------|-------------------------------|--------|
-| Options / EEPROM (25LC1024) | `src/options.rs`, `src/drivers/eeprom.rs` | **Done.** Zephyr `atmel,at25` driver via DT (no custom driver). Options is a packed POD in `src/options.{hpp,cpp}` — 116 bytes, byte-exact with the Rust `modular_bitfield`. Dual-page CRC layout preserved. |
+| Options / EEPROM (25LC1024) | `src/options.rs`, `src/drivers/eeprom.rs` | **Done.** Zephyr `atmel,at25` driver via DT (no custom driver). Options is a packed POD in `src/options.{hpp,cpp}` — 116 bytes, byte-exact with the Rust `modular_bitfield`. Dual-page CRC layout preserved. Chip parked in deep power-down after boot via `src/drivers/eeprom_power.{hpp,cpp}` (saves ~4 µA continuous over the at25 driver alone). |
 | Calibration | `src/calibration.rs` | Pure-logic piecewise-linear |
 | TDC1000 + TDC7200 | `src/drivers/tdc1000.rs`, `src/drivers/tdc7200.rs`, `src/main.rs` `measurement_task` | Shared SPI2, EXTI0 wake on PB0 |
 | History rings | `src/history_lib.rs` | Three const-generic ring buffers, EEPROM-backed |
@@ -82,6 +82,20 @@ The single source of truth for the pin map is **`boards/uflowmeter/uflowmeter_v1
 | STOP-mode low-power | `src/main.rs` idle handling | Zephyr `pm_system_suspend()` — see `CONFIG_PM` |
 
 The roadmap for the next few commits sits in `/Users/sergejlepin/.claude/plans/zephyr-linked-snowflake.md`.
+
+## EEPROM access invariants
+
+The 25LC1024 sits in **deep power-down (~1 µA)** after the boot-time
+Options load and stays there. Any code that calls `eeprom_read` /
+`eeprom_write` (directly or via `uflow::options::load`/`save`) **must**
+first call `uflow::drivers::eeprom_exit_deep_power_down()` and pair it
+with `eeprom_enter_deep_power_down()` afterwards — the chip silently
+ignores all commands except RDP (0xAB) while in DP. See
+`src/drivers/eeprom_power.hpp` for the full contract (single-threaded,
+not ISR-safe, ~100 µs tRDP wake latency).
+
+When STOP-mode integration lands, the idle hook should leave the EEPROM
+in DP — there's no need to wake it before suspend.
 
 ## Background context worth reading once
 

@@ -18,6 +18,7 @@
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/logging/log.h>
 
+#include "drivers/eeprom_power.hpp"
 #include "drivers/hd44780.hpp"
 #include "drivers/keypad.hpp"
 #include "options.hpp"
@@ -82,6 +83,17 @@ int main(void)
 	LOG_INF("options: serial=%u sensor=%u slave_addr=%u comm=%u",
 		opts.serial_number, opts.sensor_type,
 		opts.slave_address, opts.comm_type);
+
+	/* Park the EEPROM in deep power-down (~1 µA vs ~5 µA standby).
+	 * Any subsequent read/write site MUST call
+	 * eeprom_exit_deep_power_down() before touching the at25 device
+	 * — the chip ignores all commands except RDP while in DP. */
+	rc = uflow::drivers::eeprom_enter_deep_power_down();
+	if (rc < 0) {
+		LOG_WRN("eeprom DP entry failed (%d) — chip stays in standby", rc);
+	} else {
+		LOG_INF("eeprom: deep power-down");
+	}
 
 	/* Show the serial number on the LCD so a human at the bench can
 	 * read it off without a serial cable. */

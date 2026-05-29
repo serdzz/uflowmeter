@@ -15,6 +15,7 @@ project(uflowmeter LANGUAGES C CXX)
 target_sources(app PRIVATE
     src/main.cpp
     src/options.cpp
+    src/drivers/eeprom_power.cpp
     src/drivers/hd44780.cpp
     src/drivers/keypad.cpp
 )
