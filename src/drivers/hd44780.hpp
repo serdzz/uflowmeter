@@ -45,6 +45,13 @@ public:
 	/* Write ASCII at the current cursor position. No wrapping. */
 	void print(std::string_view text);
 
+	/* Upload an 8-byte 5x8 glyph into CGRAM slot 0..7. Restores the
+	 * DDRAM cursor afterward so the next print() lands where it was.
+	 * Pattern bit 4 = leftmost pixel; bits 7..5 are ignored. Used by
+	 * the UI renderer to support Cyrillic glyphs not present in the
+	 * HD44780 character ROM. */
+	void upload_custom_char(std::uint8_t slot, const std::uint8_t (&pattern)[8]);
+
 private:
 	void write_nibble(std::uint8_t nibble);
 	void write_byte(std::uint8_t byte);

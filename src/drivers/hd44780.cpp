@@ -135,6 +135,20 @@ void Hd44780::print(std::string_view text)
 	}
 }
 
+void Hd44780::upload_custom_char(std::uint8_t slot, const std::uint8_t (&pattern)[8])
+{
+	/* CGRAM addr = 0x40 + slot*8. Use command() so RS=0 and the
+	 * 40 µs internal cycle is honored. */
+	command(static_cast<std::uint8_t>(0x40 | ((slot & 0x07) << 3)));
+	for (std::uint8_t row = 0; row < 8; row++) {
+		data(pattern[row]);
+	}
+	/* Restore DDRAM cursor — without this, the next data() would
+	 * land in CGRAM and the next character would print to the
+	 * wrong slot. Re-issue set_cursor with the stored position. */
+	set_cursor(cursor_row_, cursor_col_);
+}
+
 void Hd44780::command(std::uint8_t byte)
 {
 	gpio_pin_set_dt(&rs_pin, 0);
