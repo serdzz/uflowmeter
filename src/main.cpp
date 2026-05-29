@@ -35,6 +35,7 @@
 #include "drivers/keypad.hpp"
 #include "drivers/uart.hpp"
 #include "history.hpp"
+#include "mco.hpp"
 #include "measurement.hpp"
 #include "options.hpp"
 #include "power.hpp"
@@ -174,6 +175,12 @@ void handle_app_request(uflow::ui::MenuController& mc,
 int main(void)
 {
 	LOG_INF("uflowmeter (zephyr): boot");
+
+	/* Bring up MCO on PA8 first thing — the TDC1000 + TDC7200
+	 * chips need a stable 8 MHz reference before measurement::start
+	 * tries to clock them. HSE is already running courtesy of
+	 * Zephyr's clock_control init at PRE_KERNEL_2. */
+	uflow::mco::init();
 
 	auto& lcd = uflow::drivers::lcd();
 	int rc = lcd.init();

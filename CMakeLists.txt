@@ -17,6 +17,7 @@ target_sources(app PRIVATE
     src/calibration.cpp
     src/datetime.cpp
     src/history.cpp
+    src/mco.cpp
     src/measurement.cpp
     # history_lib.hpp is template-only — header-included by history.cpp
     src/modbus.cpp

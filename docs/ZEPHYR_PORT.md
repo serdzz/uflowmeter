@@ -166,7 +166,7 @@ are `std::atomic<float>` (one-writer flow publication), `k_msgq`
 | Custom RTC sys_clock | ✓ Replaces SysTick (subseconds at 1024 Hz, WUT for tickless) | `src/timer/uflowmeter_rtc_timer.c` |
 | STOP-mode PM | ✓ Enabled. Zephyr 4.4 has upstream L1 power.c; our `src/power.cpp` strong symbols override the upstream `__weak` versions to add LCD power-gating around STOP entry. | `src/power.{hpp,cpp}` + `boards/.../Kconfig.uflowmeter_v1` (`select TICKLESS_CAPABLE`) |
 | UART STOP-wake | ✓ Done — PA10 EXTI line 10 armed as STOP wake source via Zephyr's `stm32_gpio_intc_*` API. USART driver retains pinctrl ownership; EXTI samples the pad regardless of GPIO mode. First byte after wake is still lost (USART clock dead while chip rides through STOP→clock-restore window ~50 ms); Modbus retry handles it. | `src/drivers/uart.cpp` `pa10_wake_cb` + the arming block in `start()` |
-| MCO output on PA8 | ✗ Deferred — `st,stm32-clock-mco` binding doesn't exist on L1 in upstream Zephyr; direct RCC poke in C++ is the planned path | — |
+| MCO output on PA8 | ✓ Done — direct CMSIS register access in `src/mco.{hpp,cpp}` (PA8 AF0 + RCC->CFGR.MCOSEL=HSE + MCOPRE=/1 = 8 MHz). Called from main early, before measurement::start. | `src/mco.{hpp,cpp}` + `main.cpp` |
 | Host test harness | ✓ Custom 80-line framework; 46/46 pass for modbus + shell + calibration | `tests/` |
 
 ## Power management
@@ -325,7 +325,7 @@ without ritual.
 |---|---|---|
 | ~~1~~ | ~~`CONFIG_PM=n` — no STOP mode~~ | **Closed.** Zephyr 4.4 has upstream L1 PM. Re-enabled `CONFIG_PM=y`; our power.cpp overrides keep LCD gating. |
 | ~~2~~ | ~~UART STOP-wake~~ | **Closed.** STM32L1 has no UESM (L0/L4+ only), so we wake the chip via EXTI line 10 on PA10's falling edge. Wake-byte lost (USART clock dead ≈ 50 ms while clocks restore); Modbus retries handle it. |
-| 3 | MCO on PA8 | Direct RCC poke in main.cpp (no DT binding on L1) |
+| ~~3~~ | ~~MCO on PA8~~ | **Closed.** Direct CMSIS register poke in `src/mco.{hpp,cpp}` (no L1 DT binding). HSE/1 = 8 MHz. |
 | 4 | `options::save_through_dp` cleanup | Consolidate the three duplicated wake/save/sleep blocks |
 | 5 | Set-verbose log filter | `log_filter_set()` wiring; currently log-only |
 | 6 | Formatted `date get` shell reply | Thread `datetime::now()` into the shell |
