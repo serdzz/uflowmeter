@@ -70,9 +70,9 @@ The single source of truth for the pin map is **`boards/uflowmeter/uflowmeter_v1
 
 ## Pending ports (from rework/embassy)
 
-| Subsystem | Rust source on rework/embassy | Notes |
-|-----------|-------------------------------|-------|
-| Options / EEPROM (25LC1024) | `src/options.rs`, `src/drivers/eeprom.rs` | Shared SPI2 bus, dual-page CRC layout |
+| Subsystem | Rust source on rework/embassy | Status |
+|-----------|-------------------------------|--------|
+| Options / EEPROM (25LC1024) | `src/options.rs`, `src/drivers/eeprom.rs` | **Done.** Zephyr `atmel,at25` driver via DT (no custom driver). Options is a packed POD in `src/options.{hpp,cpp}` — 116 bytes, byte-exact with the Rust `modular_bitfield`. Dual-page CRC layout preserved. |
 | Calibration | `src/calibration.rs` | Pure-logic piecewise-linear |
 | TDC1000 + TDC7200 | `src/drivers/tdc1000.rs`, `src/drivers/tdc7200.rs`, `src/main.rs` `measurement_task` | Shared SPI2, EXTI0 wake on PB0 |
 | History rings | `src/history_lib.rs` | Three const-generic ring buffers, EEPROM-backed |
