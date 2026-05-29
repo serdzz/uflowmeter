@@ -32,6 +32,7 @@
 #include "drivers/eeprom_power.hpp"
 #include "drivers/hd44780.hpp"
 #include "drivers/keypad.hpp"
+#include "history.hpp"
 #include "measurement.hpp"
 #include "options.hpp"
 #include "power.hpp"
@@ -140,6 +141,17 @@ void handle_app_request(uflow::ui::MenuController& mc,
 		/* No EEPROM save — the datetime offset is RAM-only this
 		 * commit. Future: persist a baseline timestamp in RTC
 		 * backup register so wall-clock survives reboot. */
+		return;
+	}
+	case AppRequest::SetHistory: {
+		const auto kind = mc.last_history_kind();
+		const std::uint32_t ts = mc.last_history_timestamp();
+		const auto flow = uflow::history::query(kind, ts);
+		uflow::history::set_last_result(
+			uflow::history::QueryResult{kind, ts, flow});
+		LOG_INF("SetHistory: kind=%u ts=%u value=%s",
+			static_cast<unsigned>(kind), ts,
+			flow.has_value() ? "<some>" : "<none>");
 		return;
 	}
 	}

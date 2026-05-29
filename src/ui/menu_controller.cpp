@@ -317,15 +317,102 @@ AppRequest MenuController::datetime_event(UiEvent ev)
 	return AppRequest::None;
 }
 
+history::HistoryType MenuController::kind_for_screen(ScreenId s)
+{
+	switch (s) {
+	case ScreenId::HourHistory:  return history::HistoryType::Hour;
+	case ScreenId::DayHistory:   return history::HistoryType::Day;
+	case ScreenId::MonthHistory: return history::HistoryType::Month;
+	default:                     return history::HistoryType::Hour;
+	}
+}
+
+void MenuController::history_advance_field(history::HistoryType kind)
+{
+	switch (history_field_) {
+	case HistoryEditField::None:
+		/* Kind-specific entry point — Hour starts at Hour, Day at
+		 * Day, Month at Month. Mirrors embassy's per-kind
+		 * next_item() in the None branch. */
+		switch (kind) {
+		case history::HistoryType::Hour:  history_field_ = HistoryEditField::Hour; break;
+		case history::HistoryType::Day:   history_field_ = HistoryEditField::Day; break;
+		case history::HistoryType::Month: history_field_ = HistoryEditField::Month; break;
+		}
+		break;
+	case HistoryEditField::Hour:  history_field_ = HistoryEditField::Day; break;
+	case HistoryEditField::Day:   history_field_ = HistoryEditField::Month; break;
+	case HistoryEditField::Month: history_field_ = HistoryEditField::Year; break;
+	case HistoryEditField::Year:  history_field_ = HistoryEditField::None; break;
+	}
+}
+
+AppRequest MenuController::history_emit_set(history::HistoryType kind)
+{
+	last_history_kind_ = kind;
+	last_history_timestamp_ = datetime::to_timestamp(edited_history_datetime_);
+	return AppRequest::SetHistory;
+}
+
+AppRequest MenuController::history_event(UiEvent ev, ScreenId screen)
+{
+	const auto kind = kind_for_screen(screen);
+	auto inc = [&]() {
+		switch (history_field_) {
+		case HistoryEditField::Hour:  datetime::inc_hour(edited_history_datetime_); break;
+		case HistoryEditField::Day:   datetime::inc_day(edited_history_datetime_);  break;
+		case HistoryEditField::Month: datetime::inc_month(edited_history_datetime_); break;
+		case HistoryEditField::Year:  datetime::inc_year(edited_history_datetime_); break;
+		case HistoryEditField::None:  break;
+		}
+	};
+	auto dec = [&]() {
+		switch (history_field_) {
+		case HistoryEditField::Hour:  datetime::dec_hour(edited_history_datetime_); break;
+		case HistoryEditField::Day:   datetime::dec_day(edited_history_datetime_);  break;
+		case HistoryEditField::Month: datetime::dec_month(edited_history_datetime_); break;
+		case HistoryEditField::Year:  datetime::dec_year(edited_history_datetime_); break;
+		case HistoryEditField::None:  break;
+		}
+	};
+
+	switch (ev) {
+	case UiEvent::Enter:
+		history_advance_field(kind);
+		/* No commit on Year → None — SetHistory has fired on every
+		 * Left/Right press during edit, so backing data is already
+		 * up to date. Exit edit silently. */
+		return AppRequest::None;
+	case UiEvent::Back:
+		history_field_ = HistoryEditField::None;
+		return AppRequest::None;
+	case UiEvent::Up:
+	case UiEvent::Right:
+		inc();
+		return history_emit_set(kind);
+	case UiEvent::Down:
+	case UiEvent::Left:
+		dec();
+		return history_emit_set(kind);
+	}
+	return AppRequest::None;
+}
+
 AppRequest MenuController::event(UiEvent ev)
 {
 	/* Edit mode swallows everything for the current screen first.
 	 * Back during edit cancels (handled inside editbox/editnumber/
-	 * datetime helpers); Back outside edit deselects the menu. */
+	 * datetime/history helpers); Back outside edit deselects. */
 	const ScreenId screen_before = current_screen();
 	if (screen_before == ScreenId::DateTime &&
 	    datetime_field_ != DateTimeEditField::None) {
 		return datetime_event(ev);
+	}
+	if ((screen_before == ScreenId::HourHistory ||
+	     screen_before == ScreenId::DayHistory ||
+	     screen_before == ScreenId::MonthHistory) &&
+	    history_field_ != HistoryEditField::None) {
+		return history_event(ev, screen_before);
 	}
 	if (auto* box = editbox_for(screen_before)) {
 		if (box->editable) {
@@ -381,6 +468,18 @@ AppRequest MenuController::event(UiEvent ev)
 			edited_datetime_ = datetime::now();
 			datetime_advance_field();
 			return AppRequest::None;
+		case ScreenId::HourHistory:
+		case ScreenId::DayHistory:
+		case ScreenId::MonthHistory: {
+			/* Enter from non-edit on a History screen: capture
+			 * current wall clock as the starting date, step into
+			 * the kind-specific first field, immediately fire a
+			 * SetHistory so the backend can populate the value. */
+			edited_history_datetime_ = datetime::now();
+			const auto kind = kind_for_screen(screen);
+			history_advance_field(kind);
+			return history_emit_set(kind);
+		}
 		default:
 			return AppRequest::None;
 		}

@@ -11,6 +11,7 @@
 
 #include "../datetime.hpp"
 #include "../drivers/hd44780.hpp"
+#include "../history.hpp"
 #include "../measurement.hpp"
 #include "../options.hpp"
 
@@ -137,8 +138,9 @@ void format_value(ScreenId s, char* buf, std::size_t cap,
 	case ScreenId::HourHistory:
 	case ScreenId::DayHistory:
 	case ScreenId::MonthHistory:
-		/* History rings not wired yet — placeholder. */
-		snprintf(buf, cap, "    (no rings)");
+		/* Drawn by render_history (two-row painter); standard
+		 * format_value path isn't used for these screens. */
+		buf[0] = '\0';
 		break;
 	case ScreenId::DateTime:
 		/* Drawn from the two-line renderer in render() — this code
@@ -283,6 +285,117 @@ void render_datetime(const MenuController& mc, drivers::Hd44780& lcd)
 	print_line(lcd, row);
 }
 
+/* History screen — two-row painter for Hour/Day/Month variants.
+ *
+ * Row 0 layout (16 chars):
+ *   Hour kind non-edit:  "Hourly     HH:00"
+ *   Hour kind edit Hour: "Hourly   [HH]:00"
+ *   Day kind:            "Daily           "
+ *   Month kind:          "Monthly         "
+ *
+ * Row 1 layout (16 chars):
+ *   Non-edit:            "DD/MM/YY   <flow>"  (8 + 1 + 7 = 16)
+ *   Edit Day:            "[DD]/MM/YY <flow>"  (10 + 1 + 5 = 16)
+ *   Edit Month:          " DD/[MM]/YY <flo>"
+ *   Edit Year:           " DD/MM/[YY] <flo>"
+ *   Month kind hides day:"  /MM/YY   <flow>"
+ *
+ * Flow value:
+ *   no result yet for current kind/ts: "    None"
+ *   value present:                     right-aligned with 1 decimal */
+void render_history(const MenuController& mc, drivers::Hd44780& lcd)
+{
+	const ScreenId screen = mc.current_screen();
+	const auto kind = (screen == ScreenId::DayHistory)   ? history::HistoryType::Day :
+	                  (screen == ScreenId::MonthHistory) ? history::HistoryType::Month :
+	                                                       history::HistoryType::Hour;
+	const bool editing = mc.is_editing_history();
+	const auto field   = mc.current_history_field();
+	const auto dt      = editing ? mc.edited_history_datetime() : datetime::now();
+	const std::uint8_t y2 = static_cast<std::uint8_t>(dt.year % 100u);
+
+	char row[LINE_WIDTH + 1];
+
+	/* Row 0: kind label + (Hour only) the hour. */
+	const char* label =
+		(kind == history::HistoryType::Hour)  ? "Hourly"  :
+		(kind == history::HistoryType::Day)   ? "Daily"   : "Monthly";
+
+	if (kind == history::HistoryType::Hour) {
+		if (editing && field == HistoryEditField::Hour) {
+			snprintf(row, sizeof(row), "%-8s [%02u]:00",
+				label, static_cast<unsigned>(dt.hour));
+		} else {
+			snprintf(row, sizeof(row), "%-8s  %02u:00",
+				label, static_cast<unsigned>(dt.hour));
+		}
+	} else {
+		snprintf(row, sizeof(row), "%s", label);
+	}
+	lcd.set_cursor(0, 0);
+	print_line(lcd, row);
+
+	/* Row 1: date + flow. Month kind hides day (renders "  "). */
+	char date_part[12];
+	const bool show_day = (kind != history::HistoryType::Month);
+	if (editing && field == HistoryEditField::Day && show_day) {
+		snprintf(date_part, sizeof(date_part), "[%02u]/%02u/%02u",
+			static_cast<unsigned>(dt.day),
+			static_cast<unsigned>(dt.month),
+			static_cast<unsigned>(y2));
+	} else if (editing && field == HistoryEditField::Month) {
+		if (show_day) {
+			snprintf(date_part, sizeof(date_part), "%02u/[%02u]/%02u",
+				static_cast<unsigned>(dt.day),
+				static_cast<unsigned>(dt.month),
+				static_cast<unsigned>(y2));
+		} else {
+			snprintf(date_part, sizeof(date_part), "  /[%02u]/%02u",
+				static_cast<unsigned>(dt.month),
+				static_cast<unsigned>(y2));
+		}
+	} else if (editing && field == HistoryEditField::Year) {
+		if (show_day) {
+			snprintf(date_part, sizeof(date_part), "%02u/%02u/[%02u]",
+				static_cast<unsigned>(dt.day),
+				static_cast<unsigned>(dt.month),
+				static_cast<unsigned>(y2));
+		} else {
+			snprintf(date_part, sizeof(date_part), "  /%02u/[%02u]",
+				static_cast<unsigned>(dt.month),
+				static_cast<unsigned>(y2));
+		}
+	} else {
+		if (show_day) {
+			snprintf(date_part, sizeof(date_part), "%02u/%02u/%02u",
+				static_cast<unsigned>(dt.day),
+				static_cast<unsigned>(dt.month),
+				static_cast<unsigned>(y2));
+		} else {
+			snprintf(date_part, sizeof(date_part), "  /%02u/%02u",
+				static_cast<unsigned>(dt.month),
+				static_cast<unsigned>(y2));
+		}
+	}
+
+	/* Flow value — show data only if the cached result matches the
+	 * current kind + the cursor's timestamp. Otherwise "None" — a
+	 * stale result for a different date is misleading. */
+	const auto& last = history::last_result();
+	const std::uint32_t cursor_ts = datetime::to_timestamp(dt);
+	const bool match = (last.type == kind) && (last.timestamp == cursor_ts);
+	char flow_part[10];
+	if (match && last.flow.has_value()) {
+		snprintf(flow_part, sizeof(flow_part), "%7.2f", static_cast<double>(*last.flow));
+	} else {
+		snprintf(flow_part, sizeof(flow_part), "   None");
+	}
+
+	snprintf(row, sizeof(row), "%s%s", date_part, flow_part);
+	lcd.set_cursor(1, 0);
+	print_line(lcd, row);
+}
+
 } /* namespace */
 
 void render(const MenuController& mc, drivers::Hd44780& lcd)
@@ -299,6 +412,12 @@ void render(const MenuController& mc, drivers::Hd44780& lcd)
 	const ScreenId screen = mc.current_screen();
 	if (screen == ScreenId::DateTime) {
 		render_datetime(mc, lcd);
+		return;
+	}
+	if (screen == ScreenId::HourHistory ||
+	    screen == ScreenId::DayHistory ||
+	    screen == ScreenId::MonthHistory) {
+		render_history(mc, lcd);
 		return;
 	}
 

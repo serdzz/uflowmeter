@@ -16,6 +16,7 @@ target_sources(app PRIVATE
     src/main.cpp
     src/calibration.cpp
     src/datetime.cpp
+    src/history.cpp
     src/measurement.cpp
     src/options.cpp
     src/power.cpp

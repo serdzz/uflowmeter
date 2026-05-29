@@ -30,6 +30,7 @@
 #include <cstdint>
 
 #include "../datetime.hpp"
+#include "../history.hpp"
 #include "app_request.hpp"
 #include "events.hpp"
 #include "menu_list.hpp"
@@ -45,6 +46,23 @@ enum class DateTimeEditField : std::uint8_t {
 	Seconds,
 	Minutes,
 	Hours,
+	Day,
+	Month,
+	Year,
+};
+
+/* Field-stepping sequence on HourHistory / DayHistory / MonthHistory.
+ * Per-kind starting field (matches embassy HistoryWidget::next_item):
+ *   HourHistory  starts at Hour, walks Hour → Day → Month → Year → exit
+ *   DayHistory   starts at Day,  walks Day  → Month → Year → exit
+ *   MonthHistory starts at Month, walks Month → Year → exit
+ *
+ * Unlike DateTime, the "Year → None" transition does NOT emit a commit
+ * AppRequest — SetHistory fires on every Left/Right press while
+ * editable, so the backing data stays live with the cursor. */
+enum class HistoryEditField : std::uint8_t {
+	None = 0,
+	Hour,
 	Day,
 	Month,
 	Year,
@@ -106,6 +124,18 @@ public:
 	 * the tick AppRequest::SetDateTime is returned. */
 	const datetime::DateTimeFields& last_committed_datetime() const { return last_committed_datetime_; }
 
+	/* History edit introspection — render() reads these to bracket
+	 * the active field and source the date row from the working
+	 * buffer instead of the live wall clock. */
+	bool is_editing_history() const { return history_field_ != HistoryEditField::None; }
+	HistoryEditField current_history_field() const { return history_field_; }
+	const datetime::DateTimeFields& edited_history_datetime() const { return edited_history_datetime_; }
+
+	/* Last history query — kind + ts the caller should send to
+	 * history::query() after a SetHistory return. */
+	history::HistoryType last_history_kind() const { return last_history_kind_; }
+	std::uint32_t last_history_timestamp() const { return last_history_timestamp_; }
+
 private:
 	static bool is_screen_enabled(ScreenId s, void* ctx);
 	MenuList* current_list();
@@ -155,6 +185,20 @@ private:
 	/* DateTime field-stepping helpers. */
 	AppRequest datetime_event(UiEvent ev);
 	void datetime_advance_field();   /* None → Sec → Min → Hr → Day → Mo → Yr → None */
+
+	/* History edit state + helpers — one set, the active history-
+	 * kind is derived from the current screen (HourHistory →
+	 * HistoryType::Hour etc.). edited_history_datetime_ is the
+	 * working buffer; last_history_* is the snapshot for SetHistory. */
+	HistoryEditField history_field_{HistoryEditField::None};
+	datetime::DateTimeFields edited_history_datetime_{};
+	history::HistoryType last_history_kind_{history::HistoryType::Hour};
+	std::uint32_t last_history_timestamp_{0};
+
+	AppRequest history_event(UiEvent ev, ScreenId screen);
+	void history_advance_field(history::HistoryType kind);
+	AppRequest history_emit_set(history::HistoryType kind);
+	static history::HistoryType kind_for_screen(ScreenId s);
 };
 
 } /* namespace uflow::ui */
