@@ -91,22 +91,11 @@ bool single_measurement(drivers::Tdc7200& tdc, std::uint32_t& out_tof)
 	return true;
 }
 
-/* Draw the flow value on LCD row 1 under the shared mutex. Truncates
- * to 16 chars for a 2x16 panel. */
-void display_flow(float flow)
-{
-	auto& lcd = drivers::lcd();
-	char line[17];
-	if (std::isfinite(flow)) {
-		snprintf(line, sizeof(line), "Flow %8.2f m3/h", static_cast<double>(flow));
-	} else {
-		snprintf(line, sizeof(line), "Flow:    ---    ");
-	}
-	k_mutex_lock(&drivers::lcd_mutex, K_FOREVER);
-	lcd.set_cursor(1, 0);
-	lcd.print(line);
-	k_mutex_unlock(&drivers::lcd_mutex);
-}
+/* Display ownership moved to src/ui/render.cpp — the UI's
+ * HourConsumption / DayConsumption / TotalVolume screens all read
+ * `latest_flow_m3h` and paint themselves on their refresh cadence.
+ * Keep the LOG_INF below so the serial console still observes
+ * per-cycle results. */
 
 void measurement_thread(void*, void*, void*)
 {
@@ -166,7 +155,6 @@ void measurement_thread(void*, void*, void*)
 				tof_down, tof_up, static_cast<double>(flow));
 			if (std::isfinite(flow)) {
 				latest_flow_m3h.store(flow, std::memory_order_relaxed);
-				display_flow(flow);
 			}
 		} else {
 			LOG_WRN("tof partial: down_ok=%d up_ok=%d", ok_down, ok_up);

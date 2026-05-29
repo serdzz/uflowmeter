@@ -77,7 +77,7 @@ The single source of truth for the pin map is **`boards/uflowmeter/uflowmeter_v1
 | TDC1000 + TDC7200 | `src/drivers/tdc1000.rs`, `src/drivers/tdc7200.rs`, `src/main.rs` `measurement_task` | **Done.** `src/drivers/tdc{1000,7200}.{hpp,cpp}` use sidecar `spi_dt_spec` against `&spi2`. `src/measurement.{hpp,cpp}` runs a dedicated thread (priority 7, 1 KB stack) on a 5 s cycle: power up → load configs → downstream tof → upstream tof → power down → calc → publish via atomic + LCD row 1. TDC7200 INT (PB0 EXTI) → k_sem → measurement thread. Live calibration refresh deferred (captured each cycle from `options::g_options`; works as soon as Modbus/UI mutates the global). |
 | History rings | `src/history_lib.rs` | Three const-generic ring buffers, EEPROM-backed |
 | Modbus RTU | `src/modbus.rs`, `src/modbus_handler.rs` | On-demand USART1 session |
-| UI state machine | `src/ui.rs`, `src/gui/*` | `MenuController` over 4 ring-buffer menus |
+| UI state machine | `src/ui.rs`, `src/gui/*` | **Commit 1 of 6 done.** `src/ui/{screen,events,app_request,menu_list,menu_controller,render}.{hpp,cpp}` give navigation across all 19 screens with display-only rendering (Latin labels, no Cyrillic). Main thread runs the dispatch + render loop with 2 s refresh tick so live values update without input. **Deferred**: edit modes (CommType/SlaveAddress/Muster/Negative/SensorType), DateTime field-stepping, HistoryWidget date picker, Version easter-egg pattern, Cyrillic CGRAM, AppRequest dispatch wiring. |
 | Shell | `src/shell.rs` | set_serial, set_address, date, verbose |
 | STOP-mode low-power | `src/main.rs` idle handling | Zephyr `pm_system_suspend()` — see `CONFIG_PM` |
 

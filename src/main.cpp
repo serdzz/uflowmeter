@@ -4,24 +4,28 @@
  * uflowmeter — Zephyr port entrypoint.
  *
  * Boot sequence:
- *   1. Init LCD, show "loading opts" so the user sees something.
- *   2. Load Options from EEPROM (primary or secondary copy), populate
- *      the global options::g_options. Defaults on CRC failure.
- *   3. Park EEPROM in deep power-down to drop ~4 µA of standby current.
+ *   1. Init LCD, show "uflowmeter / press any key".
+ *   2. Load Options from EEPROM; populate options::g_options.
+ *      Defaults on CRC failure.
+ *   3. Park EEPROM in deep power-down.
  *   4. Init keypad (PB6-PB9 EXTI).
- *   5. Spawn the measurement thread — runs every 5 s, writes flow on
- *      LCD row 1, publishes to atomic latest_flow_m3h.
- *   6. Main thread loops on keypad events, writes key label on LCD
- *      row 0 — coexists with the measurement thread via the
- *      lcd_mutex declared in drivers/hd44780.hpp.
+ *   5. Spawn measurement thread (writes only `latest_flow_m3h`, not
+ *      the LCD — the UI owns the display from here on).
+ *   6. Arm STOP-mode PM.
+ *   7. Construct the UI MenuController and drive the run loop:
+ *      block-wait for a keypress (with a 2 s refresh timeout so live
+ *      values like flow + uptime update without input). Dispatch the
+ *      key through MenuController. Re-render. Repeat.
+ *
+ * AppRequest dispatch is stubbed for this UI port commit (commit 1
+ * of 6) — DeepSleep / SystemReset / EnterCalibration are logged but
+ * not acted upon. Wired up alongside the edit-mode + Modbus commits.
  */
 
 #include <cstdio>
-#include <string_view>
 
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
-#include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/logging/log.h>
 
 #include "drivers/eeprom_power.hpp"
@@ -30,38 +34,35 @@
 #include "measurement.hpp"
 #include "options.hpp"
 #include "power.hpp"
+#include "ui/events.hpp"
+#include "ui/menu_controller.hpp"
+#include "ui/render.hpp"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace {
-
-std::string_view label_for(std::uint16_t code)
-{
-	switch (code) {
-	case INPUT_KEY_MENU:  return "CONFIG";
-	case INPUT_KEY_ENTER: return "ENTER";
-	case INPUT_KEY_LEFT:  return "DOWN";
-	case INPUT_KEY_RIGHT: return "UP";
-	default:              return "?";
-	}
-}
 
 /* 1024-byte scratch buffer for Options load/save. Lives in BSS, not on
  * the main stack (CONFIG_MAIN_STACK_SIZE is 2 KB; a 1 KB on-stack
  * buffer would consume half of it). */
 std::uint8_t options_scratch[uflow::options::OPTIONS_PAGE_SIZE];
 
-void lcd_print_line(std::uint8_t row, std::string_view text)
+void render_under_mutex(const uflow::ui::MenuController& mc)
 {
-	auto& lcd = uflow::drivers::lcd();
 	k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
-	lcd.set_cursor(row, 0);
-	lcd.print(text);
-	/* Pad to 16 chars so previous text doesn't bleed through. */
-	for (std::size_t i = text.size(); i < 16; i++) {
-		lcd.print(" ");
-	}
+	uflow::ui::render(mc, uflow::drivers::lcd());
 	k_mutex_unlock(&uflow::drivers::lcd_mutex);
+}
+
+void log_app_request(uflow::ui::AppRequest req)
+{
+	using uflow::ui::AppRequest;
+	switch (req) {
+	case AppRequest::None:             return;
+	case AppRequest::DeepSleep:        LOG_INF("AppRequest: DeepSleep (no handler yet)"); return;
+	case AppRequest::EnterCalibration: LOG_INF("AppRequest: EnterCalibration (no handler yet)"); return;
+	case AppRequest::SystemReset:      LOG_INF("AppRequest: SystemReset (no handler yet)"); return;
+	}
 }
 
 } /* namespace */
@@ -76,8 +77,6 @@ int main(void)
 		LOG_ERR("lcd init failed (%d)", rc);
 		return rc;
 	}
-	lcd_print_line(0, "uflowmeter");
-	lcd_print_line(1, "loading opts");
 
 	const struct device* eeprom = DEVICE_DT_GET(DT_CHOSEN(uflowmeter_eeprom));
 	using uflow::options::LoadResult;
@@ -130,22 +129,23 @@ int main(void)
 		LOG_INF("power: STOP mode armed (RTC WUT wake)");
 	}
 
-	char sn_line[17];
-	snprintf(sn_line, sizeof(sn_line), "SN:%u", opts.serial_number);
-	lcd_print_line(0, sn_line);
-	lcd_print_line(1, "warming up...");
+	uflow::ui::MenuController controller;
+	render_under_mutex(controller);
 
 	uflow::drivers::KeyEvent ev{};
 	for (;;) {
-		if (uflow::drivers::keypad_recv(ev) < 0) {
-			continue;
+		/* 2 s refresh timeout keeps live values (flow, uptime)
+		 * updating between key presses. Hit on every key, also
+		 * fired periodically — render is idempotent + paints under
+		 * the mutex so it's safe to call back-to-back. */
+		const int kr = uflow::drivers::keypad_recv(ev, K_MSEC(2000));
+		if (kr == 0) {
+			uflow::ui::UiEvent ui_ev;
+			if (uflow::ui::ui_event_from_input_code(ev.code, ui_ev)) {
+				const auto req = controller.event(ui_ev);
+				log_app_request(req);
+			}
 		}
-		const auto label = label_for(ev.code);
-		LOG_INF("key: %.*s", static_cast<int>(label.size()), label.data());
-		char key_line[17];
-		snprintf(key_line, sizeof(key_line), "key:%.*s",
-			static_cast<int>(label.size()), label.data());
-		lcd_print_line(0, key_line);
-		/* Don't touch row 1 — that's the measurement thread's territory. */
+		render_under_mutex(controller);
 	}
 }
