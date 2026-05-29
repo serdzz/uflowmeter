@@ -19,6 +19,7 @@ target_sources(app PRIVATE
     src/history.cpp
     src/measurement.cpp
     # history_lib.hpp is template-only — header-included by history.cpp
+    src/modbus.cpp
     src/options.cpp
     src/power.cpp
     src/timer/uflowmeter_rtc_timer.c
