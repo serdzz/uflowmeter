@@ -14,10 +14,14 @@ project(uflowmeter LANGUAGES C CXX)
 
 target_sources(app PRIVATE
     src/main.cpp
+    src/calibration.cpp
+    src/measurement.cpp
     src/options.cpp
     src/drivers/eeprom_power.cpp
     src/drivers/hd44780.cpp
     src/drivers/keypad.cpp
+    src/drivers/tdc1000.cpp
+    src/drivers/tdc7200.cpp
 )
 
 target_include_directories(app PRIVATE

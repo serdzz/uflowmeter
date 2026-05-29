@@ -25,6 +25,8 @@ LOG_MODULE_REGISTER(hd44780, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace uflow::drivers {
 
+K_MUTEX_DEFINE(lcd_mutex);
+
 namespace {
 
 #define LCD_NODE DT_CHOSEN(uflowmeter_lcd)

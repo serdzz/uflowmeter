@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# TDC1000 — ultrasonic analog front-end (TI). 7-bit register space, SPI
+# command byte format: bit 7 = R/W (1 = write), bits 6:0 = address.
+#
+# Wired as a SPI device on the shared &spi2 bus. Additional pins:
+#   en-gpios  — chip enable, active-HIGH, held LOW between measurements
+#               to save ~0.5 mA continuous (chip loses all register
+#               state when EN drops — driver re-loads from Options on
+#               each power-on).
+#   rst-gpios — active-LOW reset, held HIGH for normal operation.
+
+description: TDC1000 ultrasonic analog front-end
+
+compatible: "uflowmeter,tdc1000"
+
+include: spi-device.yaml
+
+properties:
+  en-gpios:
+    type: phandle-array
+    required: true
+    description: Chip enable (active-HIGH). LOW = chip powered down.
+
+  rst-gpios:
+    type: phandle-array
+    required: true
+    description: Reset (active-LOW). HIGH = normal operation.

@@ -17,6 +17,8 @@ LOG_MODULE_REGISTER(options, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace uflow::options {
 
+Options g_options{};
+
 std::uint16_t crc16_ccitt_false(const std::uint8_t* data, std::size_t len)
 {
 	std::uint16_t crc = 0xFFFF;

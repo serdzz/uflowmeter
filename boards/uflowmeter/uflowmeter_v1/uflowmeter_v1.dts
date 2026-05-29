@@ -26,6 +26,8 @@
 		uflowmeter,lcd      = &hd44780;
 		uflowmeter,keypad   = &keypad;
 		uflowmeter,eeprom   = &eeprom;
+		uflowmeter,tdc1000  = &tdc1000;
+		uflowmeter,tdc7200  = &tdc7200;
 	};
 
 	aliases {
@@ -119,18 +121,6 @@
 		};
 	};
 
-	/*
-	 * Placeholder declarations for pins reserved by future drivers.
-	 * Disabled — exist only to make the pin commitments visible in
-	 * the device tree until the corresponding driver lands.
-	 */
-	reserved-pins {
-		compatible = "gpio-leds";
-		status = "disabled";
-		tdc1000_en:  tdc1000_en  { gpios = <&gpiob 10 GPIO_ACTIVE_HIGH>; label = "TDC1000 EN";  };
-		tdc1000_rst: tdc1000_rst { gpios = <&gpioc 6  GPIO_ACTIVE_LOW>;  label = "TDC1000 RST"; };
-		tdc7200_en:  tdc7200_en  { gpios = <&gpiob 1  GPIO_ACTIVE_HIGH>; label = "TDC7200 EN";  };
-	};
 };
 
 /*
@@ -203,6 +193,24 @@
 		pagesize = <256>;
 		address-width = <24>;
 		timeout = <5>;                   /* WIP poll timeout, ms */
+		status = "okay";
+	};
+
+	tdc1000: tdc1000@1 {
+		compatible = "uflowmeter,tdc1000";
+		reg = <1>;
+		spi-max-frequency = <DT_FREQ_M(1)>;
+		en-gpios  = <&gpiob 10 GPIO_ACTIVE_HIGH>;
+		rst-gpios = <&gpioc 6  GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+
+	tdc7200: tdc7200@2 {
+		compatible = "uflowmeter,tdc7200";
+		reg = <2>;
+		spi-max-frequency = <DT_FREQ_M(1)>;
+		en-gpios  = <&gpiob 1 GPIO_ACTIVE_HIGH>;
+		int-gpios = <&gpiob 0 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 		status = "okay";
 	};
 };

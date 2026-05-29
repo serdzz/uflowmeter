@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# TDC7200 — time-to-digital converter (TI). 5-bit register space, SPI
+# command byte format: bits 4:0 = address, bit 6 = auto-increment,
+# bit 7 = R/W (1 = write). Note: the auto-inc bit means register
+# bursts MUST set bit 6 or every byte after the first is silently
+# discarded.
+#
+# Wired as a SPI device on the shared &spi2 bus. Additional pins:
+#   en-gpios  — chip enable, active-HIGH, held LOW between measurements
+#               (~0.5 mA savings, register state lost on power-down).
+#   int-gpios — measurement-complete interrupt (active-LOW), wires to
+#               EXTI0 (PB0). Falling edge → wake measurement thread
+#               via k_sem.
+
+description: TDC7200 time-to-digital converter
+
+compatible: "uflowmeter,tdc7200"
+
+include: spi-device.yaml
+
+properties:
+  en-gpios:
+    type: phandle-array
+    required: true
+    description: Chip enable (active-HIGH). LOW = chip powered down.
+
+  int-gpios:
+    type: phandle-array
+    required: true
+    description: Measurement-complete interrupt (active-LOW).

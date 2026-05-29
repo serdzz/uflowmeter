@@ -17,7 +17,17 @@
 #include <cstdint>
 #include <string_view>
 
+#include <zephyr/kernel.h>
+
 namespace uflow::drivers {
+
+/* Shared LCD mutex. Multiple threads write to the LCD (main thread for
+ * keypress feedback, measurement thread for flow display); acquire
+ * this before any sequence of LCD ops to keep cursor moves and
+ * subsequent characters atomic per-thread.
+ *
+ * Defined in hd44780.cpp via K_MUTEX_DEFINE. */
+extern struct k_mutex lcd_mutex;
 
 class Hd44780 {
 public:

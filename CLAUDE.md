@@ -73,8 +73,8 @@ The single source of truth for the pin map is **`boards/uflowmeter/uflowmeter_v1
 | Subsystem | Rust source on rework/embassy | Status |
 |-----------|-------------------------------|--------|
 | Options / EEPROM (25LC1024) | `src/options.rs`, `src/drivers/eeprom.rs` | **Done.** Zephyr `atmel,at25` driver via DT (no custom driver). Options is a packed POD in `src/options.{hpp,cpp}` — 116 bytes, byte-exact with the Rust `modular_bitfield`. Dual-page CRC layout preserved. Chip parked in deep power-down after boot via `src/drivers/eeprom_power.{hpp,cpp}` (saves ~4 µA continuous over the at25 driver alone). |
-| Calibration | `src/calibration.rs` | Pure-logic piecewise-linear |
-| TDC1000 + TDC7200 | `src/drivers/tdc1000.rs`, `src/drivers/tdc7200.rs`, `src/main.rs` `measurement_task` | Shared SPI2, EXTI0 wake on PB0 |
+| Calibration | `src/calibration.rs` | **Done.** Pure-logic port in `src/calibration.{hpp,cpp}` — Calculator + CalibTable + MeterConfig + apply_ratio (piecewise-linear, 4 zones). No Zephyr deps. |
+| TDC1000 + TDC7200 | `src/drivers/tdc1000.rs`, `src/drivers/tdc7200.rs`, `src/main.rs` `measurement_task` | **Done.** `src/drivers/tdc{1000,7200}.{hpp,cpp}` use sidecar `spi_dt_spec` against `&spi2`. `src/measurement.{hpp,cpp}` runs a dedicated thread (priority 7, 1 KB stack) on a 5 s cycle: power up → load configs → downstream tof → upstream tof → power down → calc → publish via atomic + LCD row 1. TDC7200 INT (PB0 EXTI) → k_sem → measurement thread. Live calibration refresh deferred (captured each cycle from `options::g_options`; works as soon as Modbus/UI mutates the global). |
 | History rings | `src/history_lib.rs` | Three const-generic ring buffers, EEPROM-backed |
 | Modbus RTU | `src/modbus.rs`, `src/modbus_handler.rs` | On-demand USART1 session |
 | UI state machine | `src/ui.rs`, `src/gui/*` | `MenuController` over 4 ring-buffer menus |

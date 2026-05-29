@@ -123,4 +123,15 @@ int save(const struct device* eeprom,
  * Exposed for tests + the Modbus handler's whole-register CRC needs. */
 std::uint16_t crc16_ccitt_false(const std::uint8_t* data, std::size_t len);
 
+/* Process-wide live Options. main.cpp populates this from EEPROM at
+ * boot; downstream threads (measurement, future Modbus handler, UI)
+ * read from it each iteration.
+ *
+ * Concurrency: TODAY this is single-writer (main thread at boot only)
+ * + many-readers — the measurement thread polls fields each cycle but
+ * never mutates. When Modbus / UI write paths land we lift this to a
+ * k_mutex guard or an atomic snapshot pattern, but for now the access
+ * is safe by construction. */
+extern Options g_options;
+
 } /* namespace uflow::options */
