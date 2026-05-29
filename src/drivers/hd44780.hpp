@@ -74,4 +74,14 @@ void lcd_power_off();
 void lcd_backlight_on();
 void lcd_backlight_off();
 
+/* Tracks whether the user "wants" the LCD on. Main's idle timer
+ * sets this false after IDLE_TIMEOUT_MS without input; sets it
+ * true on the next keypress. The PM hook in power.cpp reads it
+ * to decide whether to restore the LCD after a STOP wake — when
+ * the user isn't looking, we save the ~50 ms re-init + the
+ * backlight current across multiple STOP cycles.
+ *
+ * True at boot so the splash + boot-time renders are visible. */
+extern bool lcd_user_wants_on;
+
 } /* namespace uflow::drivers */

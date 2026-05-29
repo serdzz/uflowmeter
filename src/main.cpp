@@ -232,23 +232,65 @@ int main(void)
 	uflow::ui::MenuController controller;
 	render_under_mutex(controller);
 
+	/* Idle timer. After IDLE_TIMEOUT_MS without keypad input, cut
+	 * the LCD + backlight to save the HD44780 standby current
+	 * (~0.5 mA) and the backlight LED draw across subsequent STOP
+	 * cycles. Next keypress restores. The flag is read by
+	 * power.cpp's pm_state_set / pm_state_exit_post_ops to skip
+	 * the LCD restore during STOP-mode cycling when the screen is
+	 * already parked. */
+	constexpr std::int64_t IDLE_TIMEOUT_MS = 15000;
+	std::int64_t last_input_ms = k_uptime_get();
+	bool lcd_currently_on = true;
+
 	uflow::drivers::KeyEvent ev{};
 	for (;;) {
-		/* Refresh tick: 150 ms while a multi-field edit is active
-		 * (DateTime/History) so the blink animation runs at a
-		 * perceptible rate, 2 s otherwise to minimize wake events
-		 * for live-value updates (flow, uptime). The kernel auto-
-		 * enters STOP between wakes via the PM policy. */
 		const k_timeout_t timeout = controller.has_active_field_edit() ?
 			K_MSEC(150) : K_MSEC(2000);
 		const int kr = uflow::drivers::keypad_recv(ev, timeout);
+		const std::int64_t now = k_uptime_get();
+
 		if (kr == 0) {
+			last_input_ms = now;
+			/* First press after idle — wake the LCD before
+			 * doing anything visible with it. */
+			if (!lcd_currently_on) {
+				k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
+				uflow::drivers::lcd_power_on();
+				(void)uflow::drivers::lcd().init();
+				uflow::drivers::lcd_backlight_on();
+				k_mutex_unlock(&uflow::drivers::lcd_mutex);
+				lcd_currently_on = true;
+				uflow::drivers::lcd_user_wants_on = true;
+			}
 			uflow::ui::UiEvent ui_ev;
 			if (uflow::ui::ui_event_from_input_code(ev.code, ui_ev)) {
 				const auto req = controller.event(ui_ev);
 				handle_app_request(controller, req, eeprom, options_scratch);
 			}
 		}
-		render_under_mutex(controller);
+
+		/* Idle-timeout test runs every loop iteration whether key
+		 * fired or not — covers both the keyless-2s-timeout path
+		 * and the keypress path (last_input_ms just got reset
+		 * above so the condition won't trip). */
+		if (lcd_currently_on && (now - last_input_ms) >= IDLE_TIMEOUT_MS) {
+			k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
+			uflow::drivers::lcd_backlight_off();
+			uflow::drivers::lcd_power_off();
+			k_mutex_unlock(&uflow::drivers::lcd_mutex);
+			lcd_currently_on = false;
+			uflow::drivers::lcd_user_wants_on = false;
+			LOG_INF("LCD parked (idle %lld ms)",
+				static_cast<long long>(now - last_input_ms));
+		}
+
+		/* Only render when the screen is actually visible — saves
+		 * the back-and-forth across lcd_mutex for the parked
+		 * window. The first post-wake render happens via the
+		 * keypress branch above which already re-inits LCD. */
+		if (lcd_currently_on) {
+			render_under_mutex(controller);
+		}
 	}
 }

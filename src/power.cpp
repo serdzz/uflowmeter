@@ -58,13 +58,18 @@ extern "C" void pm_state_set(enum pm_state state, std::uint8_t substate_id)
 		return;
 	}
 
-	/* Cut LCD VCC + backlight. LCD logic loses state; we re-init in
-	 * pm_state_exit_post_ops. Hold the LCD mutex for the toggle so
-	 * any in-flight LCD write from main thread completes first. */
-	(void)k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
-	uflow::drivers::lcd_backlight_off();
-	uflow::drivers::lcd_power_off();
-	k_mutex_unlock(&uflow::drivers::lcd_mutex);
+	/* Cut LCD VCC + backlight IF the user is actively looking at
+	 * the screen. If main's idle timer already turned the LCD off,
+	 * we don't need to touch it (saves cycles + LCD-init time on
+	 * the way back). Either way, the LCD logic loses state during
+	 * STOP — we re-init in pm_state_exit_post_ops only if the
+	 * user expects it back on. */
+	if (uflow::drivers::lcd_user_wants_on) {
+		(void)k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
+		uflow::drivers::lcd_backlight_off();
+		uflow::drivers::lcd_power_off();
+		k_mutex_unlock(&uflow::drivers::lcd_mutex);
+	}
 
 	/* Configure STOP mode in PWR_CR:
 	 *   - LPSDSR  = 1 (regulator in low-power mode during deep sleep)
@@ -99,15 +104,16 @@ extern "C" void pm_state_exit_post_ops(enum pm_state state, std::uint8_t substat
 
 	restore_clocks();
 
-	/* Restore LCD power. The HD44780 lost all state — re-run init.
-	 * 50 ms blocking; happens on every STOP exit. Acceptable for a
-	 * 5-second measurement cycle (~1% wake-time overhead) but worth
-	 * revisiting if cycle gets shorter. */
-	(void)k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
-	uflow::drivers::lcd_power_on();
-	(void)uflow::drivers::lcd().init();
-	uflow::drivers::lcd_backlight_on();
-	k_mutex_unlock(&uflow::drivers::lcd_mutex);
+	/* Restore LCD power IFF the user still wants it. Skip the
+	 * ~50 ms re-init when the idle timer has parked the screen —
+	 * keeps the wake fast for measurement-cycle-only STOP exits. */
+	if (uflow::drivers::lcd_user_wants_on) {
+		(void)k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
+		uflow::drivers::lcd_power_on();
+		(void)uflow::drivers::lcd().init();
+		uflow::drivers::lcd_backlight_on();
+		k_mutex_unlock(&uflow::drivers::lcd_mutex);
+	}
 }
 
 namespace uflow::power {

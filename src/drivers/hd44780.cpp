@@ -27,6 +27,8 @@ namespace uflow::drivers {
 
 K_MUTEX_DEFINE(lcd_mutex);
 
+bool lcd_user_wants_on = true;
+
 namespace {
 
 #define LCD_NODE DT_CHOSEN(uflowmeter_lcd)
