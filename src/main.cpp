@@ -33,6 +33,7 @@
 #include "drivers/eeprom_power.hpp"
 #include "drivers/hd44780.hpp"
 #include "drivers/keypad.hpp"
+#include "drivers/uart.hpp"
 #include "history.hpp"
 #include "measurement.hpp"
 #include "options.hpp"
@@ -63,9 +64,13 @@ void render_under_mutex(uflow::ui::MenuController& mc)
  * the rest of the runtime; we only pay this cost on edit-commit. */
 int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
 {
+	/* Serialize against modbus_handler and history_tick — all three
+	 * pump in_dp_state through eeprom_power. */
+	k_mutex_lock(&uflow::drivers::eeprom_mutex, K_FOREVER);
 	int rc = uflow::drivers::eeprom_exit_deep_power_down();
 	if (rc < 0) {
 		LOG_ERR("eeprom wake failed (%d) — skipping save", rc);
+		k_mutex_unlock(&uflow::drivers::eeprom_mutex);
 		return rc;
 	}
 	rc = uflow::options::save(eeprom, uflow::options::g_options, scratch);
@@ -74,12 +79,11 @@ int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
 	} else {
 		LOG_INF("options saved");
 	}
-	/* Re-park even on save failure — we don't want to leave the
-	 * chip awake burning the extra 4 µA. */
 	int rc2 = uflow::drivers::eeprom_enter_deep_power_down();
 	if (rc2 < 0) {
 		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", rc2);
 	}
+	k_mutex_unlock(&uflow::drivers::eeprom_mutex);
 	return rc;
 }
 
@@ -218,6 +222,7 @@ int main(void)
 	}
 
 	(void)uflow::history::start();
+	(void)uflow::drivers::uart::start();
 
 	rc = uflow::drivers::keypad_init();
 	if (rc < 0) {

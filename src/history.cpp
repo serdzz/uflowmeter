@@ -77,9 +77,12 @@ k_tid_t history_tid = nullptr;
 template <typename F>
 int with_eeprom_awake(F&& fn)
 {
+	/* Serialize against options::save call sites in main + modbus. */
+	k_mutex_lock(&drivers::eeprom_mutex, K_FOREVER);
 	int rc = drivers::eeprom_exit_deep_power_down();
 	if (rc < 0) {
 		LOG_ERR("eeprom wake failed (%d)", rc);
+		k_mutex_unlock(&drivers::eeprom_mutex);
 		return rc;
 	}
 	int op_rc = fn(eeprom_dev_);
@@ -87,6 +90,7 @@ int with_eeprom_awake(F&& fn)
 	if (sleep_rc < 0) {
 		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", sleep_rc);
 	}
+	k_mutex_unlock(&drivers::eeprom_mutex);
 	return op_rc;
 }
 

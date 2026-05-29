@@ -48,7 +48,22 @@
 
 #pragma once
 
+#include <zephyr/kernel.h>
+
 namespace uflow::drivers {
+
+/* Single mutex guarding the entire wake/op/sleep sequence around the
+ * EEPROM. Callers that touch options::save / history rings / DP
+ * commands MUST k_mutex_lock(&eeprom_mutex) before the first wake
+ * call and unlock after the corresponding sleep — otherwise the
+ * in_dp_state bool below races with concurrent callers (main UI
+ * dispatch, modbus_handler write, history_tick boundary write).
+ *
+ * The Zephyr SPI bus mutex serializes at the wire level so data
+ * doesn't corrupt, but in_dp_state could go out of sync and result
+ * in spurious "chip silently ignored" symptoms. Defined in
+ * eeprom_power.cpp via K_MUTEX_DEFINE. */
+extern struct k_mutex eeprom_mutex;
 
 /* Issue 0xB9 over the EEPROM's SPI chip-select. Sets internal state
  * to "powered down" on success. No-op if already powered down.

@@ -30,6 +30,7 @@ target_sources(app PRIVATE
     src/drivers/keypad.cpp
     src/drivers/tdc1000.cpp
     src/drivers/tdc7200.cpp
+    src/drivers/uart.cpp
     src/ui/events.cpp
     src/ui/menu_controller.cpp
     src/ui/menu_list.cpp

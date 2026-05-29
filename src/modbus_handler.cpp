@@ -54,9 +54,12 @@ int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
 	if (eeprom == nullptr || scratch == nullptr) {
 		return -EINVAL;
 	}
+	/* Same mutex as main's UI dispatcher + history_tick. */
+	k_mutex_lock(&drivers::eeprom_mutex, K_FOREVER);
 	int rc = drivers::eeprom_exit_deep_power_down();
 	if (rc < 0) {
 		LOG_ERR("eeprom wake failed (%d)", rc);
+		k_mutex_unlock(&drivers::eeprom_mutex);
 		return rc;
 	}
 	rc = options::save(eeprom, options::g_options, scratch);
@@ -67,6 +70,7 @@ int save_options_through_dp(const struct device* eeprom, std::uint8_t* scratch)
 	if (rc2 < 0) {
 		LOG_WRN("eeprom re-DP failed (%d) — chip stays in standby", rc2);
 	}
+	k_mutex_unlock(&drivers::eeprom_mutex);
 	return rc;
 }
 

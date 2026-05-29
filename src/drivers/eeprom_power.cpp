@@ -27,6 +27,8 @@ LOG_MODULE_REGISTER(eeprom_power, CONFIG_LOG_DEFAULT_LEVEL);
 
 namespace uflow::drivers {
 
+K_MUTEX_DEFINE(eeprom_mutex);
+
 namespace {
 
 #define EEPROM_NODE DT_CHOSEN(uflowmeter_eeprom)
