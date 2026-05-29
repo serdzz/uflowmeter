@@ -81,9 +81,10 @@ std::uint8_t options_save_scratch[options::OPTIONS_PAGE_SIZE];
 
 void uart_isr(const struct device* dev, void* /*user*/)
 {
-	if (!uart_irq_update(dev)) {
-		return;
-	}
+	/* Zephyr 4.4 uart_irq_update returns void — it just refreshes
+	 * the cached IRQ status that the *_ready / *_pending queries
+	 * below consume. */
+	uart_irq_update(dev);
 	if (!uart_irq_rx_ready(dev)) {
 		return;
 	}
