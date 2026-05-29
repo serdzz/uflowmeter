@@ -34,6 +34,7 @@
 #include <zephyr/dt-bindings/pinctrl/stm32-pinctrl-common.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 
 #include "../datetime.hpp"
 #include "../modbus.hpp"
@@ -148,9 +149,30 @@ void dispatch_shell_action(shell::Action action, const struct device* eeprom)
 		(void)options::save_through_dp(eeprom, options_save_scratch);
 		LOG_INF("shell: SetSerial %u", action.value);
 		return;
-	case shell::ActionKind::SetVerbose:
-		LOG_INF("shell: SetVerbose %u (log-only)", action.value);
+	case shell::ActionKind::SetVerbose: {
+		/* Flip runtime log filter across all sources, all backends.
+		 * verbose=1 → LOG_LEVEL_DBG (everything chatters), verbose=0
+		 * → LOG_LEVEL_INF (back to default). Capped per-source by
+		 * the compile-time level (CONFIG_LOG_DEFAULT_LEVEL etc.) —
+		 * log_filter_set returns the actually-applied level which
+		 * may be lower than requested. Requires
+		 * CONFIG_LOG_RUNTIME_FILTERING=y (set in prj.conf).
+		 *
+		 * Pattern mirrors what zephyr's `log enable <level>` shell
+		 * command does in subsys/logging/log_cmds.c::filters_set. */
+		const std::uint32_t level = action.value
+			? LOG_LEVEL_DBG : LOG_LEVEL_INF;
+		const std::int32_t src_cnt =
+			static_cast<std::int32_t>(log_src_cnt_get(Z_LOG_LOCAL_DOMAIN_ID));
+		for (std::int32_t i = 0; i < src_cnt; i++) {
+			(void)log_filter_set(nullptr, Z_LOG_LOCAL_DOMAIN_ID,
+				static_cast<std::int16_t>(i), level);
+		}
+		LOG_INF("shell: SetVerbose %u → log level %s (%u sources)",
+			action.value, action.value ? "DBG" : "INF",
+			static_cast<unsigned>(src_cnt));
 		return;
+	}
 	}
 }
 
