@@ -136,6 +136,25 @@ public:
 	history::HistoryType last_history_kind() const { return last_history_kind_; }
 	std::uint32_t last_history_timestamp() const { return last_history_timestamp_; }
 
+	/* True when a multi-field edit is open (DateTime or History) —
+	 * main loop uses this to drop the keypad_recv timeout from 2 s
+	 * to 150 ms so blink animation runs at a perceptible cadence. */
+	bool has_active_field_edit() const {
+		return datetime_field_ != DateTimeEditField::None ||
+		       history_field_  != HistoryEditField::None;
+	}
+
+	/* Blink: render() bumps this counter on every paint; the value
+	 * is the on/off half-cycle indicator for the active field.
+	 * Embassy uses 6 frames per cycle (300 ms on / 300 ms off at
+	 * 10 Hz); we match the frame count, the period depends on the
+	 * main loop's current refresh tick (150 ms while editing →
+	 * ~450/450 ms split, perceptible). */
+	void tick_blink() { blink_frame_ = (blink_frame_ + 1) % BLINK_PERIOD; }
+	bool is_blink_visible() const { return blink_frame_ < BLINK_PERIOD / 2; }
+
+	static constexpr std::uint8_t BLINK_PERIOD = 6;
+
 private:
 	static bool is_screen_enabled(ScreenId s, void* ctx);
 	MenuList* current_list();
@@ -199,6 +218,15 @@ private:
 	void history_advance_field(history::HistoryType kind);
 	AppRequest history_emit_set(history::HistoryType kind);
 	static history::HistoryType kind_for_screen(ScreenId s);
+
+	/* Version screen easter-egg — Enter, Enter, Enter, Up, Up, Down,
+	 * Down → AppRequest::EnterCalibration. Wrong key OR screen change
+	 * resets the matcher. */
+	AppRequest version_event(UiEvent ev);
+	std::uint8_t pattern_matched_{0};
+	ScreenId last_screen_for_pattern_{ScreenId::_Count};
+
+	std::uint8_t blink_frame_{0};
 };
 
 } /* namespace uflow::ui */

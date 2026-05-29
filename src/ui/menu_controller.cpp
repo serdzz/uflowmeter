@@ -398,8 +398,44 @@ AppRequest MenuController::history_event(UiEvent ev, ScreenId screen)
 	return AppRequest::None;
 }
 
+AppRequest MenuController::version_event(UiEvent ev)
+{
+	/* Pattern: Enter (3x) → Up (2x) → Down (2x). On full match, emit
+	 * EnterCalibration; on wrong key, reset and let the event fall
+	 * through to normal navigation. Source: rework/embassy:src/ui.rs
+	 * version_key_event (with the "Process" return on partial matches
+	 * dropped — we just continue dispatch). */
+	static constexpr UiEvent PATTERN[7] = {
+		UiEvent::Enter, UiEvent::Enter, UiEvent::Enter,
+		UiEvent::Up, UiEvent::Up,
+		UiEvent::Down, UiEvent::Down,
+	};
+	const std::uint8_t idx = pattern_matched_;
+	if (idx < 7 && ev == PATTERN[idx]) {
+		pattern_matched_++;
+		if (pattern_matched_ == 7) {
+			pattern_matched_ = 0;
+			return AppRequest::EnterCalibration;
+		}
+		/* Consume — don't fall through to menu navigation while the
+		 * pattern's in flight, otherwise Up/Down would walk away
+		 * from Version screen. */
+		return AppRequest::None;
+	}
+	pattern_matched_ = 0;
+	return AppRequest::None;
+}
+
 AppRequest MenuController::event(UiEvent ev)
 {
+	/* Reset pattern matcher on screen change — pattern only counts
+	 * keys delivered to a single Version-screen session. */
+	const ScreenId current = current_screen();
+	if (current != last_screen_for_pattern_) {
+		pattern_matched_ = 0;
+		last_screen_for_pattern_ = current;
+	}
+
 	/* Edit mode swallows everything for the current screen first.
 	 * Back during edit cancels (handled inside editbox/editnumber/
 	 * datetime/history helpers); Back outside edit deselects. */
@@ -441,6 +477,17 @@ AppRequest MenuController::event(UiEvent ev)
 	}
 
 	const ScreenId screen = list->current();
+
+	/* Version pattern matcher runs ahead of regular Enter dispatch
+	 * so partial matches don't leak into screen navigation. */
+	if (screen == ScreenId::Version) {
+		auto req = version_event(ev);
+		if (req != AppRequest::None) {
+			return req;
+		}
+		/* For Up/Down on Version that DIDN'T advance the pattern
+		 * (pattern got reset), fall through to normal nav. */
+	}
 
 	if (ev == UiEvent::Enter) {
 		switch (screen) {

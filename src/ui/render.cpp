@@ -350,45 +350,39 @@ void render_datetime(const MenuController& mc, drivers::Hd44780& lcd)
 	const auto dt = editing ? mc.edited_datetime() : datetime::now();
 	const std::uint8_t y2 = static_cast<std::uint8_t>(dt.year % 100u);
 
-	char row[48];
+	/* Blink semantics: when editing, the active 2-digit field is
+	 * replaced with "  " on the off-half of every cycle. No brackets
+	 * — the blink IS the indicator (matches embassy). Layout never
+	 * shifts between edit and non-edit, so blink-only cue lands
+	 * cleanly. */
+	const bool blink_off = editing && !mc.is_blink_visible();
+	auto fmt = [&](char* dst, std::size_t cap, const char* tmpl,
+	               std::uint8_t a, std::uint8_t b, std::uint8_t c,
+	               DateTimeEditField fa, DateTimeEditField fb, DateTimeEditField fc) {
+		char sa[3], sb[3], sc[3];
+		auto pair = [&](char* s, std::uint8_t v, DateTimeEditField f) {
+			if (blink_off && field == f) {
+				s[0] = ' '; s[1] = ' '; s[2] = '\0';
+			} else {
+				snprintf(s, 3, "%02u", static_cast<unsigned>(v));
+			}
+		};
+		pair(sa, a, fa);
+		pair(sb, b, fb);
+		pair(sc, c, fc);
+		snprintf(dst, cap, tmpl, sa, sb, sc);
+	};
 
-	if (editing && (field == DateTimeEditField::Day ||
-	                field == DateTimeEditField::Month ||
-	                field == DateTimeEditField::Year)) {
-		const char* fmt =
-			(field == DateTimeEditField::Day)   ? "Дата  [%02u]/%02u/%02u"  :
-			(field == DateTimeEditField::Month) ? "Дата  %02u/[%02u]/%02u"  :
-			                                      "Дата  %02u/%02u/[%02u]";
-		snprintf(row, sizeof(row), fmt,
-			static_cast<unsigned>(dt.day),
-			static_cast<unsigned>(dt.month),
-			static_cast<unsigned>(y2));
-	} else {
-		snprintf(row, sizeof(row), "Дата    %02u/%02u/%02u",
-			static_cast<unsigned>(dt.day),
-			static_cast<unsigned>(dt.month),
-			static_cast<unsigned>(y2));
-	}
+	char row[48];
+	fmt(row, sizeof(row), "Дата    %s/%s/%s",
+		dt.day, dt.month, y2,
+		DateTimeEditField::Day, DateTimeEditField::Month, DateTimeEditField::Year);
 	lcd.set_cursor(0, 0);
 	print_line(lcd, row);
 
-	if (editing && (field == DateTimeEditField::Hours ||
-	                field == DateTimeEditField::Minutes ||
-	                field == DateTimeEditField::Seconds)) {
-		const char* fmt =
-			(field == DateTimeEditField::Hours)   ? "Время [%02u]:%02u:%02u" :
-			(field == DateTimeEditField::Minutes) ? "Время %02u:[%02u]:%02u" :
-			                                        "Время %02u:%02u:[%02u]";
-		snprintf(row, sizeof(row), fmt,
-			static_cast<unsigned>(dt.hour),
-			static_cast<unsigned>(dt.minute),
-			static_cast<unsigned>(dt.second));
-	} else {
-		snprintf(row, sizeof(row), "Время   %02u:%02u:%02u",
-			static_cast<unsigned>(dt.hour),
-			static_cast<unsigned>(dt.minute),
-			static_cast<unsigned>(dt.second));
-	}
+	fmt(row, sizeof(row), "Время   %s:%s:%s",
+		dt.hour, dt.minute, dt.second,
+		DateTimeEditField::Hours, DateTimeEditField::Minutes, DateTimeEditField::Seconds);
 	lcd.set_cursor(1, 0);
 	print_line(lcd, row);
 }
@@ -409,63 +403,40 @@ void render_history(const MenuController& mc, drivers::Hd44780& lcd)
 	const auto field   = mc.current_history_field();
 	const auto dt      = editing ? mc.edited_history_datetime() : datetime::now();
 	const std::uint8_t y2 = static_cast<std::uint8_t>(dt.year % 100u);
+	const bool blink_off = editing && !mc.is_blink_visible();
+
+	auto pair = [&](char* s, std::uint8_t v, HistoryEditField f) {
+		if (blink_off && field == f) {
+			s[0] = ' '; s[1] = ' '; s[2] = '\0';
+		} else {
+			snprintf(s, 3, "%02u", static_cast<unsigned>(v));
+		}
+	};
 
 	char row[48];
+	char hh[3], dd[3], mm[3], yy[3];
+	pair(hh, dt.hour,  HistoryEditField::Hour);
+	pair(dd, dt.day,   HistoryEditField::Day);
+	pair(mm, dt.month, HistoryEditField::Month);
+	pair(yy, y2,       HistoryEditField::Year);
 
+	/* Row 0: kind label + (Hour only) the hour. Layout stays
+	 * non-edit width — blink-only indicator. */
 	if (kind == history::HistoryType::Hour) {
-		if (editing && field == HistoryEditField::Hour) {
-			snprintf(row, sizeof(row), "Расход за[%02u]:00",
-				static_cast<unsigned>(dt.hour));
-		} else {
-			snprintf(row, sizeof(row), "Расход за %02u:00",
-				static_cast<unsigned>(dt.hour));
-		}
+		snprintf(row, sizeof(row), "Расход за %s:00", hh);
 	} else {
 		snprintf(row, sizeof(row), "Расход за");
 	}
 	lcd.set_cursor(0, 0);
 	print_line(lcd, row);
 
+	/* Row 1: date + flow value. Month kind hides day. */
 	char date_part[16];
 	const bool show_day = (kind != history::HistoryType::Month);
-	if (editing && field == HistoryEditField::Day && show_day) {
-		snprintf(date_part, sizeof(date_part), "[%02u]/%02u/%02u",
-			static_cast<unsigned>(dt.day),
-			static_cast<unsigned>(dt.month),
-			static_cast<unsigned>(y2));
-	} else if (editing && field == HistoryEditField::Month) {
-		if (show_day) {
-			snprintf(date_part, sizeof(date_part), "%02u/[%02u]/%02u",
-				static_cast<unsigned>(dt.day),
-				static_cast<unsigned>(dt.month),
-				static_cast<unsigned>(y2));
-		} else {
-			snprintf(date_part, sizeof(date_part), "  /[%02u]/%02u",
-				static_cast<unsigned>(dt.month),
-				static_cast<unsigned>(y2));
-		}
-	} else if (editing && field == HistoryEditField::Year) {
-		if (show_day) {
-			snprintf(date_part, sizeof(date_part), "%02u/%02u/[%02u]",
-				static_cast<unsigned>(dt.day),
-				static_cast<unsigned>(dt.month),
-				static_cast<unsigned>(y2));
-		} else {
-			snprintf(date_part, sizeof(date_part), "  /%02u/[%02u]",
-				static_cast<unsigned>(dt.month),
-				static_cast<unsigned>(y2));
-		}
+	if (show_day) {
+		snprintf(date_part, sizeof(date_part), "%s/%s/%s", dd, mm, yy);
 	} else {
-		if (show_day) {
-			snprintf(date_part, sizeof(date_part), "%02u/%02u/%02u",
-				static_cast<unsigned>(dt.day),
-				static_cast<unsigned>(dt.month),
-				static_cast<unsigned>(y2));
-		} else {
-			snprintf(date_part, sizeof(date_part), "  /%02u/%02u",
-				static_cast<unsigned>(dt.month),
-				static_cast<unsigned>(y2));
-		}
+		snprintf(date_part, sizeof(date_part), "  /%s/%s", mm, yy);
 	}
 
 	const auto& last = history::last_result();
@@ -485,11 +456,18 @@ void render_history(const MenuController& mc, drivers::Hd44780& lcd)
 
 } /* namespace */
 
-void render(const MenuController& mc, drivers::Hd44780& lcd)
+void render(MenuController& mc, drivers::Hd44780& lcd)
 {
 	/* Reset CGRAM bookkeeping at the top of every frame. Glyphs
 	 * accumulate across the two rows but each frame starts clean. */
 	cgram_.reset();
+
+	/* Advance blink phase. Period = MenuController::BLINK_PERIOD = 6.
+	 * Visible the first half (3 frames), hidden the second. With
+	 * main loop's K_MSEC(150) tick during edit, that's ~450 ms on /
+	 * 450 ms off — perceptible. With idle's K_MSEC(2000) the cycle
+	 * is 12 s but blink doesn't apply (no active field). */
+	mc.tick_blink();
 
 	lcd.set_cursor(0, 0);
 

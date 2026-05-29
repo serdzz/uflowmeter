@@ -27,6 +27,7 @@
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/reboot.h>
 
 #include "datetime.hpp"
 #include "drivers/eeprom_power.hpp"
@@ -49,7 +50,7 @@ namespace {
  * buffer would consume half of it). */
 std::uint8_t options_scratch[uflow::options::OPTIONS_PAGE_SIZE];
 
-void render_under_mutex(const uflow::ui::MenuController& mc)
+void render_under_mutex(uflow::ui::MenuController& mc)
 {
 	k_mutex_lock(&uflow::drivers::lcd_mutex, K_FOREVER);
 	uflow::ui::render(mc, uflow::drivers::lcd());
@@ -95,13 +96,20 @@ void handle_app_request(uflow::ui::MenuController& mc,
 	case AppRequest::None:
 		return;
 	case AppRequest::DeepSleep:
-		LOG_INF("AppRequest: DeepSleep (no handler yet)");
+		/* No handler needed — Zephyr's PM policy enters STOP from
+		 * the idle thread once all threads sleep. This request
+		 * exists for symmetry with the embassy port where it
+		 * triggered the explicit DeepSleep path. */
+		LOG_INF("DeepSleep (idle PM handles STOP)");
 		return;
 	case AppRequest::EnterCalibration:
-		LOG_INF("AppRequest: EnterCalibration (no handler yet)");
+		LOG_INF("EnterCalibration → selecting Calibration menu");
+		mc.select(uflow::ui::MenuId::Calibration);
 		return;
 	case AppRequest::SystemReset:
-		LOG_INF("AppRequest: SystemReset (no handler yet)");
+		LOG_INF("SystemReset → sys_reboot in 100 ms");
+		k_msleep(100);  /* drain log buffer before reset */
+		sys_reboot(SYS_REBOOT_COLD);
 		return;
 	case AppRequest::SetCommType:
 		LOG_INF("SetCommType: %u", v);
@@ -226,11 +234,14 @@ int main(void)
 
 	uflow::drivers::KeyEvent ev{};
 	for (;;) {
-		/* 2 s refresh timeout keeps live values (flow, uptime)
-		 * updating between key presses. Hit on every key, also
-		 * fired periodically — render is idempotent + paints under
-		 * the mutex so it's safe to call back-to-back. */
-		const int kr = uflow::drivers::keypad_recv(ev, K_MSEC(2000));
+		/* Refresh tick: 150 ms while a multi-field edit is active
+		 * (DateTime/History) so the blink animation runs at a
+		 * perceptible rate, 2 s otherwise to minimize wake events
+		 * for live-value updates (flow, uptime). The kernel auto-
+		 * enters STOP between wakes via the PM policy. */
+		const k_timeout_t timeout = controller.has_active_field_edit() ?
+			K_MSEC(150) : K_MSEC(2000);
+		const int kr = uflow::drivers::keypad_recv(ev, timeout);
 		if (kr == 0) {
 			uflow::ui::UiEvent ui_ev;
 			if (uflow::ui::ui_event_from_input_code(ev.code, ui_ev)) {

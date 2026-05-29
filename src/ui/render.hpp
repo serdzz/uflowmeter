@@ -27,7 +27,11 @@ namespace uflow::ui {
 
 /* Paint the current state to the LCD. Caller MUST hold lcd_mutex.
  * Always re-writes both rows + pads to 16 chars so leftover state
- * from prior screens doesn't bleed through. */
-void render(const MenuController& mc, drivers::Hd44780& lcd);
+ * from prior screens doesn't bleed through.
+ *
+ * Takes the controller by mutable reference because rendering advances
+ * the blink phase (mc.tick_blink()) and resets CGRAM bookkeeping per
+ * frame. */
+void render(MenuController& mc, drivers::Hd44780& lcd);
 
 } /* namespace uflow::ui */
