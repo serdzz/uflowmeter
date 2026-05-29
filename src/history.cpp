@@ -222,6 +222,10 @@ int init(const struct device* eeprom)
 	return 0;
 }
 
+float hour_accumulator()  { return static_cast<float>(hour_flow_);  }
+float day_accumulator()   { return static_cast<float>(day_flow_);   }
+float month_accumulator() { return static_cast<float>(month_flow_); }
+
 int start()
 {
 	if (history_tid != nullptr) {

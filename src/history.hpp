@@ -65,4 +65,15 @@ int init(const struct device* eeprom);
  * hour=0 / day=1 boundaries. */
 int start();
 
+/* In-flight accumulators — the running sum since the last ring write
+ * for each kind. Single-writer (history_tick thread); reads are
+ * lock-free and may see a slightly stale value. Used by the Modbus
+ * register handler to expose hour/day/month flow over the wire.
+ *
+ * Units: m³ (each measurement cycle's `latest_flow_m3h` value summed
+ * once per minute over the active period). */
+float hour_accumulator();
+float day_accumulator();
+float month_accumulator();
+
 } /* namespace uflow::history */
