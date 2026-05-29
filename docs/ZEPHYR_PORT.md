@@ -326,7 +326,7 @@ without ritual.
 | ~~3~~ | ~~MCO on PA8~~ | **Closed.** Direct CMSIS register poke in `src/mco.{hpp,cpp}` (no L1 DT binding). HSE/1 = 8 MHz. |
 | ~~4~~ | ~~`options::save_through_dp` cleanup~~ | **Closed.** Single helper in `options.cpp`; four callers (main, modbus_handler, uart shell, history) consume it. |
 | ~~5~~ | ~~Set-verbose log filter~~ | **Closed.** `shell> set_verbose 1` now raises runtime log level to DBG across all sources via `log_filter_set(NULL, …)`; `set_verbose 0` drops to INF. Requires `CONFIG_LOG_RUNTIME_FILTERING=y` (added). |
-| 6 | Formatted `date get` shell reply | Thread `datetime::now()` into the shell |
+| ~~6~~ | ~~Formatted `date get` shell reply~~ | **Closed (`cebf509`).** `shell::set_datetime_provider(fn)` lets uart.cpp install a callback that formats `datetime::now()` as `YYYY-MM-DD HH:MM:SS`. Parser stays Zephyr-free (host-testable). |
 | 7 | Keypad repeat (1 s delay, 150 ms interval) | UI commit 2's hold-down doesn't fire; embassy had it |
 | 8 | LCD power-cycling on idle | Helpers exist in hd44780.cpp; not wired to an idle timer |
 | 9 | Extract `crc.{hpp,cpp}` | Unlocks Options-CRC host tests + cleans up duplicate CRC literal in options.cpp |
