@@ -4,6 +4,7 @@
 
 #include "menu_controller.hpp"
 
+#include "../datetime.hpp"
 #include "../options.hpp"
 
 namespace uflow::ui {
@@ -254,12 +255,78 @@ AppRequest MenuController::editnumber_event(EditNumberState& st, ScreenId s, UiE
 	return AppRequest::None;
 }
 
+void MenuController::datetime_advance_field()
+{
+	switch (datetime_field_) {
+	case DateTimeEditField::None:    datetime_field_ = DateTimeEditField::Seconds; break;
+	case DateTimeEditField::Seconds: datetime_field_ = DateTimeEditField::Minutes; break;
+	case DateTimeEditField::Minutes: datetime_field_ = DateTimeEditField::Hours;   break;
+	case DateTimeEditField::Hours:   datetime_field_ = DateTimeEditField::Day;     break;
+	case DateTimeEditField::Day:     datetime_field_ = DateTimeEditField::Month;   break;
+	case DateTimeEditField::Month:   datetime_field_ = DateTimeEditField::Year;    break;
+	case DateTimeEditField::Year:    datetime_field_ = DateTimeEditField::None;    break;
+	}
+}
+
+AppRequest MenuController::datetime_event(UiEvent ev)
+{
+	auto inc = [&]() {
+		switch (datetime_field_) {
+		case DateTimeEditField::Seconds: datetime::inc_second(edited_datetime_); break;
+		case DateTimeEditField::Minutes: datetime::inc_minute(edited_datetime_); break;
+		case DateTimeEditField::Hours:   datetime::inc_hour(edited_datetime_);   break;
+		case DateTimeEditField::Day:     datetime::inc_day(edited_datetime_);    break;
+		case DateTimeEditField::Month:   datetime::inc_month(edited_datetime_);  break;
+		case DateTimeEditField::Year:    datetime::inc_year(edited_datetime_);   break;
+		case DateTimeEditField::None:    break;
+		}
+	};
+	auto dec = [&]() {
+		switch (datetime_field_) {
+		case DateTimeEditField::Seconds: datetime::dec_second(edited_datetime_); break;
+		case DateTimeEditField::Minutes: datetime::dec_minute(edited_datetime_); break;
+		case DateTimeEditField::Hours:   datetime::dec_hour(edited_datetime_);   break;
+		case DateTimeEditField::Day:     datetime::dec_day(edited_datetime_);    break;
+		case DateTimeEditField::Month:   datetime::dec_month(edited_datetime_);  break;
+		case DateTimeEditField::Year:    datetime::dec_year(edited_datetime_);   break;
+		case DateTimeEditField::None:    break;
+		}
+	};
+
+	switch (ev) {
+	case UiEvent::Enter:
+		datetime_advance_field();
+		if (datetime_field_ == DateTimeEditField::None) {
+			/* Just completed Year → exit. Commit. */
+			last_committed_datetime_ = edited_datetime_;
+			return AppRequest::SetDateTime;
+		}
+		return AppRequest::None;
+	case UiEvent::Back:
+		datetime_field_ = DateTimeEditField::None;
+		return AppRequest::None;
+	case UiEvent::Up:
+	case UiEvent::Right:
+		inc();
+		return AppRequest::None;
+	case UiEvent::Down:
+	case UiEvent::Left:
+		dec();
+		return AppRequest::None;
+	}
+	return AppRequest::None;
+}
+
 AppRequest MenuController::event(UiEvent ev)
 {
 	/* Edit mode swallows everything for the current screen first.
-	 * Back during edit cancels (handled inside editbox/editnumber
-	 * helpers); Back outside edit deselects the menu. */
+	 * Back during edit cancels (handled inside editbox/editnumber/
+	 * datetime helpers); Back outside edit deselects the menu. */
 	const ScreenId screen_before = current_screen();
+	if (screen_before == ScreenId::DateTime &&
+	    datetime_field_ != DateTimeEditField::None) {
+		return datetime_event(ev);
+	}
 	if (auto* box = editbox_for(screen_before)) {
 		if (box->editable) {
 			return editbox_event(*box, screen_before, ev);
@@ -308,6 +375,12 @@ AppRequest MenuController::event(UiEvent ev)
 			auto* num = editnumber_for(screen);
 			return num ? editnumber_event(*num, screen, ev) : AppRequest::None;
 		}
+		case ScreenId::DateTime:
+			/* Enter from non-edit on DateTime: capture live datetime
+			 * into the working buffer + step into Seconds. */
+			edited_datetime_ = datetime::now();
+			datetime_advance_field();
+			return AppRequest::None;
 		default:
 			return AppRequest::None;
 		}

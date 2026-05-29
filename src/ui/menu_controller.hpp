@@ -29,12 +29,26 @@
 
 #include <cstdint>
 
+#include "../datetime.hpp"
 #include "app_request.hpp"
 #include "events.hpp"
 #include "menu_list.hpp"
 #include "screen.hpp"
 
 namespace uflow::ui {
+
+/* Field-stepping sequence on the DateTime screen — matches the embassy
+ * DateTimeWidget::next_item order: None → Seconds → Minutes → Hours →
+ * Day → Month → Year → None (commit on the last → None transition). */
+enum class DateTimeEditField : std::uint8_t {
+	None = 0,
+	Seconds,
+	Minutes,
+	Hours,
+	Day,
+	Month,
+	Year,
+};
 
 struct EditBoxState {
 	std::uint8_t cursor{0};
@@ -81,6 +95,17 @@ public:
 	 * Documented limitation; fix when Options layout is bumped. */
 	bool muster_active() const { return muster_.cursor != 0; }
 
+	/* DateTime edit introspection — render() reads these to decide
+	 * which field gets [brackets] on the DateTime screen, and to
+	 * show the in-progress edit buffer instead of live datetime. */
+	bool is_editing_datetime() const { return datetime_field_ != DateTimeEditField::None; }
+	DateTimeEditField current_datetime_field() const { return datetime_field_; }
+	const datetime::DateTimeFields& edited_datetime() const { return edited_datetime_; }
+
+	/* DateTime committed on the last Year→None transition. Read on
+	 * the tick AppRequest::SetDateTime is returned. */
+	const datetime::DateTimeFields& last_committed_datetime() const { return last_committed_datetime_; }
+
 private:
 	static bool is_screen_enabled(ScreenId s, void* ctx);
 	MenuList* current_list();
@@ -117,6 +142,19 @@ private:
 	EditBoxState    sensor_type_;   /* 0..4 */
 
 	std::uint8_t last_edit_value_{0};
+
+	/* DateTime edit state. `datetime_field_ != None` means we're
+	 * mid-stepping through Year/Month/Day/Hours/Minutes/Seconds —
+	 * edited_datetime_ is the working copy that increments / decrements
+	 * with Right / Left and snapshots into last_committed_datetime_
+	 * on the final Enter. */
+	DateTimeEditField datetime_field_{DateTimeEditField::None};
+	datetime::DateTimeFields edited_datetime_{};
+	datetime::DateTimeFields last_committed_datetime_{};
+
+	/* DateTime field-stepping helpers. */
+	AppRequest datetime_event(UiEvent ev);
+	void datetime_advance_field();   /* None → Sec → Min → Hr → Day → Mo → Yr → None */
 };
 
 } /* namespace uflow::ui */

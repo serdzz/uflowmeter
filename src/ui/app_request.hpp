@@ -30,6 +30,10 @@ enum class AppRequest : std::uint8_t {
 	SetMuster,             /* memory-only this commit (no Options home) */
 	SetNegative,           /* options.enable_negative ← cursor 0..1 */
 	SetSensorType,         /* options.sensor_type ← cursor 0..4 */
+
+	/* Caller reads MenuController::last_committed_datetime() (full
+	 * DateTimeFields struct, not a single u8). */
+	SetDateTime,
 };
 
 } /* namespace uflow::ui */

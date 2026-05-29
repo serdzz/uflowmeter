@@ -9,6 +9,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "../datetime.hpp"
 #include "../drivers/hd44780.hpp"
 #include "../measurement.hpp"
 #include "../options.hpp"
@@ -140,8 +141,10 @@ void format_value(ScreenId s, char* buf, std::size_t cap,
 		snprintf(buf, cap, "    (no rings)");
 		break;
 	case ScreenId::DateTime:
-		/* RTC datetime not exposed yet — placeholder. */
-		snprintf(buf, cap, " ---- -- -- --");
+		/* Drawn from the two-line renderer in render() — this code
+		 * path is only hit for screens that share the single value-
+		 * line layout. DateTime has its own painter. */
+		buf[0] = '\0';
 		break;
 	case ScreenId::Version:
 		snprintf(buf, cap, "       zephyr-1");
@@ -217,6 +220,71 @@ void format_value(ScreenId s, char* buf, std::size_t cap,
 
 } /* namespace */
 
+namespace {
+
+/* Paint the DateTime screen — overrides the standard title+value
+ * single-line layout because date and time both need their own row.
+ * When editing, wraps the active field in [brackets]; the other
+ * fields show the in-progress working buffer (so the user sees the
+ * effect of inc_X / dec_X immediately). When not editing, both rows
+ * source from datetime::now().
+ *
+ * 16-char per row layout:
+ *   non-edit:   "Date    DD/MM/YY"  (4 + 4 + 8 = 16)
+ *   editing:    "Date  [DD]/MM/YY"  (4 + 2 + 10 = 16)
+ */
+void render_datetime(const MenuController& mc, drivers::Hd44780& lcd)
+{
+	const bool editing = mc.is_editing_datetime();
+	const auto field = mc.current_datetime_field();
+	const auto dt = editing ? mc.edited_datetime() : datetime::now();
+	const std::uint8_t y2 = static_cast<std::uint8_t>(dt.year % 100u);
+
+	char row[LINE_WIDTH + 1];
+
+	if (editing && (field == DateTimeEditField::Day ||
+	                field == DateTimeEditField::Month ||
+	                field == DateTimeEditField::Year)) {
+		const char* fmt =
+			(field == DateTimeEditField::Day)   ? "Date  [%02u]/%02u/%02u"  :
+			(field == DateTimeEditField::Month) ? "Date  %02u/[%02u]/%02u"  :
+			                                      "Date  %02u/%02u/[%02u]";
+		snprintf(row, sizeof(row), fmt,
+			static_cast<unsigned>(dt.day),
+			static_cast<unsigned>(dt.month),
+			static_cast<unsigned>(y2));
+	} else {
+		snprintf(row, sizeof(row), "Date    %02u/%02u/%02u",
+			static_cast<unsigned>(dt.day),
+			static_cast<unsigned>(dt.month),
+			static_cast<unsigned>(y2));
+	}
+	lcd.set_cursor(0, 0);
+	print_line(lcd, row);
+
+	if (editing && (field == DateTimeEditField::Hours ||
+	                field == DateTimeEditField::Minutes ||
+	                field == DateTimeEditField::Seconds)) {
+		const char* fmt =
+			(field == DateTimeEditField::Hours)   ? "Time  [%02u]:%02u:%02u" :
+			(field == DateTimeEditField::Minutes) ? "Time  %02u:[%02u]:%02u" :
+			                                        "Time  %02u:%02u:[%02u]";
+		snprintf(row, sizeof(row), fmt,
+			static_cast<unsigned>(dt.hour),
+			static_cast<unsigned>(dt.minute),
+			static_cast<unsigned>(dt.second));
+	} else {
+		snprintf(row, sizeof(row), "Time    %02u:%02u:%02u",
+			static_cast<unsigned>(dt.hour),
+			static_cast<unsigned>(dt.minute),
+			static_cast<unsigned>(dt.second));
+	}
+	lcd.set_cursor(1, 0);
+	print_line(lcd, row);
+}
+
+} /* namespace */
+
 void render(const MenuController& mc, drivers::Hd44780& lcd)
 {
 	lcd.set_cursor(0, 0);
@@ -229,6 +297,11 @@ void render(const MenuController& mc, drivers::Hd44780& lcd)
 	}
 
 	const ScreenId screen = mc.current_screen();
+	if (screen == ScreenId::DateTime) {
+		render_datetime(mc, lcd);
+		return;
+	}
+
 	print_line(lcd, title_for(screen));
 
 	char value_buf[LINE_WIDTH + 1];

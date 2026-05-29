@@ -28,6 +28,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "datetime.hpp"
 #include "drivers/eeprom_power.hpp"
 #include "drivers/hd44780.hpp"
 #include "drivers/keypad.hpp"
@@ -126,6 +127,21 @@ void handle_app_request(uflow::ui::MenuController& mc,
 		 * MenuController and resets across reboot. */
 		LOG_INF("SetMuster (memory-only): %u", v);
 		return;
+	case AppRequest::SetDateTime: {
+		const auto& dt = mc.last_committed_datetime();
+		LOG_INF("SetDateTime: %04u-%02u-%02u %02u:%02u:%02u",
+			static_cast<unsigned>(dt.year),
+			static_cast<unsigned>(dt.month),
+			static_cast<unsigned>(dt.day),
+			static_cast<unsigned>(dt.hour),
+			static_cast<unsigned>(dt.minute),
+			static_cast<unsigned>(dt.second));
+		uflow::datetime::set(dt);
+		/* No EEPROM save — the datetime offset is RAM-only this
+		 * commit. Future: persist a baseline timestamp in RTC
+		 * backup register so wall-clock survives reboot. */
+		return;
+	}
 	}
 }
 
