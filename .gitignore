@@ -1,7 +1,6 @@
 /target
 /target-embed
 **/*.rs.bk
-Cargo.lock
 microchip-eeprom-25x-local
 
 # Claude Code / agent tooling artifacts
