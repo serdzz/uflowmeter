@@ -110,7 +110,17 @@ bind_interrupts!(
 async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.enable_debug_during_sleep = true;
-    config.min_stop_pause = Duration::from_millis(10);
+    // Minimum lead time to the next timer event for the low-power
+    // executor to bother entering STOP. Must stay above the TDC INT
+    // timeout: while `single_measurement` is parked on that 50 ms wait
+    // the only pending alarm is 50 ms out, so a smaller threshold lets
+    // the executor STOP mid-measurement. STOP gates MSI/HSI/*and HSE*, so
+    // the 8 MHz reference we drive out on MCO/PA8 dies right when the
+    // TDC7200 is counting — showing up as sporadic `tof: down=false
+    // up=false` rather than as an outright fault. The 5 s measurement
+    // period and the 15 s UI idle timeout are both far beyond this, so
+    // raising it costs no STOP opportunities.
+    config.min_stop_pause = Duration::from_millis(100);
     // Default MSI 4 MHz — tried RANGE2M but average current rose
     // from 4.5 to 7.1 mA on the bench unit. Slower core stretches
     // every wake task → more time awake → fewer STOP entries because
