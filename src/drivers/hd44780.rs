@@ -109,6 +109,11 @@ impl<'d> Hd44780<'d> {
     }
 
     /// Write an ASCII string at the current cursor position.
+    ///
+    /// Unused by the UI path — `DeferredDisplay` batches renders and
+    /// flushes through `write_byte_pub`. Kept as a direct-write helper
+    /// for bring-up / debugging.
+    #[allow(dead_code)]
     pub async fn write_str(&mut self, s: &str) {
         for b in s.bytes() {
             self.data(b).await;

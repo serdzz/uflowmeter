@@ -24,8 +24,8 @@ pub mod shell;
 pub mod ui;
 
 pub use apps::{Actions, App, AppRequest};
-pub use options::{CommType, Options};
 pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
+pub use options::{CommType, Options};
 
 #[cfg(test)]
 mod history_lib_tests;

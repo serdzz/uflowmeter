@@ -79,7 +79,7 @@ pub async fn keypad_task(
     mut btn_down: ExtiInput<'static, Async>,
     mut btn_up: ExtiInput<'static, Async>,
 ) {
-    use embassy_futures::select::{Either4, select4};
+    use embassy_futures::select::{select4, Either4};
 
     const FLAGS: [ButtonFlags; 4] = [
         ButtonFlags::CONFIG,

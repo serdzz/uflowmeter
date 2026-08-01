@@ -14,12 +14,12 @@
 //! is fixed at 1.75 ms (3.5 char times at 19200). At 115200 the real
 //! 3.5 char time is ~305 µs but the spec floor wins, so we use 1.75 ms.
 
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::Pull;
 use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{Config as UartConfig, Uart};
-use embassy_stm32::{Peri, peripherals};
+use embassy_stm32::{peripherals, Peri};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
@@ -82,12 +82,7 @@ pub async fn uart_session_task(
         // to fall (start bit) or for a pending TX (something we want
         // to send unprompted, e.g. an unsolicited shell prompt).
         let woken_by_tx = {
-            let mut rx_exti = ExtiInput::new(
-                rx_pin.reborrow(),
-                exti10.reborrow(),
-                Pull::Up,
-                Irqs,
-            );
+            let mut rx_exti = ExtiInput::new(rx_pin.reborrow(), exti10.reborrow(), Pull::Up, Irqs);
             match select(rx_exti.wait_for_falling_edge(), UART_TX.receive()).await {
                 Either::First(()) => {
                     defmt::info!("uart: wake (EXTI on PA10)");
@@ -161,7 +156,13 @@ async fn run_session(uart: &mut Uart<'_, Async>) {
             }
         } else {
             // Mid-frame — race FRAME_GAP for modbus boundary detection.
-            match select3(uart.read(&mut buf), Timer::after(FRAME_GAP), UART_TX.receive()).await {
+            match select3(
+                uart.read(&mut buf),
+                Timer::after(FRAME_GAP),
+                UART_TX.receive(),
+            )
+            .await
+            {
                 Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, uart).await,
                 Either3::Second(_) => {
                     if !frame.is_empty() {
@@ -223,7 +224,7 @@ async fn write_tx(tx_data: &ModbusFrame, uart: &mut Uart<'_, Async>) {
 /// USART.
 #[embassy_executor::task]
 pub async fn shell_task() {
-    use uflowmeter::shell::{ShellResult, parse_action, process_line};
+    use uflowmeter::shell::{parse_action, process_line, ShellResult};
     loop {
         let line = SHELL_LINES.receive().await;
         // Side-effects first so the action is queued even if the

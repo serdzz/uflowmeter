@@ -5,6 +5,12 @@
 //! Acceptable trade-off: a full 2x16 render is ~1.5 ms of busy-wait —
 //! short enough that embassy's STOP integration can still enter STOP
 //! during the idle gaps between renders.
+//!
+//! Currently unused: `DeferredDisplay` took over the `CharacterDisplay`
+//! role by batching a render into ops and flushing them through the
+//! async `Hd44780`, which avoids the busy-wait entirely. Kept as a
+//! fallback in case the deferred path misbehaves on hardware.
+#![allow(dead_code)]
 
 use core::fmt;
 

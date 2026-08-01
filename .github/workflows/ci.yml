@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, rework/embassy ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, rework/embassy ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -109,6 +109,42 @@ jobs:
       
       - name: Run clippy
         run: cargo clippy --lib --release -- -D warnings
+
+  # The job above lints src/lib.rs on the host, where main.rs and
+  # src/drivers/* are cfg'd out entirely. This one lints the binary
+  # against the real target so warnings in those modules are caught.
+  clippy-embedded:
+    name: Clippy (Embedded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7m-none-eabi
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-clippy-embedded-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-clippy-embedded-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-clippy-embedded-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: cargo clippy --release --bin uflowmeter -- -D warnings
 
   fmt:
     name: Format

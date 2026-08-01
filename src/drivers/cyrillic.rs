@@ -101,7 +101,8 @@ pub const FONT: &[(char, [u8; 8])] = &[
 ];
 
 pub fn lookup(c: char) -> Option<[u8; 8]> {
-    FONT.iter().find_map(|(ch, p)| if *ch == c { Some(*p) } else { None })
+    FONT.iter()
+        .find_map(|(ch, p)| if *ch == c { Some(*p) } else { None })
 }
 
 /// Cyrillic letters that are visually identical to a Latin glyph

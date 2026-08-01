@@ -19,33 +19,33 @@ use embassy_executor::Spawner;
 use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::mode::Blocking;
-use embassy_stm32::spi::{Config as SpiConfig, Spi};
-use embassy_stm32::time::Hertz;
 use embassy_stm32::rtc::{
     AnyRtc, DateTime as RtcDateTime, DayOfWeek, Rtc, RtcContainer, RtcTimeProvider,
 };
-use embassy_stm32::usart::{self, Config as UartConfig, Uart};
-use embassy_stm32::{Config, bind_interrupts, interrupt, peripherals};
+use embassy_stm32::spi::{Config as SpiConfig, Spi};
+use embassy_stm32::time::Hertz;
+use embassy_stm32::usart;
+use embassy_stm32::{bind_interrupts, interrupt, peripherals, Config};
 use embassy_sync::blocking_mutex::NoopMutex;
 use embassy_time::Duration;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
+use core::future::pending;
 use drivers::deferred_display::DeferredDisplay;
 use drivers::eeprom::Eeprom25Lc1024;
-use drivers::tdc1000::Tdc1000;
-use drivers::tdc7200::Tdc7200;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
+use drivers::tdc1000::Tdc1000;
+use drivers::tdc7200::Tdc7200;
 use drivers::uart::{MODBUS_FRAMES, SHELL_ACTIONS, UART_TX};
-use embassy_futures::select::{Either6, select6};
+use embassy_futures::select::{select6, Either6};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{Receiver, Watch};
 use embassy_time::{Instant, Timer};
-use core::future::pending;
-use uflowmeter::calibration::{CalibData, CalibTable, Calculator, MeterConfig};
+use uflowmeter::calibration::{Calculator, CalibData, CalibTable, MeterConfig};
 use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
 use uflowmeter::ui::MenuController;
@@ -58,8 +58,7 @@ use uflowmeter::{App, AppRequest, Options, UiEvent};
 //   Day:   31×12×3 = 1116 × 86 400s    = 3 years at 1/d
 //   Month: 10×12 = 120 × 31×86 400s    = 10 years at 1/m
 pub type HourHistory = RingStorage<0, 2160, 3600>;
-pub type DayHistory =
-    RingStorage<{ HourHistory::SIZE_ON_FLASH }, { 31 * 12 * 3 }, { 3600 * 24 }>;
+pub type DayHistory = RingStorage<{ HourHistory::SIZE_ON_FLASH }, { 31 * 12 * 3 }, { 3600 * 24 }>;
 pub type MonthHistory = RingStorage<
     { HourHistory::SIZE_ON_FLASH + DayHistory::SIZE_ON_FLASH },
     { 10 * 12 },
@@ -104,7 +103,10 @@ bind_interrupts!(
     }
 );
 
-#[embassy_executor::main(executor = "embassy_stm32::executor::Executor", entry = "cortex_m_rt::entry")]
+#[embassy_executor::main(
+    executor = "embassy_stm32::executor::Executor",
+    entry = "cortex_m_rt::entry"
+)]
 async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.enable_debug_during_sleep = true;
@@ -285,12 +287,7 @@ async fn main(spawner: Spawner) {
     // channel push), then tears it down after SESSION_IDLE_TIMEOUT
     // of quiet so REFCOUNT_STOP1 drops and the executor sleeps.
     spawner.spawn(unwrap!(drivers::uart::uart_session_task(
-        p.USART1,
-        p.PA10,
-        p.PA9,
-        p.DMA1_CH4,
-        p.DMA1_CH5,
-        p.EXTI10,
+        p.USART1, p.PA10, p.PA9, p.DMA1_CH4, p.DMA1_CH5, p.EXTI10,
     )));
     spawner.spawn(unwrap!(drivers::uart::shell_task()));
     spawner.spawn(unwrap!(history_tick_task()));
@@ -299,7 +296,9 @@ async fn main(spawner: Spawner) {
     let btn_enter = ExtiInput::new(p.PB7, p.EXTI7, Pull::Up, Irqs);
     let btn_down = ExtiInput::new(p.PB8, p.EXTI8, Pull::Up, Irqs);
     let btn_up = ExtiInput::new(p.PB9, p.EXTI9, Pull::Up, Irqs);
-    spawner.spawn(unwrap!(keypad_task(btn_config, btn_enter, btn_down, btn_up)));
+    spawner.spawn(unwrap!(keypad_task(
+        btn_config, btn_enter, btn_down, btn_up
+    )));
 
     let mut app = App::new();
     sync_app_datetime(&mut app, &rtc_now);
@@ -387,7 +386,9 @@ async fn main(spawner: Spawner) {
                             &rtc_container,
                         );
                         // Slave address may have changed.
-                        modbus.modbus_mut().set_slave_address(options.slave_address());
+                        modbus
+                            .modbus_mut()
+                            .set_slave_address(options.slave_address());
                         // Republish so measurement_task picks up the
                         // new calibration on its next cycle.
                         opt_sender.send(options);
@@ -773,12 +774,7 @@ async fn measurement_task(
             (Some(d), Some(u)) => {
                 let volume = calc.get_volume(&table, u as f32, d as f32);
                 if volume.is_finite() {
-                    defmt::info!(
-                        "tof down={=u32} up={=u32} flow={=f32} m³/h",
-                        d,
-                        u,
-                        volume
-                    );
+                    defmt::info!("tof down={=u32} up={=u32} flow={=f32} m³/h", d, u, volume);
                     FLOW_RESULT.signal(volume);
                 }
             }
@@ -947,7 +943,11 @@ fn sync_app_datetime(app: &mut App, rtc: &RtcTimeProvider) {
     if let Ok(dt) = rtc.now() {
         if let (Ok(month), Ok(date), Ok(time)) = (
             time::Month::try_from(dt.month()),
-            time::Date::from_calendar_date(dt.year() as i32, time::Month::try_from(dt.month()).unwrap_or(time::Month::January), dt.day()),
+            time::Date::from_calendar_date(
+                dt.year() as i32,
+                time::Month::try_from(dt.month()).unwrap_or(time::Month::January),
+                dt.day(),
+            ),
             time::Time::from_hms(dt.hour(), dt.minute(), dt.second()),
         ) {
             let _ = month;
