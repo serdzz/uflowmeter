@@ -1,39 +1,64 @@
-//! Minimal TDC7200 driver — Time-to-Digital Converter (ToF measurement).
+//! TDC7200 driver — Time-to-Digital Converter (ToF measurement).
 //!
-//! First-pass skeleton — register read/write over a shared SPI bus
-//! plus EN (PB1) pin. The full measurement orchestration (start /
-//! calibration / multi-stop sampling) is in the legacy
-//! `src/hardware/tdc7200.rs` and gets ported later.
+//! SPI framing and the bring-up sequence follow the C++ firmware that
+//! actually runs this board (`UFlowMeter_c++/UFlowMeter/hardware/
+//! tdc7200.hpp`), cross-checked against TI's reference design in
+//! `Docs/UltrasonicIC/TIDM-ULTRASONIC-TDC/Source/TDC_1000_7200_SPI.h`.
+//!
+//! Command byte: bit 6 = write, bit 7 = auto-increment, bits 5:0 =
+//! address. So a single read is the bare address, a single write is
+//! `addr | 0x40`, a bulk read is `addr | 0x80` and a bulk write is
+//! `addr | 0xC0`.
+//!
+//! Note the legacy Rust driver in `src/hardware/tdc7200.rs` has read
+//! and write inverted relative to this — do not use it as a reference.
 
 use embassy_stm32::gpio::Output;
 use embedded_hal::spi::{Operation, SpiDevice};
 
+const WRITE_BIT: u8 = 0x40;
+const AUTO_INC_BIT: u8 = 0x80;
+
+/// Config register block, 0x00..0x09 — one bulk auto-increment write,
+/// matching the C++ `set_config()`.
+pub const CONFIG_REG_COUNT: usize = 10;
+
+/// INT_STATUS (0x02). Writing 1s clears the latched flags.
+const REG_INT_STATUS: u8 = 0x02;
+
 pub struct Tdc7200<'d, D> {
     spi: D,
     en: Output<'d>,
+    /// Shadow of CONFIG1 (0x00) so `start_measurement` can set
+    /// START_MEAS without clobbering the rest of the register — the
+    /// C++ keeps the same shadow in `current_regs_.config1`.
+    config1: u8,
 }
 
 impl<'d, D: SpiDevice> Tdc7200<'d, D> {
     pub fn new(spi: D, en: Output<'d>) -> Self {
-        Self { spi, en }
+        Self {
+            spi,
+            en,
+            config1: 0,
+        }
     }
 
-    /// Power the chip on (EN HIGH). Caller must wait ~1 ms for the
-    /// internal regulator to settle before issuing SPI commands.
+    /// Power the chip on (EN HIGH). The C++ raises EN once in `init()`
+    /// and only drops it in `shutdown()` — it does not power-cycle
+    /// between measurements.
     pub fn power_on(&mut self) {
         self.en.set_high();
     }
 
     /// Power the chip off (EN LOW). All register state is lost.
+    #[allow(dead_code)]
     pub fn power_off(&mut self) {
         self.en.set_low();
     }
 
-    /// 8-bit register space. Command byte is `(addr & 0x1F) | 0x00`
-    /// for reads (TDC7200: bit 6 = auto-increment, bit 7 = R/W with
-    /// 1 = write).
     pub fn read_register(&mut self, address: u8) -> Result<u8, D::Error> {
-        let cmd = [address & 0x1F];
+        let cmd = [address & 0x3F];
         let mut rx = [0u8; 1];
         self.spi
             .transaction(&mut [Operation::Write(&cmd), Operation::Read(&mut rx)])?;
@@ -41,37 +66,44 @@ impl<'d, D: SpiDevice> Tdc7200<'d, D> {
     }
 
     pub fn write_register(&mut self, address: u8, value: u8) -> Result<(), D::Error> {
-        let cmd = [(address & 0x1F) | 0x40, value];
+        let cmd = [(address & 0x3F) | WRITE_BIT, value];
         self.spi.write(&cmd)
     }
 
-    /// Bulk-load a config blob — one byte per register starting at 0x00.
-    /// Matches the legacy `Options::tdc7200_regs` (10 bytes).
-    pub fn load_config(&mut self, regs: &[u8]) -> Result<(), D::Error> {
-        for (i, b) in regs.iter().enumerate() {
-            self.write_register(i as u8, *b)?;
-        }
-        Ok(())
-    }
-
-    /// Read a 24-bit big-endian time value (TIME1/CLOCK_COUNT1/etc.).
-    pub fn read_u24(&mut self, address: u8) -> Result<u32, D::Error> {
-        let cmd = [address & 0x1F];
-        let mut rx = [0u8; 3];
+    /// Bulk read with auto-increment starting at `address`.
+    pub fn read_bulk(&mut self, address: u8, buf: &mut [u8]) -> Result<(), D::Error> {
+        let cmd = [(address & 0x3F) | AUTO_INC_BIT];
         self.spi
-            .transaction(&mut [Operation::Write(&cmd), Operation::Read(&mut rx)])?;
-        Ok(((rx[0] as u32) << 16) | ((rx[1] as u32) << 8) | (rx[2] as u32))
+            .transaction(&mut [Operation::Write(&cmd), Operation::Read(buf)])
     }
 
-    /// Kick off a single ToF measurement (sets CONFIG1.START_MEAS).
-    /// INT pin (PB0) goes low on completion — wait via ExtiInput.
+    /// Load the 10-byte config block (registers 0x00..0x09) in one
+    /// auto-incrementing write, exactly as the C++ `set_config()` does.
+    pub fn load_config(&mut self, regs: &[u8; CONFIG_REG_COUNT]) -> Result<(), D::Error> {
+        self.config1 = regs[0];
+        let cmd = [WRITE_BIT | AUTO_INC_BIT];
+        self.spi
+            .transaction(&mut [Operation::Write(&cmd), Operation::Write(regs)])
+    }
+
+    /// Clear all latched interrupt flags (C++ `clear_int_flags()`:
+    /// writes 0x1F to INT_STATUS).
+    pub fn clear_int_flags(&mut self) -> Result<(), D::Error> {
+        self.write_register(REG_INT_STATUS, 0x1F)
+    }
+
+    /// Kick off a single ToF measurement: set CONFIG1.START_MEAS on top
+    /// of the configured CONFIG1 value and write just that register.
+    /// INT (PB0) goes LOW on completion.
     pub fn start_measurement(&mut self) -> Result<(), D::Error> {
-        // CONFIG1 (0x00): START_MEAS=1.
-        self.write_register(0x00, 0x01)
+        self.write_register(0x00, self.config1 | 0x01)
     }
 
-    /// Read TIME1 (0x10) — 24-bit raw ToF value.
+    /// Read TIME1 (0x10) — 24-bit big-endian raw ToF value. Uses a bulk
+    /// read so the chip auto-increments across the three bytes.
     pub fn read_time1(&mut self) -> Result<u32, D::Error> {
-        self.read_u24(0x10)
+        let mut rx = [0u8; 3];
+        self.read_bulk(0x10, &mut rx)?;
+        Ok(((rx[0] as u32) << 16) | ((rx[1] as u32) << 8) | (rx[2] as u32))
     }
 }

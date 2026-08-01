@@ -111,10 +111,10 @@ async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.enable_debug_during_sleep = true;
     // Minimum lead time to the next timer event for the low-power
-    // executor to bother entering STOP. Must stay above the TDC INT
-    // timeout: while `single_measurement` is parked on that 50 ms wait
-    // the only pending alarm is 50 ms out, so a smaller threshold lets
-    // the executor STOP mid-measurement. STOP gates MSI/HSI/*and HSE*, so
+    // executor to bother entering STOP. Must stay > TDC_INT_TIMEOUT:
+    // while `single_measurement` is parked on that timeout the only
+    // pending alarm is 50 ms out, so a smaller threshold lets the
+    // executor STOP mid-measurement. STOP gates MSI/HSI/*and HSE*, so
     // the 8 MHz reference we drive out on MCO/PA8 dies right when the
     // TDC7200 is counting — showing up as sporadic `tof: down=false
     // up=false` rather than as an outright fault. The 5 s measurement
@@ -150,6 +150,25 @@ async fn main(spawner: Spawner) {
         embassy_stm32::rcc::McoSource::HSE,
         embassy_stm32::rcc::McoConfig::default(),
     );
+
+    // OSC_EN (PA11) — gates the reference oscillator that feeds the
+    // TDC1000 / TDC7200 CLOCK pins. The legacy firmware configured it
+    // as a push-pull output with ODR at its reset value, i.e. driven
+    // LOW (`src/hardware/pins.rs:164,219`), and PA11 sits in the same
+    // pull-up group as every other active-low enable on this board
+    // (LCD power PC0, backlight PC5, RS485 power PC9, both CS lines) —
+    // so LOW means "oscillator on". The embassy port never touched
+    // this pin, leaving it a floating input after reset, which is the
+    // most likely reason both TDCs read back as all-zero registers.
+    let _osc_en = Output::new(p.PA11, Level::Low, Speed::Low);
+
+    // Transducer switch controls. Legacy made these push-pull outputs
+    // and left them LOW (`pins.rs:178-180,237-239`); it never drove
+    // them beyond that. Mirroring the state rather than leaving three
+    // floating inputs next to the analog frontend.
+    let _sw_en = Output::new(p.PB3, Level::Low, Speed::Low);
+    let _sw_a0 = Output::new(p.PB4, Level::Low, Speed::Low);
+    let _sw_a1 = Output::new(p.PB5, Level::Low, Speed::Low);
 
     // RTC: low-power Rtc::new takes only the peripheral and returns
     // (container, time_provider). The container holds the Rtc behind
@@ -253,11 +272,12 @@ async fn main(spawner: Spawner) {
     );
 
     // TDC1000 — analog frontend, CS=PB11, EN=PB10, RES=PC6.
-    // EN starts LOW so the chip is powered down at boot; measurement_task
-    // turns it on for the duration of each ToF cycle and off again
-    // when done. RES is active-low so we hold it HIGH (out of reset).
+    // EN starts LOW; measurement_task raises it once at start-up.
+    // RES starts LOW — that is the chip's running level, not an
+    // "in reset" state. `Tdc1000::reset()` pulses it high and drops it
+    // back before the first register access, mirroring the C++.
     let tdc1000_en = Output::new(p.PB10, Level::Low, Speed::Low);
-    let tdc1000_res = Output::new(p.PC6, Level::High, Speed::Low);
+    let tdc1000_res = Output::new(p.PC6, Level::Low, Speed::Low);
     let tdc1000 = Tdc1000::new(
         SpiDevice::new(spi2_bus, Output::new(p.PB11, Level::High, Speed::VeryHigh)),
         tdc1000_en,
@@ -695,25 +715,77 @@ type Tdc7200Dev = drivers::tdc7200::Tdc7200<
     >,
 >;
 
-/// Run a single TDC measurement on the currently selected TDC1000
-/// channel and return the raw 24-bit TIME1 value. Returns `None` on
-/// SPI error or INT timeout. The 50 ms timeout matches the legacy
-/// budget — at 1480 m/s and 100 mm transducer spacing a real reading
-/// is < 100 µs, so anything over 50 ms is a stuck transducer.
-async fn single_measurement(
+/// How long to wait for the TDC7200 INT edge before giving up on a
+/// cycle. Matches the legacy budget — at 1480 m/s and 100 mm
+/// transducer spacing a real reading is < 100 µs, so anything over
+/// 50 ms is a stuck transducer.
+///
+/// Load-bearing: `Config::min_stop_pause` must stay strictly greater
+/// than this (see the note in `main`), otherwise the executor is free
+/// to enter STOP while we're parked on this timeout.
+const TDC_INT_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_millis(50);
+
+// Default TDC register blocks, taken verbatim from the C++ firmware
+// that runs this board: `UFlowMeter_c++/UFlowMeter/hardware/umeter.cpp`
+// declares one 20-byte `def_regs` array — 10 bytes of TDC1000 config
+// (0x00..0x09) followed by 10 bytes of TDC7200 config. That split is
+// exactly the `Options::tdc1000_regs` / `tdc7200_regs` layout, so the
+// EEPROM blob design was right all along; this board's EEPROM just
+// never had valid values written to it.
+const TDC1000_DEFAULT_REGS: [u8; drivers::tdc1000::CONFIG_REG_COUNT] =
+    [0x48, 0x45, 0x01, 0x01, 0x07, 0xA0, 0x1E, 0x00, 0x6A, 0x03];
+const TDC7200_DEFAULT_REGS: [u8; drivers::tdc7200::CONFIG_REG_COUNT] =
+    [0x02, 0x44, 0x06, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00];
+
+/// Settle time between selecting a channel / clearing flags and
+/// triggering the measurement. The C++ waits 2 ms here (`umeter.cpp:55`,
+/// with a comment that the value is approximate).
+const TDC_SETTLE: embassy_time::Duration = embassy_time::Duration::from_millis(2);
+
+/// Decide whether an EEPROM-sourced register block is usable. All-zero
+/// means "never programmed"; the ASCII run `0x31..0x39,0x30` is the
+/// "1234567890" stub the legacy RTIC firmware used to write into
+/// `tdc7200_regs` on every boot. Both are junk — fall back to the C++
+/// defaults rather than pushing them into the chip.
+fn regs_or_default<const N: usize>(from_eeprom: &[u8], default: &[u8; N]) -> [u8; N] {
+    let mut out = [0u8; N];
+    out.copy_from_slice(&from_eeprom[..N]);
+    let all_zero = out.iter().all(|b| *b == 0);
+    let ascii_stub = out.iter().all(|b| b.is_ascii_digit());
+    if all_zero || ascii_stub {
+        *default
+    } else {
+        out
+    }
+}
+
+/// Select a TDC1000 channel, clear both chips' latched flags, settle,
+/// then trigger one measurement and read TIME1. Mirrors the per-channel
+/// body of the C++ `UMeter::Impl::measure()`.
+///
+/// The INT wait is level-triggered, not edge-triggered: the C++ polls
+/// `while (INT::IsSet())`, so a line that is already low when we get
+/// here counts as done. `wait_for_falling_edge()` would instead sit
+/// there until the timeout expired and report a spurious failure.
+async fn measure_channel(
+    tdc1000: &mut Tdc1000Dev,
     tdc7200: &mut Tdc7200Dev,
     tdc_int: &mut ExtiInput<'static, embassy_stm32::mode::Async>,
+    ch2: bool,
 ) -> Option<u32> {
+    if tdc1000.set_channel(ch2).is_err() {
+        defmt::error!("tdc1000: set_channel failed");
+        return None;
+    }
+    let _ = tdc1000.clear_error_flags();
+    let _ = tdc7200.clear_int_flags();
+    embassy_time::Timer::after(TDC_SETTLE).await;
+
     if tdc7200.start_measurement().is_err() {
         defmt::error!("tdc7200 start failed");
         return None;
     }
-    match embassy_time::with_timeout(
-        embassy_time::Duration::from_millis(50),
-        tdc_int.wait_for_falling_edge(),
-    )
-    .await
-    {
+    match embassy_time::with_timeout(TDC_INT_TIMEOUT, tdc_int.wait_for_low()).await {
         Ok(()) => tdc7200.read_time1().ok(),
         Err(_) => None,
     }
@@ -739,6 +811,25 @@ async fn measurement_task(
     let mut table = options_to_calib_table(&options);
     let mut calc = Calculator::new(options_to_meter_config(&options));
 
+    // Temporary bring-up diagnostic: for the first few cycles, read
+    // back the config registers we just wrote and log written-vs-read.
+    // Reads returning a constant 0x00/0xFF on both chips means the bus
+    // (power, CS, EN/RES, MCO reference) is the problem; a readback
+    // that matches what we wrote means both encodings are correct and
+    // the fault is downstream (transducers / INT wiring). Drop this
+    // block once ToF numbers come out.
+    let mut diag_cycles: u8 = 3;
+
+    // Bring-up order copied from the C++ `TDC1000::init()`: pulse
+    // RESET first, then raise EN. EN then stays high — that firmware
+    // only drops it on a full meter shutdown, never between
+    // measurements. Config is reloaded per cycle anyway, so adding a
+    // power-down path later stays cheap.
+    tdc1000.reset();
+    tdc1000.power_on();
+    tdc7200.power_on();
+    embassy_time::Timer::after_millis(2).await;
+
     loop {
         embassy_time::Timer::after_secs(5).await;
 
@@ -751,34 +842,54 @@ async fn measurement_task(
             defmt::info!("measurement: calibration refreshed from OPTIONS_WATCH");
         }
 
-        // Bring both TDC chips up for this cycle. ~1 ms regulator
-        // settle is generous for these parts. Re-load config because
-        // the chips lose all register state when EN was low.
-        tdc1000.power_on();
-        tdc7200.power_on();
-        embassy_time::Timer::after_millis(1).await;
-        let tdc1000_regs = options.tdc1000_regs().to_le_bytes();
-        if tdc1000.load_config(&tdc1000_regs[..10]).is_err() {
+        // Push the whole config block into both chips, preferring the
+        // EEPROM copy and falling back to the C++ defaults when it is
+        // blank or holds the legacy ASCII stub.
+        let tdc1000_regs =
+            regs_or_default(&options.tdc1000_regs().to_le_bytes(), &TDC1000_DEFAULT_REGS);
+        if tdc1000.load_config(&tdc1000_regs).is_err() {
             defmt::warn!("tdc1000: load_config failed");
         }
-        let tdc7200_regs = options.tdc7200_regs().to_le_bytes();
-        if tdc7200.load_config(&tdc7200_regs[..10]).is_err() {
+        let tdc7200_regs =
+            regs_or_default(&options.tdc7200_regs().to_le_bytes(), &TDC7200_DEFAULT_REGS);
+        if tdc7200.load_config(&tdc7200_regs).is_err() {
             defmt::warn!("tdc7200: load_config failed");
         }
-        let _ = tdc1000.clear_error_flags();
 
-        // Downstream first (channel 0).
-        let _ = tdc1000.set_channel(false);
-        let tof_down = single_measurement(&mut tdc7200, &mut tdc_int).await;
+        if diag_cycles > 0 {
+            diag_cycles -= 1;
+            for a in 0..4u8 {
+                match tdc1000.read_register(a) {
+                    Ok(v) => defmt::info!("diag tdc1000 reg={=u8:#x} read={=u8:#x}", a, v),
+                    Err(_) => defmt::warn!("diag tdc1000 reg={=u8:#x}: SPI error", a),
+                }
+            }
+            for a in 0..4u8 {
+                match tdc7200.read_register(a) {
+                    Ok(v) => defmt::info!("diag tdc7200 reg={=u8:#x} read={=u8:#x}", a, v),
+                    Err(_) => defmt::warn!("diag tdc7200 reg={=u8:#x}: SPI error", a),
+                }
+            }
+            defmt::info!(
+                "diag expect: tdc1000 reg0={=u8:#x} reg1={=u8:#x}, tdc7200 reg0={=u8:#x} reg1={=u8:#x}",
+                tdc1000_regs[0],
+                tdc1000_regs[1],
+                tdc7200_regs[0],
+                tdc7200_regs[1]
+            );
+        }
 
-        // Upstream (channel 1).
-        let _ = tdc1000.set_channel(true);
-        let tof_up = single_measurement(&mut tdc7200, &mut tdc_int).await;
+        // Per-channel sequence copied from the C++ `UMeter::Impl::
+        // measure()`: select channel, clear both chips' latched flags,
+        // wait ~2 ms, then trigger.
+        let tof_down = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, false).await;
+        let tof_up = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, true).await;
 
-        // Cut chip power before processing the result — calc/log are
-        // pure CPU work and don't need the analog frontend.
-        tdc1000.power_off();
-        tdc7200.power_off();
+        if let Ok(flags) = tdc1000.error_flags() {
+            if flags != 0 {
+                defmt::warn!("tdc1000: error flags {=u8:#x} (bad signal)", flags);
+            }
+        }
 
         match (tof_down, tof_up) {
             (Some(d), Some(u)) => {
