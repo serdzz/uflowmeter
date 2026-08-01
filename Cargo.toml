@@ -9,17 +9,22 @@ version = "0.1.0"
 edition = "2021"
 
 [patch.crates-io]
-# stm32l1_low_power branch adds STM32L1 to the low_power.rs +
-# rtc/low_power.rs cfg gates so embassy's transparent STOP-mode
-# executor works on our chip (upstream embassy only supports L4/L5/
-# U5/U3/WB/WL/U0). See https://github.com/serdzz/embassy/commit/1cf4496.
-embassy-executor = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
-embassy-stm32 = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
-embassy-time = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
-embassy-time-driver = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
-embassy-sync = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
-embassy-futures = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
-embassy-embedded-hal = { git = "https://github.com/serdzz/embassy", branch = "stm32l1_low_power" }
+# Pinned to a rev on the fork's stm32l1_low_power branch, which adds
+# STM32L1 to the low_power.rs + rtc/low_power.rs cfg gates so embassy's
+# transparent STOP-mode executor works on our chip (upstream embassy
+# only supports L4/L5/U5/U3/WB/WL/U0).
+# See https://github.com/serdzz/embassy/commit/1cf4496.
+#
+# rev, not branch: tracking the branch means every fresh checkout
+# resolves whatever its HEAD is at that moment, so a push to the fork
+# silently changes what we build. Bump this deliberately.
+embassy-executor = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-stm32 = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-time = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-time-driver = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-sync = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-futures = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-embedded-hal = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
 
 [dependencies]
 # Pure-Rust / target-agnostic deps. These build for both

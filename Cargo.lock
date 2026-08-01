@@ -280,7 +280,7 @@ dependencies = [
 [[package]]
 name = "embassy-embedded-hal"
 version = "0.6.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "defmt 1.1.1",
  "embassy-futures",
@@ -298,7 +298,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor"
 version = "0.10.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "cordyceps",
  "critical-section",
@@ -311,7 +311,7 @@ dependencies = [
 [[package]]
 name = "embassy-executor-macros"
 version = "0.8.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -322,17 +322,17 @@ dependencies = [
 [[package]]
 name = "embassy-executor-timer-queue"
 version = "0.1.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 
 [[package]]
 name = "embassy-futures"
 version = "0.1.2"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 
 [[package]]
 name = "embassy-hal-internal"
 version = "0.5.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -343,7 +343,7 @@ dependencies = [
 [[package]]
 name = "embassy-net-driver"
 version = "0.2.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "defmt 1.1.1",
 ]
@@ -351,7 +351,7 @@ dependencies = [
 [[package]]
 name = "embassy-stm32"
 version = "0.6.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "aligned",
  "bit_field",
@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "embassy-sync"
 version = "0.8.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -419,7 +419,7 @@ dependencies = [
 [[package]]
 name = "embassy-time"
 version = "0.5.1"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "cfg-if",
  "critical-section",
@@ -435,7 +435,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-driver"
 version = "0.2.2"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "document-features",
 ]
@@ -443,7 +443,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-queue-utils"
 version = "0.3.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "embassy-executor-timer-queue",
  "heapless",
@@ -452,7 +452,7 @@ dependencies = [
 [[package]]
 name = "embassy-usb-driver"
 version = "0.2.0"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "bitflags 2.13.1",
  "defmt 1.1.1",
@@ -462,7 +462,7 @@ dependencies = [
 [[package]]
 name = "embassy-usb-synopsys-otg"
 version = "0.3.2"
-source = "git+https://github.com/serdzz/embassy?branch=stm32l1_low_power#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
+source = "git+https://github.com/serdzz/embassy?rev=abb8bf6#abb8bf62ac3741dc0b8a00fd2dc565838d18b512"
 dependencies = [
  "critical-section",
  "defmt 1.1.1",
