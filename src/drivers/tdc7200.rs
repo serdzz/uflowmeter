@@ -15,6 +15,7 @@
 
 use embassy_stm32::gpio::Output;
 use embedded_hal::spi::{Operation, SpiDevice};
+use uflowmeter::tdc_lib::{stop_numbers, RESULT_BLOCK_LEN};
 
 const WRITE_BIT: u8 = 0x40;
 const AUTO_INC_BIT: u8 = 0x80;
@@ -33,6 +34,9 @@ pub struct Tdc7200<'d, D> {
     /// START_MEAS without clobbering the rest of the register — the
     /// C++ keeps the same shadow in `current_regs_.config1`.
     config1: u8,
+    /// Shadow of CONFIG2 (0x01) — its NUM_STOP field tells us how many
+    /// per-stop results the chip will produce.
+    config2: u8,
 }
 
 impl<'d, D: SpiDevice> Tdc7200<'d, D> {
@@ -41,6 +45,7 @@ impl<'d, D: SpiDevice> Tdc7200<'d, D> {
             spi,
             en,
             config1: 0,
+            config2: 0,
         }
     }
 
@@ -81,6 +86,7 @@ impl<'d, D: SpiDevice> Tdc7200<'d, D> {
     /// auto-incrementing write, exactly as the C++ `set_config()` does.
     pub fn load_config(&mut self, regs: &[u8; CONFIG_REG_COUNT]) -> Result<(), D::Error> {
         self.config1 = regs[0];
+        self.config2 = regs[1];
         let cmd = [WRITE_BIT | AUTO_INC_BIT];
         self.spi
             .transaction(&mut [Operation::Write(&cmd), Operation::Write(regs)])
@@ -99,11 +105,17 @@ impl<'d, D: SpiDevice> Tdc7200<'d, D> {
         self.write_register(0x00, self.config1 | 0x01)
     }
 
-    /// Read TIME1 (0x10) — 24-bit big-endian raw ToF value. Uses a bulk
-    /// read so the chip auto-increments across the three bytes.
-    pub fn read_time1(&mut self) -> Result<u32, D::Error> {
-        let mut rx = [0u8; 3];
+    /// Read the whole result block (TIME1 .. CALIBRATION2) starting at
+    /// 0x10, the same 39 bytes the C++ `trigger_measurement` pulls.
+    /// Decode it with `uflowmeter::tdc_lib::decode_tof`.
+    pub fn read_results(&mut self) -> Result<[u8; RESULT_BLOCK_LEN], D::Error> {
+        let mut rx = [0u8; RESULT_BLOCK_LEN];
         self.read_bulk(0x10, &mut rx)?;
-        Ok(((rx[0] as u32) << 16) | ((rx[1] as u32) << 8) | (rx[2] as u32))
+        Ok(rx)
+    }
+
+    /// Stops the chip is configured for, from the CONFIG2 shadow.
+    pub fn stop_numbers(&self) -> usize {
+        stop_numbers(self.config2)
     }
 }

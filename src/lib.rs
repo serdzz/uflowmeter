@@ -21,6 +21,7 @@ pub mod modbus;
 pub mod modbus_handler;
 pub mod options;
 pub mod shell;
+pub mod tdc_lib;
 pub mod ui;
 
 pub use apps::{Actions, App, AppRequest};
@@ -41,3 +42,6 @@ mod tests;
 
 #[cfg(test)]
 mod ui_history_tests;
+
+#[cfg(test)]
+mod tdc_lib_tests;

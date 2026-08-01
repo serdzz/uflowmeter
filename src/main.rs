@@ -25,6 +25,7 @@ use embassy_stm32::rtc::{
 use embassy_stm32::spi::{Config as SpiConfig, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::usart;
+use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::{bind_interrupts, interrupt, peripherals, Config};
 use embassy_sync::blocking_mutex::NoopMutex;
 use embassy_time::Duration;
@@ -36,6 +37,7 @@ use drivers::deferred_display::DeferredDisplay;
 use drivers::eeprom::Eeprom25Lc1024;
 use drivers::hd44780::Hd44780;
 use drivers::keypad::{keypad_task, ButtonFlags, KeyEvent, KEYS};
+use drivers::sensor_mux::{self as mux, SensorMux};
 use drivers::tdc1000::Tdc1000;
 use drivers::tdc7200::Tdc7200;
 use drivers::uart::{MODBUS_FRAMES, SHELL_ACTIONS, UART_TX};
@@ -48,6 +50,7 @@ use embassy_time::{Instant, Timer};
 use uflowmeter::calibration::{Calculator, CalibData, CalibTable, MeterConfig};
 use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
+use uflowmeter::tdc_lib::{average_stops, decode_tof, MAX_STOPS};
 use uflowmeter::ui::MenuController;
 use uflowmeter::{App, AppRequest, Options, UiEvent};
 
@@ -162,13 +165,17 @@ async fn main(spawner: Spawner) {
     // most likely reason both TDCs read back as all-zero registers.
     let _osc_en = Output::new(p.PA11, Level::Low, Speed::Low);
 
-    // Transducer switch controls. Legacy made these push-pull outputs
-    // and left them LOW (`pins.rs:178-180,237-239`); it never drove
-    // them beyond that. Mirroring the state rather than leaving three
-    // floating inputs next to the analog frontend.
-    let _sw_en = Output::new(p.PB3, Level::Low, Speed::Low);
-    let _sw_a0 = Output::new(p.PB4, Level::Low, Speed::Low);
-    let _sw_a1 = Output::new(p.PB5, Level::Low, Speed::Low);
+    // Transducer-pair multiplexer (PB3 enable, PB4/PB5 address).
+    // Starts parked in `Off`, matching the C++ `SensorMux::init()`.
+    let sensor_mux = SensorMux::new(
+        Output::new(p.PB3, Level::Low, Speed::Low),
+        Output::new(p.PB4, Level::Low, Speed::Low),
+        Output::new(p.PB5, Level::Low, Speed::Low),
+    );
+
+    // Independent watchdog. Created here so the peripheral is claimed
+    // up front, but only started inside measurement_task.
+    let watchdog = IndependentWatchdog::new(p.IWDG, WATCHDOG_TIMEOUT_US);
 
     // RTC: low-power Rtc::new takes only the peripheral and returns
     // (container, time_provider). The container holds the Rtc behind
@@ -299,13 +306,15 @@ async fn main(spawner: Spawner) {
     let tdc_int = ExtiInput::new(p.PB0, p.EXTI0, Pull::Up, Irqs);
 
     // Spawn the measurement loop — runs forever, triggers a TDC1000
-    // TX pulse + TDC7200 measurement once per second, logs the raw
-    // 24-bit ToF.
+    // TX pulse + TDC7200 measurement every 5 s across both transducer
+    // pairs, and pets the watchdog on each cycle.
     spawner.spawn(unwrap!(measurement_task(
         tdc1000,
         tdc7200,
         tdc_int,
-        opt_receiver
+        opt_receiver,
+        sensor_mux,
+        watchdog
     )));
 
     // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
@@ -737,6 +746,15 @@ const TDC1000_DEFAULT_REGS: [u8; drivers::tdc1000::CONFIG_REG_COUNT] =
 const TDC7200_DEFAULT_REGS: [u8; drivers::tdc7200::CONFIG_REG_COUNT] =
     [0x02, 0x44, 0x06, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00];
 
+/// Transducer pairs on this meter. The C++ calls this
+/// `Parameters::SENSOR_COUNT` and keeps one calibration table per pair.
+const SENSOR_COUNT: usize = 2;
+
+/// IWDG period. The C++ configures prescaler 128 with reload 4095,
+/// which on the L1's ~37 kHz LSI is about 14 s; the measurement loop
+/// pets every 5 s, leaving nearly 3x margin.
+const WATCHDOG_TIMEOUT_US: u32 = 14_000_000;
+
 /// Settle time between selecting a channel / clearing flags and
 /// triggering the measurement. The C++ waits 2 ms here (`umeter.cpp:55`,
 /// with a comment that the value is approximate).
@@ -760,8 +778,10 @@ fn regs_or_default<const N: usize>(from_eeprom: &[u8], default: &[u8; N]) -> [u8
 }
 
 /// Select a TDC1000 channel, clear both chips' latched flags, settle,
-/// then trigger one measurement and read TIME1. Mirrors the per-channel
-/// body of the C++ `UMeter::Impl::measure()`.
+/// trigger one measurement, then decode the result block into a
+/// calibrated time of flight averaged over the configured stops.
+/// Mirrors the per-channel body of the C++ `UMeter::Impl::measure()`
+/// followed by its `get_tof()`.
 ///
 /// The INT wait is level-triggered, not edge-triggered: the C++ polls
 /// `while (INT::IsSet())`, so a line that is already low when we get
@@ -772,7 +792,7 @@ async fn measure_channel(
     tdc7200: &mut Tdc7200Dev,
     tdc_int: &mut ExtiInput<'static, embassy_stm32::mode::Async>,
     ch2: bool,
-) -> Option<u32> {
+) -> Option<i32> {
     if tdc1000.set_channel(ch2).is_err() {
         defmt::error!("tdc1000: set_channel failed");
         return None;
@@ -785,10 +805,26 @@ async fn measure_channel(
         defmt::error!("tdc7200 start failed");
         return None;
     }
-    match embassy_time::with_timeout(TDC_INT_TIMEOUT, tdc_int.wait_for_low()).await {
-        Ok(()) => tdc7200.read_time1().ok(),
-        Err(_) => None,
+    if embassy_time::with_timeout(TDC_INT_TIMEOUT, tdc_int.wait_for_low())
+        .await
+        .is_err()
+    {
+        return None;
     }
+
+    let block = tdc7200.read_results().ok()?;
+    let n_stops = tdc7200.stop_numbers().min(MAX_STOPS);
+    let tof = decode_tof(&block, n_stops).or_else(|| {
+        // decode_tof only refuses on a bad stop count or an
+        // uncalibrated block (CALIBRATION1 == CALIBRATION2), which
+        // means the reference clock never reached the chip.
+        defmt::warn!(
+            "tdc7200: result block failed to decode (n_stops={=usize})",
+            n_stops
+        );
+        None
+    })?;
+    average_stops(&tof, n_stops)
 }
 
 /// Background measurement loop: for each cycle, takes a downstream
@@ -804,12 +840,23 @@ async fn measurement_task(
     mut tdc7200: Tdc7200Dev,
     mut tdc_int: ExtiInput<'static, embassy_stm32::mode::Async>,
     mut opt_rx: Receiver<'static, CriticalSectionRawMutex, Options, 2>,
+    mut mux: SensorMux<'static>,
+    mut wdg: IndependentWatchdog<'static, peripherals::IWDG>,
 ) {
     // Pull the initial snapshot (the main loop publishes before
     // spawning us, so this should always be Some).
     let mut options = opt_rx.try_get().unwrap_or_default();
-    let mut table = options_to_calib_table(&options);
+    // One table per sensor pair, as in the C++ `calibration_table_[]`.
+    let mut tables: [CalibTable; SENSOR_COUNT] = [
+        options_to_calib_table(&options, 0),
+        options_to_calib_table(&options, 1),
+    ];
     let mut calc = Calculator::new(options_to_meter_config(&options));
+
+    // Start the watchdog only once we are about to enter the periodic
+    // loop, so a hang in the bring-up above still reaches the debugger
+    // instead of rebooting under it.
+    wdg.unleash();
 
     // Temporary bring-up diagnostic: for the first few cycles, read
     // back the config registers we just wrote and log written-vs-read.
@@ -833,11 +880,22 @@ async fn measurement_task(
     loop {
         embassy_time::Timer::after_secs(5).await;
 
+        // Petting here rather than from a timer of its own: this task
+        // waking on schedule and getting through a full SPI cycle is
+        // the liveness signal worth guarding. A dedicated pet task
+        // would keep the dog quiet even with everything else wedged.
+        // The C++ pets from its measure process for the same reason
+        // (`Src/measure.cpp:78`).
+        wdg.pet();
+
         // Pick up any live calibration changes before kicking off the
         // next measurement pair.
         if let Some(new_opts) = opt_rx.try_changed() {
             options = new_opts;
-            table = options_to_calib_table(&options);
+            tables = [
+                options_to_calib_table(&options, 0),
+                options_to_calib_table(&options, 1),
+            ];
             calc = Calculator::new(options_to_meter_config(&options));
             defmt::info!("measurement: calibration refreshed from OPTIONS_WATCH");
         }
@@ -879,27 +937,64 @@ async fn measurement_task(
             );
         }
 
-        // Per-channel sequence copied from the C++ `UMeter::Impl::
-        // measure()`: select channel, clear both chips' latched flags,
-        // wait ~2 ms, then trigger.
-        let tof_down = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, false).await;
-        let tof_up = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, true).await;
+        // Two transducer pairs, each measured up- and downstream and
+        // scored against its own calibration table — the C++ does the
+        // same in `MeasureProcess::process()` and averages whichever
+        // pairs reported a usable signal.
+        let mut sum = 0.0f32;
+        let mut good = 0u8;
 
-        if let Ok(flags) = tdc1000.error_flags() {
-            if flags != 0 {
-                defmt::warn!("tdc1000: error flags {=u8:#x} (bad signal)", flags);
+        for (sensor, table) in tables.iter().enumerate() {
+            mux.set_channel(mux::Channel::for_sensor(sensor));
+            // Let the analog path settle after switching pairs before
+            // the frontend fires.
+            embassy_time::Timer::after(TDC_SETTLE).await;
+
+            let tof_down = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, false).await;
+            let tof_up = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, true).await;
+
+            if let Ok(flags) = tdc1000.error_flags() {
+                if flags != 0 {
+                    defmt::warn!(
+                        "tdc1000: sensor {=usize} error flags {=u8:#x} (bad signal)",
+                        sensor,
+                        flags
+                    );
+                }
+            }
+
+            match (tof_down, tof_up) {
+                (Some(d), Some(u)) => {
+                    // decode_tof yields picoseconds; the Calculator is
+                    // fed nanoseconds — the C++ divides by 1000.0f at
+                    // exactly this boundary (`Src/measure.cpp:188`).
+                    let volume = calc.get_volume(table, u as f32 / 1000.0, d as f32 / 1000.0);
+                    defmt::info!(
+                        "sensor {=usize}: tof down={=i32} up={=i32} ps, flow={=f32} m³/h",
+                        sensor,
+                        d,
+                        u,
+                        volume
+                    );
+                    if volume.is_finite() {
+                        sum += volume;
+                        good += 1;
+                    }
+                }
+                _ => defmt::warn!(
+                    "sensor {=usize}: tof down={} up={}",
+                    sensor,
+                    tof_down.is_some(),
+                    tof_up.is_some()
+                ),
             }
         }
 
-        match (tof_down, tof_up) {
-            (Some(d), Some(u)) => {
-                let volume = calc.get_volume(&table, u as f32, d as f32);
-                if volume.is_finite() {
-                    defmt::info!("tof down={=u32} up={=u32} flow={=f32} m³/h", d, u, volume);
-                    FLOW_RESULT.signal(volume);
-                }
-            }
-            _ => defmt::warn!("tof: down={} up={}", tof_down.is_some(), tof_up.is_some()),
+        // Park the mux between cycles so neither pair stays driven.
+        mux.set_channel(mux::Channel::Off);
+
+        if good > 0 {
+            FLOW_RESULT.signal(sum / good as f32);
         }
     }
 }
@@ -917,26 +1012,47 @@ fn options_to_meter_config(options: &Options) -> MeterConfig {
     }
 }
 
-/// Pull the calibration table for channel 1 out of Options. Float
-/// fields are stored as raw u32 bits via the bitfield's B32 slots —
-/// `f32::from_bits` recovers them. Matches the C++ layout.
-fn options_to_calib_table(options: &Options) -> CalibTable {
-    CalibTable {
-        dtof0: f32::from_bits(options.zero1()),
-        data: [
-            CalibData {
-                v: f32::from_bits(options.v11()),
-                k: f32::from_bits(options.k11()),
-            },
-            CalibData {
-                v: f32::from_bits(options.v12()),
-                k: f32::from_bits(options.k12()),
-            },
-            CalibData {
-                v: f32::from_bits(options.v13()),
-                k: f32::from_bits(options.k13()),
-            },
-        ],
+/// Pull a sensor's calibration table out of Options. Float fields are
+/// stored as raw u32 bits via the bitfield's B32 slots —
+/// `f32::from_bits` recovers them. Matches the C++ layout, which keeps
+/// one table per sensor pair (`calibration_table_[0]`, `[1]`).
+fn options_to_calib_table(options: &Options, sensor: usize) -> CalibTable {
+    if sensor == 0 {
+        CalibTable {
+            dtof0: f32::from_bits(options.zero1()),
+            data: [
+                CalibData {
+                    v: f32::from_bits(options.v11()),
+                    k: f32::from_bits(options.k11()),
+                },
+                CalibData {
+                    v: f32::from_bits(options.v12()),
+                    k: f32::from_bits(options.k12()),
+                },
+                CalibData {
+                    v: f32::from_bits(options.v13()),
+                    k: f32::from_bits(options.k13()),
+                },
+            ],
+        }
+    } else {
+        CalibTable {
+            dtof0: f32::from_bits(options.zero2()),
+            data: [
+                CalibData {
+                    v: f32::from_bits(options.v21()),
+                    k: f32::from_bits(options.k21()),
+                },
+                CalibData {
+                    v: f32::from_bits(options.v22()),
+                    k: f32::from_bits(options.k22()),
+                },
+                CalibData {
+                    v: f32::from_bits(options.v23()),
+                    k: f32::from_bits(options.k23()),
+                },
+            ],
+        }
     }
 }
 
