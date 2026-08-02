@@ -512,6 +512,23 @@ async fn main(spawner: Spawner) {
     }
 }
 
+/// Queue one 4-20 mA loop frame: `AA 55` then the DAC count, little
+/// endian. Consumption is passed to `to_analog` in litres per hour,
+/// matching how the C++ stores its immediate value.
+fn send_analog_frame(calc: &Calculator, flow_m3ph: f32) {
+    let count = calc.to_analog((flow_m3ph * 1000.0) as i32) as u16;
+    let mut frame = drivers::uart::ModbusFrame::new();
+    if frame.extend_from_slice(&[0xAA, 0x55]).is_err()
+        || frame.extend_from_slice(&count.to_le_bytes()).is_err()
+    {
+        defmt::warn!("analog: frame buffer too small");
+        return;
+    }
+    if UART_TX.try_send(frame).is_err() {
+        defmt::warn!("analog: UART_TX queue full, frame dropped");
+    }
+}
+
 /// Build and queue one M-Bus RSP_UD datagram. Broadcast-only: nothing
 /// is expected back, so a full TX queue just means the line is busy
 /// and we drop this round rather than stalling the main loop.
@@ -1089,6 +1106,16 @@ async fn measurement_task(
             average.push(sum / good as f32);
             if let Some(mean) = average.average() {
                 let mean = calc.near_zero_filter(mean);
+                // 4-20 mA loop: the meter does not drive the loop
+                // itself, it ships a DAC count to an external module
+                // over the same serial line. Frame is AA 55 followed
+                // by the little-endian count (C++ `Analog::process`,
+                // comm/analog.cpp:12), emitted once per measurement
+                // cycle — the C++ reschedules on RTC_WAKEUP_PERIOD,
+                // which is the same 5 s.
+                if CommType::from_u8(options.comm_type()) == CommType::Analog {
+                    send_analog_frame(&calc, mean);
+                }
                 defmt::info!(
                     "flow: {=f32} m³/h (window of {=usize})",
                     mean,
