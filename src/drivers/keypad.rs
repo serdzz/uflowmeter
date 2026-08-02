@@ -1,4 +1,4 @@
-//! 4-button keypad polled at 20 Hz from a dedicated embassy task.
+//! 4-button keypad sampled from a dedicated embassy task.
 //!
 //! Pin map per `src/hardware/pins.rs`:
 //!   PB6 — Set / Config
@@ -10,6 +10,9 @@
 //! `KeyEvent::Pressed(flags)` once per press with a 1 s initial repeat
 //! delay then a 150 ms repeat interval — matches the legacy
 //! `Keyboard::read` behavior in src/hardware/keyboard.rs.
+//!
+//! See `keypad_task` for why presses are detected by sampling rather
+//! than by awaiting the EXTI edges.
 
 use bitflags::bitflags;
 use embassy_stm32::exti::ExtiInput;
@@ -43,7 +46,19 @@ pub static KEYS: KeyChannel = Channel::new();
 
 const REPEAT_DELAY: embassy_time::Duration = embassy_time::Duration::from_millis(1000);
 const REPEAT_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_millis(150);
-const POLL_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_millis(50);
+
+/// Sampling interval while a key is down or was just released.
+const ACTIVE_POLL: embassy_time::Duration = embassy_time::Duration::from_millis(20);
+
+/// Sampling interval while idle. Deliberately longer than
+/// `Config::min_stop_pause` (100 ms) so the executor can still drop into
+/// STOP between samples — a shorter tick here would pin the meter awake.
+const IDLE_POLL: embassy_time::Duration = embassy_time::Duration::from_millis(150);
+
+/// How long every key must stay released before going back to idle
+/// sampling. Covers the gap between two presses in a burst, so a user
+/// working through a menu is served by the fast poll throughout.
+const QUIET: embassy_time::Duration = embassy_time::Duration::from_millis(400);
 
 struct ButtonState {
     pressed: bool,
@@ -59,19 +74,31 @@ impl ButtonState {
     }
 }
 
-/// Embassy task: two-mode keypad driver.
+/// Embassy task: samples the keypad, using EXTI only to wake up.
 ///
-///   * IDLE — no button currently held. Pure `select4` over the four
-///     ExtiInput falling-edge futures. No timer is armed, so this
-///     branch doesn't keep the embassy time-driver out of STOP and
-///     the MCU sleeps until a physical press wakes EXTI.
-///   * PRESSED — at least one button is down. Falls back to the
-///     legacy 50 ms POLL_INTERVAL so we can detect release + drive
-///     the REPEAT_DELAY / REPEAT_INTERVAL repeat fire. Exits back to
-///     IDLE once every state slot reports `pressed == false`.
+/// The edges themselves are **not** treated as presses. An earlier
+/// version did exactly that — `select4` over the four
+/// `wait_for_falling_edge()` futures, emitting a press per edge — and
+/// on hardware it lost roughly nineteen presses in twenty. Measured
+/// with a minimal example driving nothing but these four pins: the
+/// edge-driven build caught about one press in twenty, while sampling
+/// the same pins every 20 ms caught 286 of 286, with the levels showing
+/// clean transitions in both directions. So the pins and the pull-ups
+/// are fine; awaiting the edges is what dropped them. The C++ reaches
+/// the same arrangement from the other direction — its `Keyboard::read`
+/// has always polled.
 ///
-/// Power impact: removes the ~20 Hz wake the constant poll used to
-/// cost while the device sat untouched.
+/// Two sampling rates keep that from costing power:
+///
+///   * idle — wait for either an EXTI edge or `IDLE_POLL`, whichever
+///     comes first. The edge is what wakes the MCU out of STOP; the
+///     timer is the backstop for the edges that go missing. At 150 ms
+///     it stays above `min_stop_pause`, so STOP still happens between
+///     samples.
+///   * active — a key is down, or one was released less than `QUIET`
+///     ago: sample every 20 ms so presses, releases and the repeat
+///     timing are all caught. Bursts of key presses stay in this mode
+///     from start to finish.
 #[embassy_executor::task]
 pub async fn keypad_task(
     mut btn_config: ExtiInput<'static, Async>,
@@ -79,7 +106,7 @@ pub async fn keypad_task(
     mut btn_down: ExtiInput<'static, Async>,
     mut btn_up: ExtiInput<'static, Async>,
 ) {
-    use embassy_futures::select::{select4, Either4};
+    use embassy_futures::select::{select, select4};
 
     const FLAGS: [ButtonFlags; 4] = [
         ButtonFlags::CONFIG,
@@ -93,65 +120,56 @@ pub async fn keypad_task(
         ButtonState::new(),
         ButtonState::new(),
     ];
+    let mut last_activity = Instant::from_ticks(0);
 
     loop {
-        // IDLE — wait for any falling edge via EXTI. No timer armed.
-        let idx = match select4(
-            btn_config.wait_for_falling_edge(),
-            btn_enter.wait_for_falling_edge(),
-            btn_down.wait_for_falling_edge(),
-            btn_up.wait_for_falling_edge(),
-        )
-        .await
-        {
-            Either4::First(()) => 0,
-            Either4::Second(()) => 1,
-            Either4::Third(()) => 2,
-            Either4::Fourth(()) => 3,
-        };
-        let now = Instant::now();
-        state[idx].pressed = true;
-        state[idx].next_repeat = now + REPEAT_DELAY;
-        if KEYS.try_send(KeyEvent::Pressed(FLAGS[idx])).is_err() {
-            defmt::warn!("keypad: KEYS full, edge idx={=usize} dropped", idx);
+        let idle = state.iter().all(|s| !s.pressed)
+            && Instant::now().saturating_duration_since(last_activity) > QUIET;
+
+        if idle {
+            // Race the edges against the backstop timer. Nothing is read
+            // from the winner — both simply mean "sample now".
+            let _ = select(
+                select4(
+                    btn_config.wait_for_falling_edge(),
+                    btn_enter.wait_for_falling_edge(),
+                    btn_down.wait_for_falling_edge(),
+                    btn_up.wait_for_falling_edge(),
+                ),
+                Timer::after(IDLE_POLL),
+            )
+            .await;
+        } else {
+            Timer::after(ACTIVE_POLL).await;
         }
 
-        // PRESSED — keep polling at 20 Hz until all keys go up. This
-        // is the only window where we add a sub-100 ms alarm; the
-        // user is interacting so STOP duty here is expected to drop.
-        loop {
-            Timer::after(POLL_INTERVAL).await;
-            let now = Instant::now();
-            let lows = [
-                btn_config.is_low(),
-                btn_enter.is_low(),
-                btn_down.is_low(),
-                btn_up.is_low(),
-            ];
-            let mut any_pressed = false;
-            for i in 0..4 {
-                let is_low = lows[i];
-                let st = &mut state[i];
-                if is_low && !st.pressed {
-                    st.pressed = true;
-                    st.next_repeat = now + REPEAT_DELAY;
-                    if KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).is_err() {
-                        defmt::warn!("keypad: KEYS full, poll idx={=usize} dropped", i);
-                    }
-                } else if !is_low && st.pressed {
-                    st.pressed = false;
-                } else if st.pressed && now >= st.next_repeat {
-                    st.next_repeat = now + REPEAT_INTERVAL;
-                    if KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).is_err() {
-                        defmt::warn!("keypad: KEYS full, repeat idx={=usize} dropped", i);
-                    }
+        let now = Instant::now();
+        let lows = [
+            btn_config.is_low(),
+            btn_enter.is_low(),
+            btn_down.is_low(),
+            btn_up.is_low(),
+        ];
+
+        for i in 0..4 {
+            let is_low = lows[i];
+            let st = &mut state[i];
+            if is_low && !st.pressed {
+                st.pressed = true;
+                st.next_repeat = now + REPEAT_DELAY;
+                last_activity = now;
+                if KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).is_err() {
+                    defmt::warn!("keypad: KEYS full, press idx={=usize} dropped", i);
                 }
-                if st.pressed {
-                    any_pressed = true;
+            } else if !is_low && st.pressed {
+                st.pressed = false;
+                last_activity = now;
+            } else if st.pressed && now >= st.next_repeat {
+                st.next_repeat = now + REPEAT_INTERVAL;
+                last_activity = now;
+                if KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).is_err() {
+                    defmt::warn!("keypad: KEYS full, repeat idx={=usize} dropped", i);
                 }
-            }
-            if !any_pressed {
-                break;
             }
         }
     }
