@@ -15,7 +15,20 @@ This repo has a **dual-target setup**: the embedded binary builds for `thumbv7m-
 | Clippy (host, `-D warnings`) | `make clippy` |
 | Run UI examples on host | `make ui-examples` |
 | Format check | `cargo fmt -- --check` |
-| Flash via probe-rs | `cargo embed --release` (chip configured in `.embed.toml`) |
+| Flash via probe-rs | `probe-rs run --chip STM32L151RC --speed 500 target/thumbv7m-none-eabi/release/uflowmeter` |
+
+**Flash at `--speed 500`.** At the default SWD rate this board fails to
+connect, reproducibly and in several different ways depending on what the
+firmware is doing at the time: `SwdDpWait`, `SwdDpError`,
+`JtagGetIdcodeError`, or a connect that succeeds and then dies partway
+through the write with "An error with the flashing procedure has
+occurred". At 500 kHz it works first time. `cargo run --release` uses the
+runner in `.cargo/config.toml`, which does **not** pass the speed — so
+for anything beyond a quick attempt, invoke `probe-rs run` directly.
+
+If it still will not connect, power-cycle the board. `--connect-under-reset`
+does not help here: NRST is not wired through to the probe, which is why
+that path returns `JtagGetIdcodeError` rather than working.
 
 **Do not run `cargo test` directly** — without removing the embedded target it will try to link `std` against `thumbv7m-none-eabi` and fail. Use `make test` or `bash run_host.sh test ...`; the script removes the `target = ...` line and restores it via a `trap` even on failure.
 
@@ -117,6 +130,47 @@ state at commit `1c07268`:
   + `digital::v2::OutputPin`).
 - USART1 for Modbus RTU + shell.
 - Wire the existing `ui.rs` event loop on top of the new `KEYS` channel.
+
+### UI findings verified on hardware (2026-08-02)
+
+Two independent defects both presented as "the buttons do not work".
+Both are fixed; the notes are here because the obvious-looking change
+in each case is the one that reintroduces the bug.
+
+1. **Do not treat EXTI edges as key presses** (`src/drivers/keypad.rs`).
+   An earlier commit moved this driver from polling to pure event-driven
+   for the idle power saving, awaiting `wait_for_falling_edge()` on the
+   four pins and emitting a press per edge. On hardware that loses
+   roughly nineteen presses in twenty. Measured with
+   `examples/buttons.rs`, which drives nothing but these four pins:
+   awaiting edges caught ~1 press in 20, sampling the same pins every
+   20 ms caught 286 of 286, with the level trace showing clean
+   transitions in both directions throughout. The pins and pull-ups are
+   fine; awaiting the edges is what drops them. The driver now uses
+   edges only to wake from STOP and detects presses by sampling — the
+   same arrangement the C++ `Keyboard::read` has always used. The idle
+   sample interval (150 ms) is deliberately above `min_stop_pause`
+   (100 ms) so STOP still happens between samples.
+
+2. **Park the LCD lines before cutting panel power** (`Hd44780::park`).
+   Dropping the supply on PC0 while RS/RW/E/D4-D7 are still driven feeds
+   current through the panel's protection diodes and leaves the
+   controller in a state it does not recover from on the next power-up.
+   The display then stays frozen no matter what is written to it — which
+   after the first 15 s idle timeout looks exactly like dead buttons.
+   The C++ does the equivalent in `Lcd::shutdown()` by reconfiguring the
+   pin list to inputs with pull-downs (`hardware/lcd.cpp:96-99`).
+
+Related: the LCD's microsecond delays busy-wait via `cortex_m::asm::delay`
+rather than `Timer::after`. Under the RTC-backed low-power time driver an
+await costs far more than the delay it asks for, and the driver needs ~170
+of them per frame — a full 2x16 render measured 96-100 ms with awaits
+against 17-31 ms without. See the comment on `delay_us`.
+
+`examples/buttons.rs` is kept for exactly this kind of question: it
+isolates keypad + LCD from the executor, the idle timeout, the
+measurement task and the menu, so "is it the driver or the firmware
+around it" can be answered in one flash.
 
 ### Failed fix attempt (2026-05-19, do not retry as-is)
 
