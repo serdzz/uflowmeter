@@ -80,6 +80,25 @@ impl<'d> Hd44780<'d> {
         }
     }
 
+    /// Drive every LCD line low before its supply is cut.
+    ///
+    /// The C++ does this in `Lcd::shutdown()` by reconfiguring the whole
+    /// pin list to inputs with pull-downs
+    /// (`UFlowMeter_c++/UFlowMeter/hardware/lcd.cpp:96-99`). Leaving the
+    /// lines driven high into an unpowered panel feeds current through
+    /// its protection diodes, which parks the controller in an
+    /// undefined state it does not come out of on the next power-up —
+    /// the display then stays frozen no matter what is written to it.
+    pub fn park(&mut self) {
+        self.rs.set_low();
+        self.rw.set_low();
+        self.e.set_low();
+        self.d4.set_low();
+        self.d5.set_low();
+        self.d6.set_low();
+        self.d7.set_low();
+    }
+
     /// HD44780 4-bit init sequence per datasheet.
     pub async fn init(&mut self) {
         // Wait for LCD internal power-up (>40 ms).

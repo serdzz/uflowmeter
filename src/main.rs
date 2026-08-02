@@ -492,6 +492,9 @@ async fn main(spawner: Spawner) {
             Either6::Sixth(()) => {
                 defmt::info!("idle: backlight + LCD power off");
                 backlight.set_high();
+                // Park the data/control lines before cutting the supply —
+                // see Hd44780::park.
+                lcd.park();
                 lcd_power.set_high();
                 lcd_initialized = false;
                 idle_deadline = None;
