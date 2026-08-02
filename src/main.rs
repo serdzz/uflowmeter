@@ -52,7 +52,7 @@ use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
 use uflowmeter::tdc_lib::{average_stops, decode_tof, MAX_STOPS};
 use uflowmeter::ui::MenuController;
-use uflowmeter::{App, AppRequest, Options, UiEvent};
+use uflowmeter::{App, AppRequest, CommType, Options, UiEvent};
 
 // Three retention rings backed by EEPROM, layout chained at compile
 // time via SIZE_ON_FLASH so each slot starts right after the previous.
@@ -363,6 +363,8 @@ async fn main(spawner: Spawner) {
     // we cut LCD power; the next key press re-runs lcd.init() before
     // the first render.
     let mut lcd_initialized = true;
+    // Counts 60 s history ticks toward the next M-Bus broadcast.
+    let mut mbus_ticks: u8 = 0;
 
     loop {
         // Build the idle-timeout future. When no session is active we
@@ -459,6 +461,17 @@ async fn main(spawner: Spawner) {
                     &mut month_history,
                     &rtc_container,
                 );
+                // M-Bus is a broadcast-only slave: no request/response,
+                // just a datagram every MBUS_PERIOD. Counted off the
+                // 60 s history tick rather than a timer of its own so
+                // the idle path keeps exactly one alarm armed.
+                mbus_ticks += 1;
+                if mbus_ticks >= MBUS_PERIOD_TICKS {
+                    mbus_ticks = 0;
+                    if CommType::from_u8(options.comm_type()) == CommType::MBus {
+                        send_mbus_datagram(&options, &app);
+                    }
+                }
             }
             Either6::Fourth(volume) => {
                 app.flow = volume;
@@ -495,6 +508,27 @@ async fn main(spawner: Spawner) {
             ui.render(&app, &mut frame);
             frame.flush(&mut lcd).await;
         }
+    }
+}
+
+/// Build and queue one M-Bus RSP_UD datagram. Broadcast-only: nothing
+/// is expected back, so a full TX queue just means the line is busy
+/// and we drop this round rather than stalling the main loop.
+fn send_mbus_datagram(options: &Options, app: &App) {
+    let frame = uflowmeter::mbus::build_datagram(
+        options.slave_address(),
+        options.serial_number(),
+        app.month_flow,
+        app.flow,
+        app.uptime_seconds / 60,
+    );
+    let mut out = drivers::uart::ModbusFrame::new();
+    if out.extend_from_slice(&frame).is_err() {
+        defmt::warn!("mbus: datagram larger than the TX frame buffer, dropped");
+        return;
+    }
+    if UART_TX.try_send(out).is_err() {
+        defmt::warn!("mbus: UART_TX queue full, datagram dropped");
     }
 }
 
@@ -745,6 +779,12 @@ const TDC1000_DEFAULT_REGS: [u8; drivers::tdc1000::CONFIG_REG_COUNT] =
     [0x48, 0x45, 0x01, 0x01, 0x07, 0xA0, 0x1E, 0x00, 0x6A, 0x03];
 const TDC7200_DEFAULT_REGS: [u8; drivers::tdc7200::CONFIG_REG_COUNT] =
     [0x02, 0x44, 0x06, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00];
+
+/// M-Bus broadcast period, counted in 60 s history ticks. The C++
+/// reschedules its communication process with
+/// `Parameters::MBUS_PROCESSING_TIMEOUT = 5*60` seconds after every
+/// datagram, so 5 ticks matches it exactly.
+const MBUS_PERIOD_TICKS: u8 = 5;
 
 /// Transducer pairs on this meter. The C++ calls this
 /// `Parameters::SENSOR_COUNT` and keeps one calibration table per pair.

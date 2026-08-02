@@ -13,6 +13,9 @@ pub mod calibration;
 pub mod gui;
 pub mod history;
 pub mod history_lib;
+// Pure frame builder — no HAL, so it comes back into the tree ahead of
+// the transport that will carry it.
+pub mod mbus;
 // measurement/ultrasonic_flow.rs still uses embedded-hal 0.2 API
 // (blocking::spi, digital::v2) — superseded by the embassy port's
 // `drivers/tdc{1000,7200}.rs` + `calibration.rs` Calculator pair.
