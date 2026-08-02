@@ -371,21 +371,29 @@ async fn main(spawner: Spawner) {
         // Build the idle-timeout future. When no session is active we
         // park on `pending()` (never resolves) so the select arm is
         // inert and no sub-IDLE_TIMEOUT alarm sits in the time driver.
-        // While a field is being edited the screen has to be redrawn on
-        // a timer: the blink animation advances one frame per render, so
-        // without this the active field simply freezes in whichever half
-        // of the cycle the last key press left it. BLINK_FRAME matches
-        // the 10 Hz the blink period in ui.rs is written against, giving
-        // ~300 ms on / ~300 ms off.
-        let blink_deadline = if ui.is_editing() && idle_deadline.is_some() {
-            Some(Instant::now() + BLINK_FRAME)
-        } else {
-            None
-        };
+        // A visible screen has to be redrawn on a timer, not just on key
+        // presses. Two reasons: the clock on the DateTime screen only
+        // advances if something re-reads the RTC and redraws, and the
+        // blink animation advances one frame per render, so without a
+        // tick the edited field freezes in whichever half of its cycle
+        // the last key press left it.
+        //
+        // Editing wants the faster rate — the blink period in ui.rs is
+        // six frames, so BLINK_FRAME gives ~300 ms on / ~300 ms off.
+        // Otherwise LIVE_REFRESH is enough to keep seconds ticking
+        // without spending a fifth of the session redrawing.
+        let refresh_deadline = idle_deadline.map(|_| {
+            Instant::now()
+                + if ui.is_editing() {
+                    BLINK_FRAME
+                } else {
+                    LIVE_REFRESH
+                }
+        });
         // One timer arm serves both deadlines — select6 has no room for a
         // seventh — so wake at whichever comes first and work out which
         // it was afterwards.
-        let wake_at = match (idle_deadline, blink_deadline) {
+        let wake_at = match (idle_deadline, refresh_deadline) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, None) => a,
             (None, b) => b,
@@ -509,23 +517,23 @@ async fn main(spawner: Spawner) {
                 opt_sender.send(options);
             }
             Either6::Sixth(()) => {
-                // A blink frame, not the idle timeout: fall through so the
-                // render at the bottom of the loop advances the animation.
+                // A refresh tick rather than the idle timeout: fall through
+                // to the bottom of the loop, which re-reads the RTC and
+                // then redraws. Handling it here instead would skip that
+                // sync and leave the clock frozen while the frame updated.
                 if idle_deadline.is_some_and(|d| Instant::now() < d) {
-                    ui.update(&app);
-                    ui.render(&app, &mut frame);
-                    frame.flush(&mut lcd).await;
+                    // nothing to do — the shared tail does the work
+                } else {
+                    defmt::info!("idle: backlight + LCD power off");
+                    backlight.set_high();
+                    // Park the data/control lines before cutting the supply
+                    // — see Hd44780::park.
+                    lcd.park();
+                    lcd_power.set_high();
+                    lcd_initialized = false;
+                    idle_deadline = None;
                     continue;
                 }
-                defmt::info!("idle: backlight + LCD power off");
-                backlight.set_high();
-                // Park the data/control lines before cutting the supply —
-                // see Hd44780::park.
-                lcd.park();
-                lcd_power.set_high();
-                lcd_initialized = false;
-                idle_deadline = None;
-                continue;
             }
         }
 
@@ -856,6 +864,12 @@ const TDC7200_DEFAULT_REGS: [u8; drivers::tdc7200::CONFIG_REG_COUNT] =
 /// animation in `ui.rs` advances. Its period is six frames, so this
 /// gives a ~600 ms cycle.
 const BLINK_FRAME: embassy_time::Duration = embassy_time::Duration::from_millis(100);
+
+/// Redraw interval for a visible screen that is not being edited. Keeps
+/// the DateTime seconds and the live flow readings moving; 500 ms is
+/// below the one-second resolution of everything on screen, so nothing
+/// visibly lags.
+const LIVE_REFRESH: embassy_time::Duration = embassy_time::Duration::from_millis(500);
 
 /// M-Bus broadcast period, counted in 60 s history ticks. The C++
 /// reschedules its communication process with
