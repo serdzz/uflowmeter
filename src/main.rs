@@ -859,9 +859,17 @@ async fn measure_channel(
         // decode_tof only refuses on a bad stop count or an
         // uncalibrated block (CALIBRATION1 == CALIBRATION2), which
         // means the reference clock never reached the chip.
+        // Dump the fields the decode depends on. All-zero CALIBRATION
+        // means the chip never completed a calibration cycle (expected
+        // when no echo comes back); an all-zero *block* instead points
+        // at the auto-increment bulk read itself.
         defmt::warn!(
-            "tdc7200: result block failed to decode (n_stops={=usize})",
-            n_stops
+            "tdc7200: result block failed to decode (n_stops={=usize}) time1={=[u8]:#x} clk1={=[u8]:#x} cal1={=[u8]:#x} cal2={=[u8]:#x}",
+            n_stops,
+            &block[0..3],
+            &block[3..6],
+            &block[33..36],
+            &block[36..39]
         );
         None
     })?;
