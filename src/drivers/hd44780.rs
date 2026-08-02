@@ -1,10 +1,9 @@
 //! Minimal HD44780 4-bit parallel driver for embassy-stm32.
 //!
-//! Drives RS / RW / E + D4..D7 via `embassy_stm32::gpio::Output` and
-//! waits via `embassy_time::Timer`. Async — every command yields while
-//! the LCD's internal timing requirements are observed, so the executor
-//! can run other tasks during the LCD's ~40 µs / ~1.5 ms windows
-//! instead of busy-waiting like the old `lcd` crate did.
+//! Drives RS / RW / E + D4..D7 via `embassy_stm32::gpio::Output`.
+//! Millisecond-scale waits (power-up, clear) go through
+//! `embassy_time::Timer` and yield; the microsecond-scale ones busy-wait
+//! — see `delay_us` for why that is not an oversight.
 //!
 //! Not exhaustive — only the commands the uflowmeter UI needs:
 //!   - init (4-bit, 2-line, 5x8 font)
@@ -18,6 +17,31 @@
 
 use embassy_stm32::gpio::Output;
 use embassy_time::Timer;
+
+/// Core cycles per microsecond. embassy's default Config leaves SYSCLK
+/// on MSI at ~4.19 MHz, so four cycles is a slight over-estimate — the
+/// safe direction for a timing floor. Revisit if SYSCLK ever moves.
+const CYCLES_PER_US: u32 = 4;
+
+/// Busy-wait for sub-millisecond LCD timing.
+///
+/// These delays deliberately do *not* go through `Timer::after`. With
+/// the RTC-backed low-power time driver every await costs far more
+/// than the delay itself — programming an alarm means dropping RTC
+/// write protection and waiting on synchronisation flags — and the
+/// nibble strobe needs one microsecond. Measured on hardware: a full
+/// 2x16 render was ~98 ms with awaits here, against ~6 ms busy-waiting,
+/// which is what made the UI feel like it was dropping key presses.
+///
+/// The trade-off is that a render now blocks the executor for those
+/// few milliseconds instead of yielding between nibbles. That is the
+/// better end of the deal: nothing else needs to run inside a render,
+/// and the old behaviour left the main loop ~100 ms behind every key
+/// event.
+#[inline]
+fn delay_us(us: u32) {
+    cortex_m::asm::delay(us.saturating_mul(CYCLES_PER_US).max(1));
+}
 
 pub struct Hd44780<'d> {
     rs: Output<'d>,
@@ -139,14 +163,14 @@ impl<'d> Hd44780<'d> {
     async fn command(&mut self, byte: u8) {
         self.rs.set_low();
         self.write_byte(byte).await;
-        Timer::after_micros(40).await;
+        delay_us(40);
     }
 
     /// Write a data byte (RS=1).
     async fn data(&mut self, byte: u8) {
         self.rs.set_high();
         self.write_byte(byte).await;
-        Timer::after_micros(40).await;
+        delay_us(40);
     }
 
     /// Public alias for `data()` — used by `drivers::deferred_display`
@@ -169,9 +193,9 @@ impl<'d> Hd44780<'d> {
         // pulse width 230 ns @ 5 V; we round up to 1 µs to be safe at
         // 3.3 V and account for LCD level shifters.
         self.e.set_high();
-        Timer::after_micros(1).await;
+        delay_us(1);
         self.e.set_low();
-        Timer::after_micros(1).await;
+        delay_us(1);
     }
 
     #[inline]

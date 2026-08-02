@@ -112,7 +112,9 @@ pub async fn keypad_task(
         let now = Instant::now();
         state[idx].pressed = true;
         state[idx].next_repeat = now + REPEAT_DELAY;
-        KEYS.try_send(KeyEvent::Pressed(FLAGS[idx])).ok();
+        if KEYS.try_send(KeyEvent::Pressed(FLAGS[idx])).is_err() {
+            defmt::warn!("keypad: KEYS full, edge idx={=usize} dropped", idx);
+        }
 
         // PRESSED — keep polling at 20 Hz until all keys go up. This
         // is the only window where we add a sub-100 ms alarm; the
@@ -133,12 +135,16 @@ pub async fn keypad_task(
                 if is_low && !st.pressed {
                     st.pressed = true;
                     st.next_repeat = now + REPEAT_DELAY;
-                    KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).ok();
+                    if KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).is_err() {
+                        defmt::warn!("keypad: KEYS full, poll idx={=usize} dropped", i);
+                    }
                 } else if !is_low && st.pressed {
                     st.pressed = false;
                 } else if st.pressed && now >= st.next_repeat {
                     st.next_repeat = now + REPEAT_INTERVAL;
-                    KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).ok();
+                    if KEYS.try_send(KeyEvent::Pressed(FLAGS[i])).is_err() {
+                        defmt::warn!("keypad: KEYS full, repeat idx={=usize} dropped", i);
+                    }
                 }
                 if st.pressed {
                     any_pressed = true;
