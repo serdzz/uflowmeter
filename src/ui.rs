@@ -375,7 +375,17 @@ impl MenuController {
             ScreenId::MonthHistory => "Расход за",
             ScreenId::DateTime => "Дата/Время",
             ScreenId::Version => "Версия ПО",
-            ScreenId::Bootloader => "Обновить ПО",
+            // Labelled for what it actually does. The C++ calls this
+            // "Обновить ПО" and, like us, only issues NVIC_SystemReset
+            // (Src/menu.cpp:181) — but its production linker script
+            // reserves the first 4K of flash for a bootloader
+            // (STM32L151RCTx_PROD.ld:45), so a reset there lands in an
+            // updater. This build links from 0x08000000 with no
+            // bootloader present, so the reset re-enters this same
+            // application and no update can happen. Restore the
+            // original wording once a bootloader exists and memory.x
+            // moves to 0x08001000.
+            ScreenId::Bootloader => "Перезагрузка",
             ScreenId::CommType => "Тип связи",
             ScreenId::SlaveAddress => "Адрес",
             ScreenId::Muster => "Поверка",
@@ -554,7 +564,7 @@ impl MenuController {
             // ── Version: secret pattern detection ──
             ScreenId::Version => self.version_key_event(event),
 
-            // ── Bootloader: Enter → system reset ──
+            // ── Bootloader: Enter → system reset (see the label) ──
             ScreenId::Bootloader => {
                 if event == UiEvent::Enter {
                     Some(AppRequest::SystemReset)
