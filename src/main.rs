@@ -787,6 +787,10 @@ const TDC7200_DEFAULT_REGS: [u8; drivers::tdc7200::CONFIG_REG_COUNT] =
 /// datagram, so 5 ticks matches it exactly.
 const MBUS_PERIOD_TICKS: u8 = 5;
 
+/// How often to repeat an unchanged measurement failure. At the 5 s
+/// cycle this is once a minute.
+const QUIET_CYCLES: u32 = 12;
+
 /// Transducer pairs on this meter. The C++ calls this
 /// `Parameters::SENSOR_COUNT` and keeps one calibration table per pair.
 const SENSOR_COUNT: usize = 2;
@@ -833,6 +837,7 @@ async fn measure_channel(
     tdc7200: &mut Tdc7200Dev,
     tdc_int: &mut ExtiInput<'static, embassy_stm32::mode::Async>,
     ch2: bool,
+    verbose: bool,
 ) -> Option<i32> {
     if tdc1000.set_channel(ch2).is_err() {
         defmt::error!("tdc1000: set_channel failed");
@@ -857,12 +862,14 @@ async fn measure_channel(
     let n_stops = tdc7200.stop_numbers().min(MAX_STOPS);
     let tof = decode_tof(&block, n_stops).or_else(|| {
         // decode_tof only refuses on a bad stop count or an
-        // uncalibrated block (CALIBRATION1 == CALIBRATION2), which
-        // means the reference clock never reached the chip.
+        // uncalibrated block (CALIBRATION1 == CALIBRATION2).
         // Dump the fields the decode depends on. All-zero CALIBRATION
         // means the chip never completed a calibration cycle (expected
         // when no echo comes back); an all-zero *block* instead points
         // at the auto-increment bulk read itself.
+        if !verbose {
+            return None;
+        }
         defmt::warn!(
             "tdc7200: result block failed to decode (n_stops={=usize}) time1={=[u8]:#x} clk1={=[u8]:#x} cal1={=[u8]:#x} cal2={=[u8]:#x}",
             n_stops,
@@ -905,6 +912,9 @@ async fn measurement_task(
     // Window mean of recent cycles — what the meter reports as the
     // immediate consumption, mirroring the C++ `average_m3ph_`.
     let mut average = AverageBuffer::new();
+    // Consecutive cycles with no usable reading, used to throttle the
+    // repeated failure logging.
+    let mut failed_streak: u32 = 0;
 
     // Start the watchdog only once we are about to enter the periodic
     // loop, so a hang in the bring-up above still reaches the debugger
@@ -997,17 +1007,26 @@ async fn measurement_task(
         let mut sum = 0.0f32;
         let mut good = 0u8;
 
+        // With no transducers wired the frontend fails identically on
+        // every cycle — eight warnings per 5 s, enough to bury anything
+        // real. Report the first failure in full, then once per
+        // QUIET_CYCLES, with a count so the gap is not mistaken for
+        // recovery.
+        let verbose = failed_streak == 0 || failed_streak.is_multiple_of(QUIET_CYCLES);
+
         for (sensor, table) in tables.iter().enumerate() {
             mux.set_channel(mux::Channel::for_sensor(sensor));
             // Let the analog path settle after switching pairs before
             // the frontend fires.
             embassy_time::Timer::after(TDC_SETTLE).await;
 
-            let tof_down = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, false).await;
-            let tof_up = measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, true).await;
+            let tof_down =
+                measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, false, verbose).await;
+            let tof_up =
+                measure_channel(&mut tdc1000, &mut tdc7200, &mut tdc_int, true, verbose).await;
 
             if let Ok(flags) = tdc1000.error_flags() {
-                if flags != 0 {
+                if flags != 0 && verbose {
                     defmt::warn!(
                         "tdc1000: sensor {=usize} error flags {=u8:#x} (bad signal)",
                         sensor,
@@ -1034,17 +1053,34 @@ async fn measurement_task(
                         good += 1;
                     }
                 }
-                _ => defmt::warn!(
+                _ if verbose => defmt::warn!(
                     "sensor {=usize}: tof down={} up={}",
                     sensor,
                     tof_down.is_some(),
                     tof_up.is_some()
                 ),
+                _ => {}
             }
         }
 
         // Park the mux between cycles so neither pair stays driven.
         mux.set_channel(mux::Channel::Off);
+
+        if good == 0 {
+            if verbose && failed_streak > 0 {
+                defmt::warn!(
+                    "measurement: no usable signal for {=u32} cycles",
+                    failed_streak
+                );
+            }
+            failed_streak = failed_streak.saturating_add(1);
+        } else if failed_streak > 0 {
+            defmt::info!(
+                "measurement: signal recovered after {=u32} cycles",
+                failed_streak
+            );
+            failed_streak = 0;
+        }
 
         if good > 0 {
             // Both pairs collapse into one sample before entering the
