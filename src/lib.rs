@@ -27,6 +27,7 @@ pub mod options;
 pub mod shell;
 pub mod tdc_lib;
 pub mod ui;
+pub mod upload_lib;
 pub mod xmodem_lib;
 
 pub use apps::{Actions, App, AppRequest};
@@ -56,3 +57,6 @@ mod average_lib_tests;
 
 #[cfg(test)]
 mod xmodem_lib_tests;
+
+#[cfg(test)]
+mod upload_lib_tests;

@@ -700,6 +700,30 @@ fn handle_shell_action(
                 None => defmt::warn!("shell: bad unix ts {=u32}", ts),
             }
         }
+        ShellAction::Upload(kind) => {
+            // The UART session performs the transfer itself; nothing
+            // reaches here until it has the bytes.
+            defmt::info!(
+                "shell: awaiting {=usize} B upload",
+                uflowmeter::upload_lib::UploadKind::block_len(&kind)
+            );
+        }
+        ShellAction::ApplyUpload(kind, data) => {
+            use uflowmeter::upload_lib::{apply_calibration_block, apply_tdc_block, UploadKind};
+            match kind {
+                UploadKind::Calibration => {
+                    apply_calibration_block(options, &data);
+                    defmt::info!("shell: calibration table updated");
+                }
+                UploadKind::TdcRegs => {
+                    let mut block = [0u8; uflowmeter::upload_lib::TDC_BLOCK];
+                    block.copy_from_slice(&data[..uflowmeter::upload_lib::TDC_BLOCK]);
+                    apply_tdc_block(options, &block);
+                    defmt::info!("shell: TDC register block updated");
+                }
+            }
+            persist_options(options, eeprom, buf);
+        }
         ShellAction::SetSerial(n) => {
             options.set_serial_number(n);
             persist_options(options, eeprom, buf);

@@ -22,13 +22,24 @@ use embassy_stm32::usart::{Config as UartConfig, Uart};
 use embassy_stm32::{peripherals, Peri};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use heapless::Vec;
 
 use crate::Irqs;
+use uflowmeter::shell::ShellAction;
+use uflowmeter::upload_lib::{self, UploadKind};
+use uflowmeter::xmodem_lib::{self, Response, XModemReceiver};
+
+/// Cancel byte, echoed twice when the sender cancels.
+const CAN: u8 = 0x18;
 
 const FRAME_GAP: Duration = Duration::from_micros(1750);
 const MAX_FRAME: usize = 256;
+
+/// How often to re-send 'C' while waiting for the sender to start.
+const XMODEM_POLL: Duration = Duration::from_millis(500);
+/// Whole-transfer budget, matching the C++ `XModem::read`.
+const XMODEM_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub type ShellLine = Vec<u8, 80>;
 pub type ModbusFrame = Vec<u8, MAX_FRAME>;
@@ -146,7 +157,11 @@ async fn run_session(uart: &mut Uart<'_, Async>) {
             )
             .await
             {
-                Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, uart).await,
+                Either3::First(r) => {
+                    if let Some(kind) = handle_read(r, &buf, &mut line, &mut frame, uart).await {
+                        run_xmodem(uart, kind).await;
+                    }
+                }
                 Either3::Second(_) => {
                     // Quiet for SESSION_IDLE_TIMEOUT → tear down USART.
                     defmt::info!("uart: session idle, sleep");
@@ -163,7 +178,11 @@ async fn run_session(uart: &mut Uart<'_, Async>) {
             )
             .await
             {
-                Either3::First(r) => handle_read(r, &buf, &mut line, &mut frame, uart).await,
+                Either3::First(r) => {
+                    if let Some(kind) = handle_read(r, &buf, &mut line, &mut frame, uart).await {
+                        run_xmodem(uart, kind).await;
+                    }
+                }
                 Either3::Second(_) => {
                     if !frame.is_empty() {
                         defmt::info!("modbus frame: {=[u8]:x}", frame.as_slice());
@@ -183,13 +202,24 @@ async fn handle_read(
     line: &mut ShellLine,
     frame: &mut ModbusFrame,
     uart: &mut Uart<'_, Async>,
-) {
+) -> Option<UploadKind> {
     match r {
         Ok(()) => {
             let b = buf[0];
             if b == b'\r' || b == b'\n' {
                 if !line.is_empty() {
                     defmt::info!("uart line: {=[u8]:a}", line.as_slice());
+                    // An upload command is handled by the session
+                    // itself rather than shell_task: the transfer must
+                    // start immediately after the prompt, with no other
+                    // writer touching the line in between.
+                    if let Some(uflowmeter::shell::ShellAction::Upload(kind)) =
+                        uflowmeter::shell::parse_action(line)
+                    {
+                        line.clear();
+                        frame.clear();
+                        return Some(kind);
+                    }
                     let _ = SHELL_LINES.try_send(line.clone());
                     line.clear();
                 }
@@ -208,6 +238,7 @@ async fn handle_read(
             frame.clear();
         }
     }
+    None
 }
 
 async fn write_tx(tx_data: &ModbusFrame, uart: &mut Uart<'_, Async>) {
@@ -256,5 +287,79 @@ pub async fn shell_task() {
                 // Likely Modbus or noise — drop quietly.
             }
         }
+    }
+}
+
+/// Receive one configuration blob over XMODEM-CRC and hand it to the
+/// main loop as a `ShellAction::ApplyUpload`.
+///
+/// Runs inline in the session so nothing else writes to the line while
+/// the transfer is in flight. The protocol itself lives in
+/// `uflowmeter::xmodem_lib`; this is only the transport: poll with 'C'
+/// until the sender starts, feed bytes in, send back what the state
+/// machine asks for, and give up after XMODEM_TIMEOUT.
+async fn run_xmodem(uart: &mut Uart<'_, Async>, kind: UploadKind) {
+    let prompt: &[u8] = match kind {
+        UploadKind::Calibration => b"Upload 56 bytes (14 f32) with XMODEM-CRC.\r\n",
+        UploadKind::TdcRegs => b"Upload 20 bytes (10 TDC1000 + 10 TDC7200) with XMODEM-CRC.\r\n",
+    };
+    let _ = uart.write(prompt).await;
+
+    let mut data = [0u8; upload_lib::CALIBRATION_BLOCK];
+    let mut byte = [0u8; 1];
+    let deadline = Instant::now() + XMODEM_TIMEOUT;
+
+    // Scoped so the receiver's borrow of `data` ends before we read it.
+    let (complete, written) = {
+        let mut rx = XModemReceiver::new(&mut data[..kind.block_len()]);
+        while !rx.is_finished() && Instant::now() < deadline {
+            // While the sender has not started, re-offer CRC mode. Once it
+            // has, only the read arm matters — the poll would inject stray
+            // bytes into the packet stream.
+            let poll = async {
+                if rx.is_waiting() {
+                    Timer::after(XMODEM_POLL).await
+                } else {
+                    core::future::pending::<()>().await
+                }
+            };
+
+            match select3(uart.read(&mut byte), poll, Timer::at(deadline)).await {
+                Either3::First(Ok(())) => {
+                    let reply = match rx.feed(byte[0]) {
+                        Response::None => None,
+                        Response::Ack => Some(&[xmodem_lib::ACK][..]),
+                        Response::Nak => Some(&[xmodem_lib::NAK][..]),
+                        Response::CancelAck => Some(&[CAN, CAN][..]),
+                    };
+                    if let Some(bytes) = reply {
+                        let _ = uart.write(bytes).await;
+                    }
+                }
+                Either3::First(Err(e)) => {
+                    defmt::error!("xmodem: read error {}", e);
+                    break;
+                }
+                Either3::Second(()) => {
+                    let _ = uart.write(&[xmodem_lib::POLL]).await;
+                }
+                Either3::Third(()) => break,
+            }
+        }
+
+        (rx.is_complete(), rx.written())
+    };
+
+    if complete && written == kind.block_len() {
+        let _ = uart.write(b"\r\nDone\r\n").await;
+        let _ = SHELL_ACTIONS.try_send(ShellAction::ApplyUpload(kind, data));
+    } else {
+        defmt::warn!(
+            "xmodem: transfer failed (complete={}, {=usize}/{=usize} B)",
+            complete,
+            written,
+            kind.block_len()
+        );
+        let _ = uart.write(b"\r\nUpload error\r\n").await;
     }
 }

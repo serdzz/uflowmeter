@@ -15,6 +15,7 @@
 //!   get_calibration    — dump calibration data
 //!   help               — list commands
 
+use crate::upload_lib::UploadKind;
 use heapless::String;
 use heapless::Vec;
 
@@ -32,6 +33,13 @@ pub enum ShellAction {
     SetSerial(u32),
     /// `set_verbose <0|1>` → tweak defmt verbosity (no persistence).
     SetVerbose(bool),
+    /// `set_calibration` / `set_configuration` → hand the line over to
+    /// an XMODEM transfer, then write the blob into Options and save.
+    Upload(UploadKind),
+    /// A completed XMODEM transfer, raised by the UART session once the
+    /// blob is in hand. The array is sized for the larger of the two
+    /// payloads; `kind` says how much of it is meaningful.
+    ApplyUpload(UploadKind, [u8; crate::upload_lib::CALIBRATION_BLOCK]),
 }
 
 /// Shell command result
@@ -73,6 +81,12 @@ pub fn parse_action(line: &[u8]) -> Option<ShellAction> {
             1 => Some(ShellAction::SetVerbose(true)),
             _ => None,
         });
+    }
+    if eq(cmd, b"set_calibration") {
+        return Some(ShellAction::Upload(UploadKind::Calibration));
+    }
+    if eq(cmd, b"set_configuration") {
+        return Some(ShellAction::Upload(UploadKind::TdcRegs));
     }
     None
 }
@@ -119,6 +133,16 @@ pub fn process_line(line: &[u8]) -> ShellResult {
     }
     if eq(cmd, b"get_settings") {
         return cmd_get_settings();
+    }
+    if eq(cmd, b"set_calibration") {
+        return ShellResult::Ok(lit(
+            "Upload 56 bytes (14 f32) with XMODEM-CRC.\r\nWaiting for transfer...\r\n",
+        ));
+    }
+    if eq(cmd, b"set_configuration") {
+        return ShellResult::Ok(lit(
+            "Upload 20 bytes (10 TDC1000 + 10 TDC7200) with XMODEM-CRC.\r\nWaiting for transfer...\r\n",
+        ));
     }
     if eq(cmd, b"get_calibration") {
         return cmd_get_calibration();
@@ -516,5 +540,44 @@ mod tests {
         // Random binary (e.g. mis-routed Modbus bytes) must not be
         // mistaken for a shell action.
         assert_eq!(parse_action(b"\x01\x03\x00\x00\x00\x0a"), None);
+    }
+}
+
+#[cfg(test)]
+mod upload_command_tests {
+    use super::*;
+
+    #[test]
+    fn set_calibration_requests_a_56_byte_upload() {
+        assert_eq!(
+            parse_action(b"set_calibration\r\n"),
+            Some(ShellAction::Upload(UploadKind::Calibration))
+        );
+    }
+
+    #[test]
+    fn set_configuration_requests_the_tdc_block() {
+        assert_eq!(
+            parse_action(b"set_configuration\r\n"),
+            Some(ShellAction::Upload(UploadKind::TdcRegs))
+        );
+    }
+
+    #[test]
+    fn both_upload_commands_are_recognised_by_process_line() {
+        // Must not fall through to NotAShellCommand, or the line would
+        // be handed to the Modbus framer instead.
+        for line in [b"set_calibration\r\n".as_slice(), b"set_configuration\r\n"] {
+            assert!(
+                matches!(process_line(line), ShellResult::Ok(_)),
+                "unrecognised: {:?}",
+                core::str::from_utf8(line)
+            );
+        }
+    }
+
+    #[test]
+    fn a_similar_but_different_command_is_not_an_upload() {
+        assert_eq!(parse_action(b"get_calibration\r\n"), None);
     }
 }
