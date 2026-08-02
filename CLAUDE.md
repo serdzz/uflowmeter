@@ -26,9 +26,19 @@ occurred". At 500 kHz it works first time. `cargo run --release` uses the
 runner in `.cargo/config.toml`, which does **not** pass the speed — so
 for anything beyond a quick attempt, invoke `probe-rs run` directly.
 
-If it still will not connect, power-cycle the board. `--connect-under-reset`
-does not help here: NRST is not wired through to the probe, which is why
-that path returns `JtagGetIdcodeError` rather than working.
+If it still will not connect, hold the board's RESET button down, start
+the flash, and release RESET a second or two later. That has been the
+reliable fallback: on the occasions where a power-cycle left two
+successive attempts failing with `SwdDpWait`, holding RESET worked
+first time (though the write itself then takes ~26 s rather than the
+usual 6-15). The likely reason is that the firmware reaches STOP before
+the probe can attach — `min_stop_pause` is 100 ms and the executor
+sleeps between the 5 s measurement cycles, so the window after a reset
+is only milliseconds wide.
+
+`--connect-under-reset` is not the answer here: NRST is not wired
+through to the probe, which is why that path returns
+`JtagGetIdcodeError` instead of working.
 
 **Do not run `cargo test` directly** — without removing the embedded target it will try to link `std` against `thumbv7m-none-eabi` and fail. Use `make test` or `bash run_host.sh test ...`; the script removes the `target = ...` line and restores it via a `trap` even on failure.
 
