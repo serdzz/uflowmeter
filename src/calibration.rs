@@ -91,6 +91,18 @@ impl Calculator {
         self.apply_ratio(table, raw)
     }
 
+    /// Zero out a value inside the dead band. `apply_ratio` already
+    /// does this per reading; the C++ applies it a second time to the
+    /// window average (`Src/measure.cpp:202`), since averaging a few
+    /// small non-zero readings can drift back above zero.
+    pub fn near_zero_filter(&self, val: f32) -> f32 {
+        if val < self.config.vmin && val > self.config.vneg {
+            0.0
+        } else {
+            val
+        }
+    }
+
     /// Apply piecewise linear calibration ratio
     pub fn apply_ratio(&self, table: &CalibTable, val: f32) -> f32 {
         let k = [table.data[0].k, table.data[1].k, table.data[2].k];

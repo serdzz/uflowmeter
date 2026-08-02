@@ -9,6 +9,7 @@
 extern crate alloc;
 
 pub mod apps;
+pub mod average_lib;
 pub mod calibration;
 pub mod gui;
 pub mod history;
@@ -48,3 +49,6 @@ mod ui_history_tests;
 
 #[cfg(test)]
 mod tdc_lib_tests;
+
+#[cfg(test)]
+mod average_lib_tests;

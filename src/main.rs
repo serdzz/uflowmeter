@@ -47,6 +47,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{Receiver, Watch};
 use embassy_time::{Instant, Timer};
+use uflowmeter::average_lib::AverageBuffer;
 use uflowmeter::calibration::{Calculator, CalibData, CalibTable, MeterConfig};
 use uflowmeter::history::RingStorage;
 use uflowmeter::modbus_handler::ModbusHandler;
@@ -893,6 +894,10 @@ async fn measurement_task(
     ];
     let mut calc = Calculator::new(options_to_meter_config(&options));
 
+    // Window mean of recent cycles — what the meter reports as the
+    // immediate consumption, mirroring the C++ `average_m3ph_`.
+    let mut average = AverageBuffer::new();
+
     // Start the watchdog only once we are about to enter the periodic
     // loop, so a hang in the bring-up above still reaches the debugger
     // instead of rebooting under it.
@@ -1034,7 +1039,19 @@ async fn measurement_task(
         mux.set_channel(mux::Channel::Off);
 
         if good > 0 {
-            FLOW_RESULT.signal(sum / good as f32);
+            // Both pairs collapse into one sample before entering the
+            // window, so a cycle where only one pair reported does not
+            // carry less weight than a cycle where both did.
+            average.push(sum / good as f32);
+            if let Some(mean) = average.average() {
+                let mean = calc.near_zero_filter(mean);
+                defmt::info!(
+                    "flow: {=f32} m³/h (window of {=usize})",
+                    mean,
+                    average.len()
+                );
+                FLOW_RESULT.signal(mean);
+            }
         }
     }
 }
