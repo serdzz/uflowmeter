@@ -27,6 +27,7 @@ pub mod options;
 pub mod shell;
 pub mod tdc_lib;
 pub mod ui;
+pub mod xmodem_lib;
 
 pub use apps::{Actions, App, AppRequest};
 pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
@@ -52,3 +53,6 @@ mod tdc_lib_tests;
 
 #[cfg(test)]
 mod average_lib_tests;
+
+#[cfg(test)]
+mod xmodem_lib_tests;
