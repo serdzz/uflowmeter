@@ -161,6 +161,10 @@ impl MenuList {
 pub struct EditBoxState {
     pub cursor: u8,
     pub editable: bool,
+    /// Value at the moment edit mode was entered. The change is
+    /// committed on exit only if it differs, matching the C++
+    /// `EditBox::on_edit_mode_exit`.
+    pub entry_cursor: u8,
 }
 
 /// State for EditNumber-like screens (slave address)
@@ -233,6 +237,8 @@ pub struct MenuController {
     pub history_blink: u8,
     /// Frame counter for blink animation while editing the DateTime screen.
     pub datetime_blink: u8,
+    /// Frame counter for the value line of the ВКЛ/ВЫКЛ-style screens.
+    pub editbox_blink: u8,
 }
 
 /// Frames-per-blink-cycle (render runs at 10 Hz → 6 frames ≈ 600 ms cycle,
@@ -302,6 +308,7 @@ impl MenuController {
             history_edit: HistoryEditField::None,
             history_blink: 0,
             datetime_blink: 0,
+            editbox_blink: 0,
         }
     }
 
@@ -538,6 +545,37 @@ impl MenuController {
         }
     }
 
+    /// True while a field is being edited: the DateTime screen, a history
+    /// screen, or one of the value pickers (ВКЛ/ВЫКЛ, тип связи, тип
+    /// датчика).
+    ///
+    /// The blink animation advances one frame per `render` call, so the
+    /// caller has to keep rendering on a timer for the active field to
+    /// actually blink — key events alone leave it frozen mid-cycle.
+    pub fn is_editing(&self) -> bool {
+        self.datetime_item != DateTimeEditItem::None
+            || self.history_edit != HistoryEditField::None
+            || self.comm_type.editable
+            || self.muster.editable
+            || self.negative.editable
+            || self.sensor_type.editable
+    }
+
+    /// True when the value line of `screen` should be blanked this frame —
+    /// that screen is in edit mode and the blink cycle is in its hidden
+    /// half. The C++ gets the same effect by handing the whole label to
+    /// `set_blinked_label` (`ui/editbox.cpp:15`).
+    fn value_blanked(&self, screen: ScreenId) -> bool {
+        let editing = match screen {
+            ScreenId::CommType => self.comm_type.editable,
+            ScreenId::Muster => self.muster.editable,
+            ScreenId::Negative => self.negative.editable,
+            ScreenId::SensorType => self.sensor_type.editable,
+            _ => false,
+        };
+        editing && self.editbox_blink >= HISTORY_BLINK_PERIOD / 2
+    }
+
     /// Screen-specific key handling. Returns Some if consumed, None if not.
     /// Matches C++ Widget::key_event pattern — each widget handles its own keys.
     fn screen_key_event(
@@ -620,34 +658,46 @@ impl MenuController {
         on_change: fn(u8) -> AppRequest,
     ) -> Option<AppRequest> {
         match event {
-            UiEvent::Left => {
+            // Hardware Down/Up arrive as Left/Right. Inside edit mode they
+            // step through the values; outside it they fall through so the
+            // List can move between screens.
+            UiEvent::Left | UiEvent::Down => {
                 if state.editable {
                     if state.cursor > 0 {
                         state.cursor -= 1;
                     } else {
                         state.cursor = max_items - 1;
                     }
-                    Some(on_change(state.cursor))
+                    // Consumed, but nothing is applied yet — the C++
+                    // commits once, on leaving edit mode.
+                    Some(AppRequest::Process)
                 } else {
                     None // let List handle
                 }
             }
-            UiEvent::Right => {
+            UiEvent::Right | UiEvent::Up => {
                 if state.editable {
                     state.cursor = (state.cursor + 1) % max_items;
-                    Some(on_change(state.cursor))
+                    Some(AppRequest::Process)
                 } else {
                     None
                 }
             }
             UiEvent::Enter => {
-                // Enter advances the value directly and commits — applies to
-                // all editbox screens (CommType 4-value, SensorType 5-value,
-                // Muster/Negative 2-value). No separate edit mode: with only
-                // 4 hardware buttons (Set, Enter, Up, Down) and Up/Down used
-                // for screen navigation, Enter is the natural value-cycle key.
-                state.cursor = (state.cursor + 1) % max_items;
-                Some(on_change(state.cursor))
+                // Enter toggles edit mode rather than advancing the value.
+                // That mirrors `EditableWidget::key_event` in the C++, which
+                // toggles on Enter and only forwards keys to the widget
+                // while the mode is on — so the field blinks while it is
+                // being changed and Down/Up pick the value.
+                state.editable = !state.editable;
+                if state.editable {
+                    state.entry_cursor = state.cursor;
+                    Some(AppRequest::Process)
+                } else if state.cursor != state.entry_cursor {
+                    Some(on_change(state.cursor))
+                } else {
+                    Some(AppRequest::Process)
+                }
             }
             _ => None,
         }
@@ -1008,10 +1058,16 @@ impl MenuController {
         write!(display, "{}", title).ok();
         display.finish_line(16, title.chars().count());
 
+        self.editbox_blink = (self.editbox_blink + 1) % HISTORY_BLINK_PERIOD;
+
         display.set_position(0, 1);
-        let value = self.format_value(screen, app);
-        write!(display, "{:>16}", value.as_str()).ok();
-        display.finish_line(16, value.chars().count());
+        if self.value_blanked(screen) {
+            display.finish_line(16, 0);
+        } else {
+            let value = self.format_value(screen, app);
+            write!(display, "{:>16}", value.as_str()).ok();
+            display.finish_line(16, value.chars().count());
+        }
     }
 
     /// Render hour/day/month history screen with cursor + flow lookup result.
@@ -1346,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn test_comm_type_cycling() {
+    fn test_comm_type_edit_mode() {
         let mut ctrl = MenuController::new();
         let app = test_app();
         ctrl.select(MenuId::Main);
@@ -1357,16 +1413,46 @@ mod tests {
         }
         assert_eq!(ctrl.current_screen(), ScreenId::CommType);
 
-        // Enter cycles through the four comm types and wraps back to 0.
-        // No edit mode — Enter advances directly.
+        // Enter opens edit mode without changing anything yet.
+        ctrl.key_event(UiEvent::Enter, &app);
+        assert!(ctrl.comm_type.editable, "Enter must open edit mode");
+        assert_eq!(ctrl.comm_type.cursor, 0);
+        assert!(ctrl.is_editing(), "the value has to blink while editing");
+
+        // Hardware Up/Down arrive as Right/Left and step the value.
+        ctrl.key_event(UiEvent::Right, &app);
+        assert_eq!(ctrl.comm_type.cursor, 1);
+        ctrl.key_event(UiEvent::Right, &app);
+        assert_eq!(ctrl.comm_type.cursor, 2);
+        ctrl.key_event(UiEvent::Left, &app);
+        assert_eq!(ctrl.comm_type.cursor, 1);
+        assert_eq!(
+            ctrl.current_screen(),
+            ScreenId::CommType,
+            "edit mode must swallow Left/Right instead of moving the menu"
+        );
+
+        // Enter commits once, on the way out.
         let req = ctrl.key_event(UiEvent::Enter, &app);
         assert_eq!(req, Some(AppRequest::SetCommType(1)));
+        assert!(!ctrl.comm_type.editable);
+        assert!(!ctrl.is_editing());
+    }
+
+    #[test]
+    fn test_editbox_leaving_unchanged_emits_no_write() {
+        // Entering and leaving without touching the value must not write
+        // to Options — the C++ compares against the entry index.
+        let mut ctrl = MenuController::new();
+        let app = test_app();
+        ctrl.select(MenuId::Main);
+        for _ in 0..10 {
+            ctrl.main_menu.next_enabled(|_s: ScreenId| true);
+        }
+
+        ctrl.key_event(UiEvent::Enter, &app);
         let req = ctrl.key_event(UiEvent::Enter, &app);
-        assert_eq!(req, Some(AppRequest::SetCommType(2)));
-        let req = ctrl.key_event(UiEvent::Enter, &app);
-        assert_eq!(req, Some(AppRequest::SetCommType(3)));
-        let req = ctrl.key_event(UiEvent::Enter, &app);
-        assert_eq!(req, Some(AppRequest::SetCommType(0))); // wraps
+        assert_eq!(req, Some(AppRequest::Process), "no SetCommType expected");
     }
 
     #[test]
@@ -1416,33 +1502,75 @@ mod tests {
     }
 
     #[test]
-    fn test_editbox_enter_cycles() {
-        // Enter advances the cursor through values and emits the change
-        // request each press — no separate edit mode.
+    fn test_editbox_enter_toggles_edit_mode() {
+        // Enter toggles edit mode; the value only moves on Left/Right and
+        // is committed once, when the mode is left.
         let mut state = EditBoxState::default();
-        assert_eq!(state.cursor, 0);
+        assert!(!state.editable);
 
         let req = MenuController::editbox_key_event(&mut state, 4, UiEvent::Enter, |i| {
             AppRequest::SetCommType(i)
         });
-        assert_eq!(req, Some(AppRequest::SetCommType(1)));
+        assert_eq!(req, Some(AppRequest::Process));
+        assert!(state.editable);
+        assert_eq!(
+            state.cursor, 0,
+            "opening edit mode must not change the value"
+        );
+
+        // Stepping does not commit.
+        let req = MenuController::editbox_key_event(&mut state, 4, UiEvent::Right, |i| {
+            AppRequest::SetCommType(i)
+        });
+        assert_eq!(req, Some(AppRequest::Process));
         assert_eq!(state.cursor, 1);
 
         let req = MenuController::editbox_key_event(&mut state, 4, UiEvent::Enter, |i| {
             AppRequest::SetCommType(i)
         });
-        assert_eq!(req, Some(AppRequest::SetCommType(2)));
+        assert_eq!(req, Some(AppRequest::SetCommType(1)));
+        assert!(!state.editable);
+    }
 
-        // Two-value editbox wraps after one press.
-        let mut two = EditBoxState::default();
-        let req = MenuController::editbox_key_event(&mut two, 2, UiEvent::Enter, |i| {
+    #[test]
+    fn test_editbox_ignores_keys_outside_edit_mode() {
+        // Outside edit mode Left/Right belong to the List, so the handler
+        // must decline them rather than silently eating a menu step.
+        let mut state = EditBoxState::default();
+        for ev in [UiEvent::Left, UiEvent::Right, UiEvent::Up, UiEvent::Down] {
+            let req = MenuController::editbox_key_event(&mut state, 2, ev, |i| {
+                AppRequest::SetNegative(i > 0)
+            });
+            assert_eq!(req, None, "{:?} must fall through to the List", ev);
+            assert_eq!(state.cursor, 0);
+        }
+    }
+
+    #[test]
+    fn test_editbox_two_value_wraps_both_ways() {
+        // ВКЛ/ВЫКЛ: one step either way flips it.
+        let mut state = EditBoxState::default();
+        MenuController::editbox_key_event(&mut state, 2, UiEvent::Enter, |i| {
+            AppRequest::SetNegative(i > 0)
+        });
+
+        MenuController::editbox_key_event(&mut state, 2, UiEvent::Right, |i| {
+            AppRequest::SetNegative(i > 0)
+        });
+        assert_eq!(state.cursor, 1);
+        MenuController::editbox_key_event(&mut state, 2, UiEvent::Right, |i| {
+            AppRequest::SetNegative(i > 0)
+        });
+        assert_eq!(state.cursor, 0, "wraps forward");
+        MenuController::editbox_key_event(&mut state, 2, UiEvent::Left, |i| {
+            AppRequest::SetNegative(i > 0)
+        });
+        assert_eq!(state.cursor, 1, "wraps backward");
+
+        let req = MenuController::editbox_key_event(&mut state, 2, UiEvent::Enter, |i| {
             AppRequest::SetNegative(i > 0)
         });
         assert_eq!(req, Some(AppRequest::SetNegative(true)));
-        let req = MenuController::editbox_key_event(&mut two, 2, UiEvent::Enter, |i| {
-            AppRequest::SetNegative(i > 0)
-        });
-        assert_eq!(req, Some(AppRequest::SetNegative(false)));
     }
 
     #[test]

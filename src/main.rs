@@ -371,8 +371,27 @@ async fn main(spawner: Spawner) {
         // Build the idle-timeout future. When no session is active we
         // park on `pending()` (never resolves) so the select arm is
         // inert and no sub-IDLE_TIMEOUT alarm sits in the time driver.
+        // While a field is being edited the screen has to be redrawn on
+        // a timer: the blink animation advances one frame per render, so
+        // without this the active field simply freezes in whichever half
+        // of the cycle the last key press left it. BLINK_FRAME matches
+        // the 10 Hz the blink period in ui.rs is written against, giving
+        // ~300 ms on / ~300 ms off.
+        let blink_deadline = if ui.is_editing() && idle_deadline.is_some() {
+            Some(Instant::now() + BLINK_FRAME)
+        } else {
+            None
+        };
+        // One timer arm serves both deadlines — select6 has no room for a
+        // seventh — so wake at whichever comes first and work out which
+        // it was afterwards.
+        let wake_at = match (idle_deadline, blink_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, None) => a,
+            (None, b) => b,
+        };
         let idle_fut = async {
-            match idle_deadline {
+            match wake_at {
                 Some(deadline) => Timer::at(deadline).await,
                 None => pending::<()>().await,
             }
@@ -490,6 +509,14 @@ async fn main(spawner: Spawner) {
                 opt_sender.send(options);
             }
             Either6::Sixth(()) => {
+                // A blink frame, not the idle timeout: fall through so the
+                // render at the bottom of the loop advances the animation.
+                if idle_deadline.is_some_and(|d| Instant::now() < d) {
+                    ui.update(&app);
+                    ui.render(&app, &mut frame);
+                    frame.flush(&mut lcd).await;
+                    continue;
+                }
                 defmt::info!("idle: backlight + LCD power off");
                 backlight.set_high();
                 // Park the data/control lines before cutting the supply —
@@ -824,6 +851,11 @@ const TDC1000_DEFAULT_REGS: [u8; drivers::tdc1000::CONFIG_REG_COUNT] =
     [0x48, 0x45, 0x01, 0x01, 0x07, 0xA0, 0x1E, 0x00, 0x6A, 0x03];
 const TDC7200_DEFAULT_REGS: [u8; drivers::tdc7200::CONFIG_REG_COUNT] =
     [0x02, 0x44, 0x06, 0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00];
+
+/// Redraw interval while a field is being edited, so the blink
+/// animation in `ui.rs` advances. Its period is six frames, so this
+/// gives a ~600 ms cycle.
+const BLINK_FRAME: embassy_time::Duration = embassy_time::Duration::from_millis(100);
 
 /// M-Bus broadcast period, counted in 60 s history ticks. The C++
 /// reschedules its communication process with
