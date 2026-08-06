@@ -327,7 +327,7 @@ async fn main(spawner: Spawner) {
     // channel push), then tears it down after SESSION_IDLE_TIMEOUT
     // of quiet so REFCOUNT_STOP1 drops and the executor sleeps.
     spawner.spawn(unwrap!(drivers::uart::uart_session_task(
-        p.USART1, p.PA10, p.PA9, p.DMA1_CH4, p.DMA1_CH5, p.EXTI10,
+        p.USART1, p.PA10, p.PA9, p.DMA1_CH4, p.DMA1_CH5, p.EXTI10, p.FLASH,
     )));
     spawner.spawn(unwrap!(drivers::uart::shell_task()));
     spawner.spawn(unwrap!(history_tick_task()));
@@ -727,6 +727,13 @@ fn handle_shell_action(
 ) {
     use uflowmeter::shell::ShellAction;
     match action {
+        // Handled entirely inside the UART session, which owns the line
+        // and the flash peripheral for the duration, and resets the
+        // device on success. Reaching here would mean the session
+        // forwarded it by mistake.
+        ShellAction::FirmwareUpdate => {
+            defmt::warn!("shell: FirmwareUpdate reached the main loop, ignoring")
+        }
         ShellAction::SetDateUnix(ts) => {
             let odt = time::OffsetDateTime::from_unix_timestamp(ts as i64).ok();
             match odt {

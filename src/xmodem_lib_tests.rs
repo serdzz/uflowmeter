@@ -33,7 +33,7 @@ fn packet(seq: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Feed a byte stream, returning every non-None response in order.
-fn drive(rx: &mut XModemReceiver, bytes: &[u8]) -> Vec<Response> {
+fn drive<S: Sink>(rx: &mut XModemReceiver<S>, bytes: &[u8]) -> Vec<Response> {
     bytes
         .iter()
         .map(|b| rx.feed(*b))
@@ -44,7 +44,7 @@ fn drive(rx: &mut XModemReceiver, bytes: &[u8]) -> Vec<Response> {
 #[test]
 fn starts_out_polling_for_crc_mode() {
     let mut buf = [0u8; 56];
-    let rx = XModemReceiver::new(&mut buf);
+    let rx = XModemReceiver::new(SliceSink::new(&mut buf));
     assert!(rx.is_waiting(), "must ask the sender for CRC mode");
     assert!(!rx.is_finished());
     assert_eq!(POLL, 0x43, "'C' selects CRC mode, not checksum mode");
@@ -54,7 +54,7 @@ fn starts_out_polling_for_crc_mode() {
 fn accepts_a_good_packet_and_stores_the_payload() {
     let mut buf = [0u8; 56];
     let payload: Vec<u8> = (0..56).collect();
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
 
     let out = drive(&mut rx, &packet(1, &payload));
     assert_eq!(out, vec![Response::Ack]);
@@ -66,7 +66,7 @@ fn accepts_a_good_packet_and_stores_the_payload() {
 #[test]
 fn eot_completes_the_transfer() {
     let mut buf = [0u8; 56];
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     drive(&mut rx, &packet(1, &[0xAB; 56]));
     assert_eq!(rx.feed(EOT), Response::Ack);
     assert!(rx.is_finished());
@@ -80,7 +80,7 @@ fn a_corrupt_packet_is_naked_and_leaves_no_partial_data() {
     // Flip a payload byte so the trailing CRC no longer matches.
     good[10] ^= 0xFF;
 
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     let out = drive(&mut rx, &good);
     assert_eq!(out, vec![Response::Nak]);
     assert_eq!(
@@ -97,7 +97,7 @@ fn a_resend_after_nak_lands_correctly() {
     let mut corrupt = packet(1, &payload);
     corrupt[10] ^= 0xFF;
 
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     assert_eq!(drive(&mut rx, &corrupt), vec![Response::Nak]);
     // Sender repeats the same sequence number.
     assert_eq!(drive(&mut rx, &packet(1, &payload)), vec![Response::Ack]);
@@ -109,7 +109,7 @@ fn a_resend_after_nak_lands_correctly() {
 #[test]
 fn a_stale_sequence_number_is_ignored() {
     let mut buf = [0u8; 128];
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     drive(&mut rx, &packet(1, &[0x01; 56]));
     // Sender missed our ACK and repeats packet 1; we already moved on
     // to expecting 2, so it must not be written again.
@@ -124,7 +124,7 @@ fn a_bad_sequence_complement_is_rejected() {
     let mut buf = [0u8; 56];
     let mut p = packet(1, &[0x33; 56]);
     p[2] = 0x00; // complement should be 0xFE
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     let out = drive(&mut rx, &p);
     assert!(out.is_empty());
     assert_eq!(rx.written(), 0);
@@ -133,7 +133,7 @@ fn a_bad_sequence_complement_is_rejected() {
 #[test]
 fn cancel_ends_the_transfer_without_completing_it() {
     let mut buf = [0u8; 56];
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     assert_eq!(rx.feed(CAN), Response::CancelAck);
     assert!(rx.is_finished());
     assert!(!rx.is_complete(), "a cancelled transfer is not a good one");
@@ -144,7 +144,7 @@ fn payload_larger_than_the_buffer_is_truncated_not_overflowed() {
     // 20-byte TDC register block: the sender still pads to 128.
     let mut buf = [0u8; 20];
     let payload: Vec<u8> = (0..128).map(|i| i as u8).collect();
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
 
     assert_eq!(drive(&mut rx, &packet(1, &payload)), vec![Response::Ack]);
     assert_eq!(rx.written(), 20);
@@ -157,7 +157,7 @@ fn two_packets_land_back_to_back() {
     // Guards the offset bug the C++ carries: it counts each packet's
     // CRC bytes as payload, so packet 2 would start two bytes late.
     let mut buf = [0u8; 256];
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
 
     assert_eq!(
         drive(&mut rx, &packet(1, &[0xAA; 128])),
@@ -176,7 +176,7 @@ fn two_packets_land_back_to_back() {
 #[test]
 fn noise_between_packets_is_ignored() {
     let mut buf = [0u8; 56];
-    let mut rx = XModemReceiver::new(&mut buf);
+    let mut rx = XModemReceiver::new(SliceSink::new(&mut buf));
     // Line noise while waiting must not be mistaken for a header.
     assert_eq!(drive(&mut rx, &[0x00, 0x7F, 0xFE]), vec![]);
     assert!(rx.is_waiting());

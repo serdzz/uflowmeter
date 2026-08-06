@@ -40,6 +40,11 @@ pub enum ShellAction {
     /// blob is in hand. The array is sized for the larger of the two
     /// payloads; `kind` says how much of it is meaningful.
     ApplyUpload(UploadKind, [u8; crate::upload_lib::CALIBRATION_BLOCK]),
+    /// `firmware_update` → receive an encrypted image into flash slot B
+    /// over XMODEM, then reset so the bootloader installs it. Handled
+    /// entirely inside the UART session; it never reaches the main loop,
+    /// because the device does not come back from it.
+    FirmwareUpdate,
 }
 
 /// Shell command result
@@ -87,6 +92,9 @@ pub fn parse_action(line: &[u8]) -> Option<ShellAction> {
     }
     if eq(cmd, b"set_configuration") {
         return Some(ShellAction::Upload(UploadKind::TdcRegs));
+    }
+    if eq(cmd, b"firmware_update") {
+        return Some(ShellAction::FirmwareUpdate);
     }
     None
 }
@@ -144,6 +152,10 @@ pub fn process_line(line: &[u8]) -> ShellResult {
             "Upload 20 bytes (10 TDC1000 + 10 TDC7200) with XMODEM-CRC.\r\nWaiting for transfer...\r\n",
         ));
     }
+    if eq(cmd, b"firmware_update") {
+        return ShellResult::Ok(lit("Upload an encrypted image (.ufw) with XMODEM-CRC.\r\n\
+             The meter resets when the transfer completes.\r\nWaiting for transfer...\r\n"));
+    }
     if eq(cmd, b"get_calibration") {
         return cmd_get_calibration();
     }
@@ -163,6 +175,9 @@ fn help_text() -> String<256> {
          set_verbose <0|1>\r\n\
          get_settings\r\n\
          get_calibration\r\n\
+         set_calibration\r\n\
+         set_configuration\r\n\
+         firmware_update\r\n\
          help\r\n")
 }
 

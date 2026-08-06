@@ -16,6 +16,7 @@
 
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::flash::{Blocking, Flash};
 use embassy_stm32::gpio::Pull;
 use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{Config as UartConfig, Uart};
@@ -25,6 +26,7 @@ use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
 use heapless::Vec;
 
+use crate::drivers::slot_b::SlotBWriter;
 use crate::Irqs;
 use uflowmeter::shell::ShellAction;
 use uflowmeter::upload_lib::{self, UploadKind};
@@ -38,8 +40,21 @@ const MAX_FRAME: usize = 256;
 
 /// How often to re-send 'C' while waiting for the sender to start.
 const XMODEM_POLL: Duration = Duration::from_millis(500);
-/// Whole-transfer budget, matching the C++ `XModem::read`.
-const XMODEM_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a transfer may stall before it is abandoned. Applied
+/// between events rather than across the whole transfer, so it serves a
+/// 56-byte blob and a 120 KiB firmware image equally — see `pump`.
+const XMODEM_STALL: Duration = Duration::from_secs(15);
+
+/// What a recognised command line asks the session to do inline,
+/// rather than handing to `shell_task`. Both need the line to
+/// themselves from the prompt onwards, so neither can go through the
+/// channel.
+enum SessionRequest {
+    /// A fixed-size configuration blob, applied via the main loop.
+    Config(UploadKind),
+    /// A firmware image, staged into flash slot B. Does not return.
+    Firmware,
+}
 
 pub type ShellLine = Vec<u8, 80>;
 pub type ModbusFrame = Vec<u8, MAX_FRAME>;
@@ -87,7 +102,13 @@ pub async fn uart_session_task(
     mut tx_dma: Peri<'static, peripherals::DMA1_CH4>,
     mut rx_dma: Peri<'static, peripherals::DMA1_CH5>,
     mut exti10: Peri<'static, peripherals::EXTI10>,
+    flash_peri: Peri<'static, peripherals::FLASH>,
 ) {
+    // Held for the life of the task rather than acquired per update:
+    // the peripheral is a singleton, and the update path must not be
+    // able to fail because something else took it first.
+    let mut flash = Flash::new_blocking(flash_peri);
+
     loop {
         // PHASE 1 — idle: pure ExtiInput on PA10. Waits for the line
         // to fall (start bit) or for a pending TX (something we want
@@ -133,7 +154,7 @@ pub async fn uart_session_task(
         }
 
         // PHASE 3 — run the framer session until the line goes quiet.
-        run_session(&mut uart).await;
+        run_session(&mut uart, &mut flash).await;
 
         // PHASE 4 — uart dropped at end of loop, releasing USART /
         // pins / DMA. STOP refcount drops, executor sleeps.
@@ -142,7 +163,7 @@ pub async fn uart_session_task(
 
 /// Read/dispatch loop. Returns when the line has been quiet for
 /// SESSION_IDLE_TIMEOUT and there is no pending TX/frame work.
-async fn run_session(uart: &mut Uart<'_, Async>) {
+async fn run_session(uart: &mut Uart<'_, Async>, flash: &mut Flash<'static, Blocking>) {
     let mut buf = [0u8; 1];
     let mut line: ShellLine = Vec::new();
     let mut frame: ModbusFrame = Vec::new();
@@ -158,8 +179,11 @@ async fn run_session(uart: &mut Uart<'_, Async>) {
             .await
             {
                 Either3::First(r) => {
-                    if let Some(kind) = handle_read(r, &buf, &mut line, &mut frame, uart).await {
-                        run_xmodem(uart, kind).await;
+                    if let Some(req) = handle_read(r, &buf, &mut line, &mut frame, uart).await {
+                        match req {
+                            SessionRequest::Config(kind) => run_xmodem(uart, kind).await,
+                            SessionRequest::Firmware => run_firmware_update(uart, flash).await,
+                        }
                     }
                 }
                 Either3::Second(_) => {
@@ -179,8 +203,11 @@ async fn run_session(uart: &mut Uart<'_, Async>) {
             .await
             {
                 Either3::First(r) => {
-                    if let Some(kind) = handle_read(r, &buf, &mut line, &mut frame, uart).await {
-                        run_xmodem(uart, kind).await;
+                    if let Some(req) = handle_read(r, &buf, &mut line, &mut frame, uart).await {
+                        match req {
+                            SessionRequest::Config(kind) => run_xmodem(uart, kind).await,
+                            SessionRequest::Firmware => run_firmware_update(uart, flash).await,
+                        }
                     }
                 }
                 Either3::Second(_) => {
@@ -202,7 +229,7 @@ async fn handle_read(
     line: &mut ShellLine,
     frame: &mut ModbusFrame,
     uart: &mut Uart<'_, Async>,
-) -> Option<UploadKind> {
+) -> Option<SessionRequest> {
     match r {
         Ok(()) => {
             let b = buf[0];
@@ -213,12 +240,18 @@ async fn handle_read(
                     // itself rather than shell_task: the transfer must
                     // start immediately after the prompt, with no other
                     // writer touching the line in between.
-                    if let Some(uflowmeter::shell::ShellAction::Upload(kind)) =
-                        uflowmeter::shell::parse_action(line)
-                    {
-                        line.clear();
-                        frame.clear();
-                        return Some(kind);
+                    match uflowmeter::shell::parse_action(line) {
+                        Some(ShellAction::Upload(kind)) => {
+                            line.clear();
+                            frame.clear();
+                            return Some(SessionRequest::Config(kind));
+                        }
+                        Some(ShellAction::FirmwareUpdate) => {
+                            line.clear();
+                            frame.clear();
+                            return Some(SessionRequest::Firmware);
+                        }
+                        _ => {}
                     }
                     let _ = SHELL_LINES.try_send(line.clone());
                     line.clear();
@@ -306,47 +339,11 @@ async fn run_xmodem(uart: &mut Uart<'_, Async>, kind: UploadKind) {
     let _ = uart.write(prompt).await;
 
     let mut data = [0u8; upload_lib::CALIBRATION_BLOCK];
-    let mut byte = [0u8; 1];
-    let deadline = Instant::now() + XMODEM_TIMEOUT;
 
     // Scoped so the receiver's borrow of `data` ends before we read it.
     let (complete, written) = {
-        let mut rx = XModemReceiver::new(&mut data[..kind.block_len()]);
-        while !rx.is_finished() && Instant::now() < deadline {
-            // While the sender has not started, re-offer CRC mode. Once it
-            // has, only the read arm matters — the poll would inject stray
-            // bytes into the packet stream.
-            let poll = async {
-                if rx.is_waiting() {
-                    Timer::after(XMODEM_POLL).await
-                } else {
-                    core::future::pending::<()>().await
-                }
-            };
-
-            match select3(uart.read(&mut byte), poll, Timer::at(deadline)).await {
-                Either3::First(Ok(())) => {
-                    let reply = match rx.feed(byte[0]) {
-                        Response::None => None,
-                        Response::Ack => Some(&[xmodem_lib::ACK][..]),
-                        Response::Nak => Some(&[xmodem_lib::NAK][..]),
-                        Response::CancelAck => Some(&[CAN, CAN][..]),
-                    };
-                    if let Some(bytes) = reply {
-                        let _ = uart.write(bytes).await;
-                    }
-                }
-                Either3::First(Err(e)) => {
-                    defmt::error!("xmodem: read error {}", e);
-                    break;
-                }
-                Either3::Second(()) => {
-                    let _ = uart.write(&[xmodem_lib::POLL]).await;
-                }
-                Either3::Third(()) => break,
-            }
-        }
-
+        let mut rx = XModemReceiver::new(xmodem_lib::SliceSink::new(&mut data[..kind.block_len()]));
+        pump(uart, &mut rx).await;
         (rx.is_complete(), rx.written())
     };
 
@@ -361,5 +358,126 @@ async fn run_xmodem(uart: &mut Uart<'_, Async>, kind: UploadKind) {
             kind.block_len()
         );
         let _ = uart.write(b"\r\nUpload error\r\n").await;
+    }
+}
+
+/// Drive an XMODEM transfer to completion: poll with 'C' until the
+/// sender starts, feed received bytes into the state machine, and send
+/// back whatever it asks for.
+///
+/// The timeout is a **stall** timeout, not a deadline for the whole
+/// transfer. A 56-byte configuration blob and a 120 KiB firmware image
+/// differ by three orders of magnitude in how long they legitimately
+/// take — at this line rate the image is minutes — so an overall
+/// deadline would either cut long transfers short or let a dead link
+/// hang for minutes. What both have in common is that a healthy sender
+/// never goes quiet for `XMODEM_STALL`. Polls do not count as progress,
+/// so a sender that never starts still times out.
+async fn pump<S: xmodem_lib::Sink>(uart: &mut Uart<'_, Async>, rx: &mut XModemReceiver<S>) {
+    let mut byte = [0u8; 1];
+    let mut last_progress = Instant::now();
+
+    while !rx.is_finished() {
+        // While the sender has not started, re-offer CRC mode. Once it
+        // has, only the read arm matters — the poll would inject stray
+        // bytes into the packet stream.
+        let poll = async {
+            if rx.is_waiting() {
+                Timer::after(XMODEM_POLL).await
+            } else {
+                core::future::pending::<()>().await
+            }
+        };
+
+        match select3(
+            uart.read(&mut byte),
+            poll,
+            Timer::at(last_progress + XMODEM_STALL),
+        )
+        .await
+        {
+            Either3::First(Ok(())) => {
+                last_progress = Instant::now();
+                let reply = match rx.feed(byte[0]) {
+                    Response::None => None,
+                    Response::Ack => Some(&[xmodem_lib::ACK][..]),
+                    Response::Nak => Some(&[xmodem_lib::NAK][..]),
+                    Response::CancelAck => Some(&[CAN, CAN][..]),
+                };
+                if let Some(bytes) = reply {
+                    let _ = uart.write(bytes).await;
+                }
+            }
+            Either3::First(Err(e)) => {
+                defmt::error!("xmodem: read error {}", e);
+                return;
+            }
+            Either3::Second(()) => {
+                let _ = uart.write(&[xmodem_lib::POLL]).await;
+            }
+            Either3::Third(()) => {
+                defmt::warn!("xmodem: sender went quiet, giving up");
+                return;
+            }
+        }
+    }
+}
+
+/// Receive an encrypted firmware image into flash slot B, then reset so
+/// the bootloader installs it.
+///
+/// Nothing is reported back to the main loop, because on success this
+/// function does not return — the device reboots into the bootloader,
+/// which is where verification and installation happen. The application
+/// deliberately does not check the image's signature itself: it has no
+/// business holding the key, and a second check here would only be able
+/// to disagree with the one that matters.
+async fn run_firmware_update(uart: &mut Uart<'_, Async>, flash: &mut Flash<'static, Blocking>) {
+    // The erase is ~480 pages and takes long enough to notice, so it
+    // happens before the sender is invited to start.
+    let _ = uart.write(b"Erasing staging slot...\r\n").await;
+    let writer = match SlotBWriter::new(flash) {
+        Ok(w) => w,
+        Err(e) => {
+            defmt::error!("update: could not prepare slot B ({})", e);
+            let _ = uart.write(b"ERROR: could not erase staging slot\r\n").await;
+            return;
+        }
+    };
+
+    let _ = uart
+        .write(b"Send the .ufw image with XMODEM-CRC now.\r\n")
+        .await;
+
+    let mut rx = XModemReceiver::new(writer);
+    pump(uart, &mut rx).await;
+
+    if !rx.is_complete() {
+        defmt::warn!(
+            "update: transfer did not complete ({=usize} B)",
+            rx.written()
+        );
+        let _ = uart.write(b"\r\nERROR: transfer failed\r\n").await;
+        return;
+    }
+
+    match rx.into_sink().finish() {
+        Ok(header) => {
+            defmt::info!(
+                "update: staged {=u32} bytes, version {=u32}; resetting",
+                header.payload_len,
+                header.image_version
+            );
+            let _ = uart.write(b"\r\nStaged. Resetting...\r\n").await;
+            // Give the last bytes time to clear the shift register —
+            // resetting mid-frame would leave the operator staring at a
+            // truncated line and wondering whether it worked.
+            Timer::after(embassy_time::Duration::from_millis(100)).await;
+            cortex_m::peripheral::SCB::sys_reset()
+        }
+        Err(e) => {
+            defmt::error!("update: staging failed ({})", e);
+            let _ = uart.write(b"\r\nERROR: image rejected\r\n").await;
+        }
     }
 }

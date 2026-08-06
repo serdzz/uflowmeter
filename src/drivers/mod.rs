@@ -12,6 +12,7 @@ pub mod hd44780;
 pub mod hd44780_blocking;
 pub mod keypad;
 pub mod sensor_mux;
+pub mod slot_b;
 pub mod tdc1000;
 pub mod tdc7200;
 pub mod uart;
