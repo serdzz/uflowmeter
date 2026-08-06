@@ -18,7 +18,7 @@ edition = "2021"
 # `default-members` is left implicit: with a package at the workspace
 # root, a bare `cargo build` still builds only that package, so the
 # usual embedded build is unchanged.
-members = ["fwimage", "tools/imgtool"]
+members = ["bootloader", "fwimage", "tools/imgtool"]
 
 [patch.crates-io]
 # Pinned to a rev on the fork's stm32l1_low_power branch, which adds
@@ -57,6 +57,7 @@ critical-section = "1.1"
 lcd = "0.4.1"
 paste = "1.0.9"
 crc16 = "0.4.0"
+fwimage = { path = "fwimage" }
 modular-bitfield = "0.13.0"
 compile-time = "0.2.0"
 rand_core = "0.9.3"
