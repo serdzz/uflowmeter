@@ -235,15 +235,37 @@ untouched — on a fresh part, nothing.
 
 ---
 
-## 7. Not verified on hardware
+## 7. Verified on hardware, and what is not
 
-Everything below the transport is covered by 338 host tests, including
-the GCM implementation against OpenSSL vectors and an end-to-end
-pack/verify/tamper round trip in CI. What has **not** been exercised:
+**Confirmed on the bench.** Bootloader and application flashed over
+SWD, bootloader boots, finds no staged image, and hands over to slot A;
+the application then runs normally — display, keypad, menu, EEPROM,
+measurement cycle, and the on-screen reset.
 
-- **No image has been installed on a real device.** The bootloader has
-  not been flashed and no update has been staged, verified, copied and
-  booted on hardware.
+One bug had to be fixed to get there, recorded because the symptom is
+badly misleading. The handover masked interrupts across the VTOR update
+and never unmasked them, and `cortex-m-rt` does not touch PRIMASK — so
+the application inherited the mask permanently. It initialised
+perfectly and then stopped at its first await, waiting on interrupts
+that could never arrive. Every check short of "does anything actually
+happen" said the handover had worked: VTOR read back as 0x08004000 and
+the application's .data was initialised in RAM. The board simply sat
+there with a blank screen.
+
+Two lessons from the debugging worth keeping:
+
+- **RAM markers survive a warm reset.** A marker left from the previous
+  boot reads exactly like a fresh one. Clear them (`probe-rs write`)
+  before each attempt, or the instrument lies.
+- **Validate the instrument on a known-good build first.** A
+  `#[pre_init]` marker that silently never ran produced a confident and
+  entirely wrong conclusion about where startup was failing.
+
+**Not exercised.**
+
+- **No image has been installed through the update path.** The
+  bootloader has never verified, decrypted and copied a staged image on
+  hardware — only the no-image boot path has run.
 - **The XMODEM transfer of a firmware-sized image.** The protocol logic
   is tested and the configuration-sized transfers share the same code
   path, but 120 KiB over the wire needs a serial peer running an XMODEM
