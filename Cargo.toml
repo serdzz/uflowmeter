@@ -8,6 +8,18 @@ license = "MIT OR Apache-2.0"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+# The bootloader needs its own linker script (different FLASH origin and
+# length), which a second [[bin]] in this package cannot have — hence a
+# separate crate rather than another target. `fwimage` is shared by the
+# bootloader and the host packer so the image format cannot drift
+# between the thing that writes images and the thing that boots them.
+#
+# `default-members` is left implicit: with a package at the workspace
+# root, a bare `cargo build` still builds only that package, so the
+# usual embedded build is unchanged.
+members = ["fwimage"]
+
 [patch.crates-io]
 # Pinned to a rev on the fork's stm32l1_low_power branch, which adds
 # STM32L1 to the low_power.rs + rtc/low_power.rs cfg gates so embassy's
