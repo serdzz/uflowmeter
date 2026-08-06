@@ -112,6 +112,10 @@ bind_interrupts!(
     entry = "cortex_m_rt::entry"
 )]
 async fn main(spawner: Spawner) {
+    // Before embassy_stm32::init(): RTT is only RAM writes, so this
+    // lands even if clock configuration never completes. It is the
+    // difference between "never reached main" and "hung in init".
+    info!("app: entry");
     let mut config = Config::default();
     config.enable_debug_during_sleep = true;
     // Minimum lead time to the next timer event for the low-power

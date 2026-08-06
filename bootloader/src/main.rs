@@ -238,21 +238,38 @@ fn boot_application() -> ! {
         park();
     }
 
-    defmt::info!("bootloader: jumping to the application");
+    defmt::info!(
+        "bootloader: slot A sp={=u32:#x} reset={=u32:#x} — jumping",
+        sp,
+        reset
+    );
 
     // SAFETY: the vector table has been checked to have a stack pointer
     // inside RAM and a reset vector inside slot A with the Thumb bit
-    // set. Interrupts are masked first so nothing can be delivered
-    // through a half-updated VTOR, and VTOR is repointed at slot A
-    // before the jump — `bootload` does not do that, and an application
-    // left running against the bootloader's vector table would take
-    // every interrupt into this program's handlers.
+    // set. Interrupts are masked across the VTOR update so nothing can
+    // be delivered through a half-changed vector table, and VTOR is
+    // repointed at slot A before the jump — `bootload` does not do
+    // that, and an application left running against the bootloader's
+    // vector table would take every interrupt into this program's
+    // handlers.
+    //
+    // PRIMASK is cleared again before the jump, and that is
+    // load-bearing rather than tidiness. `cortex-m-rt`'s reset handler
+    // does not touch PRIMASK, so whatever state it is left in is the
+    // state the application runs in for good. Jumping with interrupts
+    // still masked gives an application that initialises perfectly —
+    // .data copied, logs emitted — and then stops dead at its first
+    // await, because the executor is waiting on interrupts that can
+    // never be delivered. Verified on hardware: VTOR read back as
+    // 0x08004000 and the RTT control block was live in RAM, yet the
+    // display stayed blank and no key did anything.
     unsafe {
         cortex_m::interrupt::disable();
         let scb = &*cortex_m::peripheral::SCB::PTR;
         scb.vtor.write(layout::SLOT_A);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
+        cortex_m::interrupt::enable();
         cortex_m::asm::bootload(vector_table)
     }
 }
