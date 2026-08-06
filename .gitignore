@@ -3,6 +3,18 @@
 **/*.rs.bk
 microchip-eeprom-25x-local
 
+# Firmware signing keys. A leaked key lets anyone build an image every
+# unit in the field will accept, so this must never be committed —
+# keep it in the release process's secret store instead.
+*.key
+ufw.key
+
+# Update-image build products
+/app.bin
+/app.ufw
+/ci.bin
+/ci.ufw
+
 # Claude Code / agent tooling artifacts
 /.claude/
 /.claude-flow/
