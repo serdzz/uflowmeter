@@ -149,7 +149,7 @@ Staged. Resetting...
 The meter reboots, and the bootloader authenticates the image before
 any of it reaches the running slot.
 
-Mind the line rate. An image is about 86 KiB, which is 880 000 bits on
+Mind the line rate. An image is about 86 KiB, which is 884 000 bits on
 an 8N1 line, so the transfer costs roughly 8 s at 115200, 1.5 min at
 the 9600 Modbus uses, and 12 min at the 1200 of M-Bus. Protocol
 overhead adds little on top — XMODEM spends five bytes per 1 KiB

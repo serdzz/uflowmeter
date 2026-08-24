@@ -33,8 +33,8 @@ Current occupancy:
 
 | | used | region | |
 |---|---|---|---|
-| bootloader | 10.6 KiB | 16 KiB | 65 % |
-| application | 87.6 KiB | 120 KiB | 71 % |
+| bootloader | 10.3 KiB | 16 KiB | 64 % |
+| application | 86.4 KiB | 120 KiB | 72 % |
 
 ### Why `memory-app.x` is not called `memory.x`
 
