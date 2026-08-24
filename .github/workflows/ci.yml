@@ -5,6 +5,15 @@ on:
     branches: [ main, develop, rework/embassy ]
   pull_request:
     branches: [ main, develop, rework/embassy ]
+  # Manual trigger, so CI can be started without inventing a commit.
+  # Earned its place on 2026-08-06: an Actions outage throttled webhooks
+  # to ~15% of events and silently dropped a push, and with only event
+  # triggers there was no way to ask for the run that never happened.
+  #
+  # GitHub only shows the "Run workflow" button once this file is on the
+  # default branch, so it does nothing for branch work until it reaches
+  # main.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
