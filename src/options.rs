@@ -3,9 +3,6 @@
 use embedded_storage::Storage;
 use modular_bitfield::prelude::*;
 
-#[cfg(not(test))]
-use super::hal;
-
 /// Communication type — determines which protocol runs on USART1
 /// Matches C++ Configuration::CommType
 #[cfg_attr(not(test), derive(defmt::Format))]
@@ -69,6 +66,18 @@ pub struct Options {
     pub slave_address: B8,
     pub comm_type: B8,
     pub modbus_mode: B8,
+    /// MeterConfig::const_val — speed-of-sound geometry constant
+    /// L²/(2·cos α). Stored as f32 bits in a B32 slot to stay inside
+    /// the modular_bitfield API. Appended to the layout so prior
+    /// EEPROM data still CRC-matches and is read with const_val=0
+    /// (which keeps the legacy "no flow until calibrated" behavior).
+    pub const_val: B32,
+    /// Padding to round the total bitfield up to a whole even number
+    /// of bytes (116) so Modbus holding-register reads at the very
+    /// end of Options (e.g. register 57, which covers const_val's
+    /// high byte) don't trip the "end_byte > options_bytes.len()"
+    /// OOB check in modbus_handler::handle_read_holding_registers.
+    pub reserved: B8,
 }
 
 #[cfg_attr(not(test), derive(defmt::Format))]
@@ -79,18 +88,9 @@ pub enum Error<E> {
     Spi(E),
 }
 
-#[cfg(not(test))]
-impl From<microchip_eeprom_25lcxx::Error<hal::spi::Error, core::convert::Infallible>>
-    for Error<hal::spi::Error>
-{
-    fn from(
-        err: microchip_eeprom_25lcxx::Error<hal::spi::Error, core::convert::Infallible>,
-    ) -> Self {
-        match err {
-            microchip_eeprom_25lcxx::Error::SpiError(e) => Error::Spi(e),
-            microchip_eeprom_25lcxx::Error::PinError(_) => Error::Storage,
-            _ => Error::Storage,
-        }
+impl<E> From<E> for Error<E> {
+    fn from(e: E) -> Self {
+        Error::Spi(e)
     }
 }
 
@@ -126,7 +126,7 @@ impl StaticBuf {
 }
 
 impl Options {
-    const SIZE: usize = 1024;
+    pub const SIZE: usize = 1024;
     const OFFSET_PRIMARY: u32 = 0;
     const OFFSET_SECONDARY: u32 = 1024;
 

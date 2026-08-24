@@ -689,3 +689,44 @@ mod mock_behavior_tests {
         assert!(!assertions.equals("other"));
     }
 }
+
+#[cfg(test)]
+mod to_analog_tests {
+    use crate::calibration::{Calculator, MeterConfig};
+
+    fn calc(vmax: f32) -> Calculator {
+        Calculator::new(MeterConfig {
+            vmax,
+            ..MeterConfig::default()
+        })
+    }
+
+    #[test]
+    fn zero_flow_sits_at_the_4ma_offset() {
+        assert_eq!(calc(500.0).to_analog(0), 800);
+    }
+
+    #[test]
+    fn reverse_flow_clamps_to_the_offset() {
+        // Negative consumption must not drive the loop below 4 mA.
+        assert_eq!(calc(500.0).to_analog(-12_345), 800);
+    }
+
+    #[test]
+    fn full_scale_matches_the_reference_formula() {
+        // k = 500 * 0.3125 = 156.25; val = vmax * 1000 = 500_000.
+        // 500_000 / 156.25 = 3200, + 800 = 4000.
+        assert_eq!(calc(500.0).to_analog(500_000), 4000);
+    }
+
+    #[test]
+    fn scales_linearly_between_the_endpoints() {
+        // Half of full scale lands halfway up the 3200-count span.
+        assert_eq!(calc(500.0).to_analog(250_000), 800 + 1600);
+    }
+
+    #[test]
+    fn a_zero_vmax_does_not_divide_by_zero() {
+        assert_eq!(calc(0.0).to_analog(1_000), 800);
+    }
+}

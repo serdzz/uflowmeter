@@ -91,6 +91,43 @@ impl Calculator {
         self.apply_ratio(table, raw)
     }
 
+    /// Convert a consumption reading into the DAC count an external
+    /// 4-20 mA loop module expects. Port of the C++
+    /// `Calculator<real_t>::to_analog` (`Inc/calculator.hpp:85`).
+    ///
+    /// `val` is the immediate consumption in litres per hour, i.e.
+    /// m³/h scaled by 1000 the way the C++ stores it
+    /// (`Src/measure.cpp:204`). Negative flow reads as zero current.
+    ///
+    /// Scaling: 800 counts = 4 mA, 3200 = 20 mA. Note the C++ formula
+    /// reaches 4000 at full scale (`1000 / 0.3125 = 3200`, plus the
+    /// 800 offset) rather than stopping at 3200 — kept verbatim rather
+    /// than "corrected", since the receiving module is calibrated
+    /// against this behaviour.
+    pub fn to_analog(&self, val: i32) -> u32 {
+        let val = if val < 0 { 0 } else { val };
+        // The C++ reads an AnalogMaxValue parameter here and falls back
+        // to Vmax when it is unset; Options has no such field, so this
+        // is always the fallback path.
+        let k = self.config.vmax * 0.3125;
+        if k <= 0.0 {
+            return 800;
+        }
+        (val as f32 / k) as u32 + 800
+    }
+
+    /// Zero out a value inside the dead band. `apply_ratio` already
+    /// does this per reading; the C++ applies it a second time to the
+    /// window average (`Src/measure.cpp:202`), since averaging a few
+    /// small non-zero readings can drift back above zero.
+    pub fn near_zero_filter(&self, val: f32) -> f32 {
+        if val < self.config.vmin && val > self.config.vneg {
+            0.0
+        } else {
+            val
+        }
+    }
+
     /// Apply piecewise linear calibration ratio
     pub fn apply_ratio(&self, table: &CalibTable, val: f32) -> f32 {
         let k = [table.data[0].k, table.data[1].k, table.data[2].k];

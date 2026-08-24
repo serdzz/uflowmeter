@@ -1,0 +1,40 @@
+[package]
+name = "bootloader"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Encrypted-update bootloader for uflowmeter (AES-256-GCM)"
+
+[dependencies]
+fwimage = { path = "../fwimage" }
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.3"
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+
+# Deliberately minimal: no time driver, no EXTI, and no `memory-x` —
+# the bootloader ships its own linker script, and letting embassy
+# generate one would silently put the bootloader back at 256 KiB
+# covering the whole part. Only the blocking flash driver is used.
+embassy-stm32 = { version = "0.6.0", features = [
+        "defmt",
+        "stm32l151rc",
+        # `time` brings in embassy-time's types only, with no driver
+        # behind them. embassy-stm32's ADC module references them
+        # unconditionally, so the crate will not compile without it —
+        # but nothing here calls a clock, so no timer peripheral is
+        # started and none is left running when we jump to slot A.
+        "time",
+] }
+
+[features]
+default = []
+# Build with a well-known key instead of requiring UFW_AES_KEY in the
+# environment. For bench work only — see src/key.rs.
+dev-key = []
+
+[[bin]]
+name = "bootloader"
+path = "src/main.rs"
+test = false
+bench = false

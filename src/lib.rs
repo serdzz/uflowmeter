@@ -1,49 +1,38 @@
 #![cfg_attr(not(test), no_std)]
 
-#[cfg(not(test))]
-extern crate alloc;
+// During the embassy migration most of the embedded glue (hardware/*,
+// history/mbus/modbus/etc.) is gated off because it still imports the
+// old stm32l1xx-hal types. Host tests keep working because they only
+// reach into the pure-Rust modules below.
 
 #[cfg(test)]
 extern crate alloc;
 
-#[cfg(not(test))]
-#[global_allocator]
-static ALLOCATOR: emballoc::Allocator<4096> = emballoc::Allocator::new();
-
-#[cfg(not(test))]
-extern crate stm32l1xx_hal as hal;
-
 pub mod apps;
+pub mod average_lib;
 pub mod calibration;
 pub mod gui;
-pub mod history_lib;
-pub mod measurement;
-pub mod ui;
-
-pub use apps::{Actions, App};
-pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
-
-#[cfg(not(test))]
-pub mod hardware {
-    pub mod display;
-    pub mod gpio_power;
-    pub mod hd44780;
-    pub mod pins;
-    pub mod tdc1000;
-    pub mod tdc7200;
-
-    pub use display::*;
-    pub use gpio_power::*;
-    pub use hd44780::*;
-    pub use pins::*;
-}
-
 pub mod history;
+pub mod history_lib;
+// Pure frame builder — no HAL, so it comes back into the tree ahead of
+// the transport that will carry it.
 pub mod mbus;
+// measurement/ultrasonic_flow.rs still uses embedded-hal 0.2 API
+// (blocking::spi, digital::v2) — superseded by the embassy port's
+// `drivers/tdc{1000,7200}.rs` + `calibration.rs` Calculator pair.
+// No tests of its own, so just leave it out of the module tree.
 pub mod modbus;
 pub mod modbus_handler;
 pub mod options;
 pub mod shell;
+pub mod tdc_lib;
+pub mod ui;
+pub mod upload_lib;
+pub mod xmodem_lib;
+
+pub use apps::{Actions, App, AppRequest};
+pub use gui::{CharacterDisplay, Edit, Label, UiEvent, Widget};
+pub use options::{CommType, Options};
 
 #[cfg(test)]
 mod history_lib_tests;
@@ -59,3 +48,15 @@ mod tests;
 
 #[cfg(test)]
 mod ui_history_tests;
+
+#[cfg(test)]
+mod tdc_lib_tests;
+
+#[cfg(test)]
+mod average_lib_tests;
+
+#[cfg(test)]
+mod xmodem_lib_tests;
+
+#[cfg(test)]
+mod upload_lib_tests;

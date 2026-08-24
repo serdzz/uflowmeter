@@ -14,8 +14,39 @@ This repo has a **dual-target setup**: the embedded binary builds for `thumbv7m-
 | Modbus tests only (single-threaded) | `make test-modbus` |
 | Clippy (host, `-D warnings`) | `make clippy` |
 | Run UI examples on host | `make ui-examples` |
-| Format check | `cargo fmt -- --check` |
-| Flash via probe-rs | `cargo embed --release` (chip configured in `.embed.toml`) |
+| Format check | `cargo fmt --all -- --check` |
+| Flash via probe-rs | `probe-rs run --chip STM32L151RC --speed 500 target/thumbv7m-none-eabi/release/uflowmeter` |
+
+**The toolchain is pinned** in `rust-toolchain.toml` (currently 1.98.0),
+along with the components and targets the build needs, so a fresh clone
+builds and lints without extra setup and CI compiles with the same rustc
+you do. That pin exists because it was learned the hard way: a lint
+present in 1.98 but not in 1.94 passed every local check and then failed
+four CI jobs at once. Bumping it is deliberate — change the channel, run
+`make clippy` and `make test`, and expect new lints.
+
+**Flash at `--speed 500`.** At the default SWD rate this board fails to
+connect, reproducibly and in several different ways depending on what the
+firmware is doing at the time: `SwdDpWait`, `SwdDpError`,
+`JtagGetIdcodeError`, or a connect that succeeds and then dies partway
+through the write with "An error with the flashing procedure has
+occurred". At 500 kHz it works first time. `cargo run --release` uses the
+runner in `.cargo/config.toml`, which does **not** pass the speed — so
+for anything beyond a quick attempt, invoke `probe-rs run` directly.
+
+If it still will not connect, hold the board's RESET button down, start
+the flash, and release RESET a second or two later. That has been the
+reliable fallback: on the occasions where a power-cycle left two
+successive attempts failing with `SwdDpWait`, holding RESET worked
+first time (though the write itself then takes ~26 s rather than the
+usual 6-15). The likely reason is that the firmware reaches STOP before
+the probe can attach — `min_stop_pause` is 100 ms and the executor
+sleeps between the 5 s measurement cycles, so the window after a reset
+is only milliseconds wide.
+
+`--connect-under-reset` is not the answer here: NRST is not wired
+through to the probe, which is why that path returns
+`JtagGetIdcodeError` instead of working.
 
 **Do not run `cargo test` directly** — without removing the embedded target it will try to link `std` against `thumbv7m-none-eabi` and fail. Use `make test` or `bash run_host.sh test ...`; the script removes the `target = ...` line and restores it via a `trap` even on failure.
 
@@ -74,3 +105,102 @@ Three coupled bugs that **together** keep the device from crashing but break the
 - Update RTIC past 1.1.4 if newer releases fix this.
 
 Until then, the file `src/main.rs:467` ordering and the `write()` at `src/hardware/power.rs:138` are **load-bearing** — do not "fix" them in isolation. The `// gpio_power.up() skipped` style stale comments around `exit_sleep` already led to one bad commit (`4c4776b`, reverted by `e70d707`).
+
+### Embassy port (branch `rework/embassy`, 2026-05-21)
+
+Sidestepping all three bugs by replacing the runtime entirely. Branch
+state at commit `1c07268`:
+
+- Cargo.toml: embassy-{executor 0.10, stm32 0.6, time 0.5, sync 0.8,
+  futures, embedded-hal} pinned to `serdzz/embassy` via
+  `[patch.crates-io]`. cortex-m-rtic, stm32l1xx-hal, shared-bus-rtic
+  dropped.
+- `src/main.rs.rtic-backup`: verbatim copy of the prior RTIC main.
+- `src/drivers/hd44780.rs`: async 4-bit parallel HD44780 driver using
+  `embassy_stm32::gpio::Output` + `embassy_time::Timer`. Verified on
+  hardware — text renders on the LCD.
+- `src/drivers/keypad.rs`: 20 Hz async polling task for PB6..PB9,
+  emits `KeyEvent::Pressed` into a static channel with the legacy
+  1 s / 150 ms repeat timing. Verified — all four buttons detected
+  and reflected on the LCD.
+- `src/lib.rs`: trimmed to the pure-Rust modules (apps, calibration,
+  gui, history_lib, ui). The legacy `hardware/*`, `measurement/*`,
+  `history.rs`, `mbus.rs`, `modbus*.rs`, `options.rs`, `shell.rs` are
+  gated off — they still use embedded-hal 0.2 + the old HAL.
+
+**Still TODO on the embassy branch:**
+
+- RTC datetime + backup registers (embassy-stm32 exposes this — wire
+  up `Rtc::new`, port the `app.last_uptime_rtc` backup-register dance).
+- STOP mode. Embassy's `low-power` feature is gated on L4/L5/U5/U3/
+  WB/WL/U0 — **not L1**. Two real options:
+    1. Add `stm32l1` to the cfg gates in `embassy-stm32/src/low_power.rs`
+       + write an L1 RTC-based LPTimeDriver. Hours of work, uncertain.
+    2. Skip the embassy executor integration and call `pwr.stop_mode()`
+       manually via the `embassy_stm32::pac::pwr` crate inside an idle
+       watchdog task. embassy_time stops ticking during STOP (TIM3 is
+       gated), which matches the prior SysTick behavior — readers
+       already handle it. Cheap.
+- Port EEPROM (25LC1024) — shared SPI2 between EEPROM / TDC1000 /
+  TDC7200. Use `embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice`.
+- TDC1000 + TDC7200 drivers. Will need to be rewritten on
+  embedded-hal 1.0 (the old ones used `blocking::spi::Transfer/Write`
+  + `digital::v2::OutputPin`).
+- USART1 for Modbus RTU + shell.
+- Wire the existing `ui.rs` event loop on top of the new `KEYS` channel.
+
+### UI findings verified on hardware (2026-08-02)
+
+Two independent defects both presented as "the buttons do not work".
+Both are fixed; the notes are here because the obvious-looking change
+in each case is the one that reintroduces the bug.
+
+1. **Do not treat EXTI edges as key presses** (`src/drivers/keypad.rs`).
+   An earlier commit moved this driver from polling to pure event-driven
+   for the idle power saving, awaiting `wait_for_falling_edge()` on the
+   four pins and emitting a press per edge. On hardware that loses
+   roughly nineteen presses in twenty. Measured with
+   `examples/buttons.rs`, which drives nothing but these four pins:
+   awaiting edges caught ~1 press in 20, sampling the same pins every
+   20 ms caught 286 of 286, with the level trace showing clean
+   transitions in both directions throughout. The pins and pull-ups are
+   fine; awaiting the edges is what drops them. The driver now uses
+   edges only to wake from STOP and detects presses by sampling — the
+   same arrangement the C++ `Keyboard::read` has always used. The idle
+   sample interval (150 ms) is deliberately above `min_stop_pause`
+   (100 ms) so STOP still happens between samples.
+
+2. **Park the LCD lines before cutting panel power** (`Hd44780::park`).
+   Dropping the supply on PC0 while RS/RW/E/D4-D7 are still driven feeds
+   current through the panel's protection diodes and leaves the
+   controller in a state it does not recover from on the next power-up.
+   The display then stays frozen no matter what is written to it — which
+   after the first 15 s idle timeout looks exactly like dead buttons.
+   The C++ does the equivalent in `Lcd::shutdown()` by reconfiguring the
+   pin list to inputs with pull-downs (`hardware/lcd.cpp:96-99`).
+
+Related: the LCD's microsecond delays busy-wait via `cortex_m::asm::delay`
+rather than `Timer::after`. Under the RTC-backed low-power time driver an
+await costs far more than the delay it asks for, and the driver needs ~170
+of them per frame — a full 2x16 render measured 96-100 ms with awaits
+against 17-31 ms without. See the comment on `delay_us`.
+
+`examples/buttons.rs` is kept for exactly this kind of question: it
+isolates keypad + LCD from the executor, the idle timeout, the
+measurement task and the menu, so "is it the driver or the firmware
+around it" can be answered in one flash.
+
+### Failed fix attempt (2026-05-19, do not retry as-is)
+
+Tried this combination expecting it to close #3 without the deeper refactor:
+
+- Fix #1: swap `power.exit_sleep()` before `power.active()` in `exti9_5`.
+- Fix #2: replace `self.rcc.cr.write(...)` with `self.rcc.cr.modify(...)`.
+- Mask SysTick `CTRL.TICKINT` in `enter_stop_mode`, clear `SCB.ICSR.PENDSTCLR` and re-enable `TICKINT` at the end of `exit_sleep` (after `reconfigure_after_stop`). Wrapped the unsafe MMIO in two helpers `mask_systick()` / `unmask_systick_clear_pending()` in `src/hardware/nvic.rs` to stay inside `#![deny(unsafe_code)]`.
+- Removed the `app_request::spawn_after(IDLE_TIMEOUT, DeepSleep)` / `handle.cancel()` churn from the TIM2 timer task; replaced with `app_request::spawn(AppRequest::DeepSleep)` on the `is_active() → false` transition. Removed the `handle: Option<...>` local field too.
+
+Result on hardware: clean boot, RTC wake works, but **first or second button press still HardFaults** with the same `Escalated BusFault → tq::dequeue → SysTick` stack trace at `0x00124xxx`. SysTick masking only narrows the immediate-wake window — corruption is already in the queue's RAM by the time `TICKINT` is re-enabled. Removing TIM2's `spawn_after` doesn't help either, because the only remaining producer (`modbus_poll`) wasn't even firing during the test — the queue should have been empty, yet `peek()` returned `Some(&garbage)`.
+
+So masking + queue hygiene around `Power` is **not** the right layer. The corruption either happens (a) inside `monotonic::now()` returning a value that makes `tq.set_compare()` confuse internal state, or (b) inside `cortex-m-rtic 1.1.4`'s timer-queue implementation itself across STOP. Fixing it requires touching RTIC internals or replacing the monotonic.
+
+All four changes above were reverted; tree returned to `e70d707` parity.

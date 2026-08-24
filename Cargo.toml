@@ -8,50 +8,93 @@ license = "MIT OR Apache-2.0"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+# The bootloader needs its own linker script (different FLASH origin and
+# length), which a second [[bin]] in this package cannot have — hence a
+# separate crate rather than another target. `fwimage` is shared by the
+# bootloader and the host packer so the image format cannot drift
+# between the thing that writes images and the thing that boots them.
+#
+# `default-members` is left implicit: with a package at the workspace
+# root, a bare `cargo build` still builds only that package, so the
+# usual embedded build is unchanged.
+members = ["bootloader", "fwimage", "tools/imgtool"]
+
 [patch.crates-io]
-stm32l1xx-hal = { git = "https://github.com/serdzz/stm32l1xx-hal" }
-#stm32l1xx-hal = { path = "../stm32l1xx-hal" }
+# Pinned to a rev on the fork's stm32l1_low_power branch, which adds
+# STM32L1 to the low_power.rs + rtc/low_power.rs cfg gates so embassy's
+# transparent STOP-mode executor works on our chip (upstream embassy
+# only supports L4/L5/U5/U3/WB/WL/U0).
+# See https://github.com/serdzz/embassy/commit/1cf4496.
+#
+# rev, not branch: tracking the branch means every fresh checkout
+# resolves whatever its HEAD is at that moment, so a push to the fork
+# silently changes what we build. Bump this deliberately.
+embassy-executor = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-stm32 = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-time = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-time-driver = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-sync = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-futures = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
+embassy-embedded-hal = { git = "https://github.com/serdzz/embassy", rev = "abb8bf6" }
 
 [dependencies]
-defmt = "0.3.5"
-defmt-rtt = "0.4.0"
-embedded-hal = { version = "0.2.7", package = "embedded-hal", features = [
-        "unproven",
-] }
-embedded-storage = "0.3.0"
-embedded-time = "0.12.1"
-stm32l1xx-hal = { version = "0.1.0", default-features = false, features = [
-        "rt",
-        "stm32l151",
-] }
-cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
-cortex-m-rt = "0.7.3"
-cortex-m-rtic = "1.1.4"
-rtic-sync = "1.0.1"
-panic-probe = { version = "1.0", features = ["print-defmt"] }
-systick-monotonic = "1.0.1"
+# Pure-Rust / target-agnostic deps. These build for both
+# thumbv7m-none-eabi and the host (for `cargo test --lib`).
+defmt = "1.0.1"
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+embedded-storage = "0.3.1"
+embedded-storage-async = "0.4"
 time = { version = "0.3.22", default-features = false, features = ["macros"] }
 microchip-eeprom-25lcxx = { git = "https://github.com/serdzz/microchip-eeprom-25x.git", rev = "b169fe4", features = ["25lc1024"] }
-shared-bus-rtic = "0.2.2"
 nb = "1.1.0"
 bitflags = "2.9.0"
 bit_field = "~0.10"
-heapless = "0.8.0"
+heapless = { version = "0.9", default-features = false }
+static_cell = "2.1"
+critical-section = "1.1"
 lcd = "0.4.1"
-emballoc = "0.1.0"
 paste = "1.0.9"
 crc16 = "0.4.0"
+fwimage = { path = "fwimage" }
 modular-bitfield = "0.13.0"
 compile-time = "0.2.0"
 rand_core = "0.9.3"
 rand_pcg = "0.9.0"
+
+# ARM-only deps. Pulled in for the `thumbv7m-none-eabi` build of the
+# binary; not needed for host-side `cargo test --lib`, which only
+# touches the pure-Rust modules.
+[target.'cfg(target_arch = "arm")'.dependencies]
+defmt-rtt = "1.0.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.3"
+
+embassy-executor = { version = "0.10.0", features = ["defmt"] }
+embassy-stm32 = { version = "0.6.0", features = [
+        "defmt",
+        "stm32l151rc",
+        "time-driver-any",
+        "exti",
+        # No "memory-x": it generates a script spanning the whole 256 KiB
+        # part, which was right before there was a bootloader. build.rs
+        # supplies memory-app.x instead, placing this binary in slot A.
+        "unstable-pac",
+        "low-power",
+        "executor-thread",
+] }
+embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
+embassy-futures = "0.1.2"
+embassy-embedded-hal = "0.6.0"
 
 [features]
 default = []
 low_power = []
 noswd = []
 
-# this lets you use `cargo fix`!
 [lib]
 name = "uflowmeter"
 path = "src/lib.rs"
@@ -66,8 +109,6 @@ bench = false
 [package.metadata.cargo-xbuild]
 target = "thumbv7m-none-eabi"
 
-
-# cargo build/run
 [profile.dev]
 codegen-units = 1
 debug = 2
@@ -76,7 +117,6 @@ incremental = false
 opt-level = 0
 overflow-checks = true
 
-# cargo build/run --release
 [profile.release]
 codegen-units = 1
 debug = 2
@@ -85,18 +125,3 @@ incremental = false
 lto = 'fat'
 opt-level = 'z'
 overflow-checks = false
-
-# # do not optimize proc-macro crates = faster builds from scratch
-# [profile.dev.build-override]
-# codegen-units = 8
-# debug = false
-# debug-assertions = false
-# opt-level = 0
-# overflow-checks = false
-
-# [profile.release.build-override]
-# codegen-units = 8
-# debug = false
-# debug-assertions = false
-# opt-level = 0
-# overflow-checks = false

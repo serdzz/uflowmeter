@@ -1,10 +1,29 @@
 name: CI
 
+# The compiler version is NOT decided here. `rust-toolchain.toml` at the
+# repository root pins it, and rustup honours that file over whatever
+# the steps below install or set as default — so CI and a developer's
+# machine compile with the same rustc, which is the whole point. The
+# `dtolnay/rust-toolchain` steps remain only to guarantee rustup is
+# present and warmed up; rustup then fetches the pinned toolchain, with
+# the components and targets the file lists, on the first cargo call.
+#
+# To move to a newer Rust, edit rust-toolchain.toml — not this file.
+
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, rework/embassy ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, rework/embassy ]
+  # Manual trigger, so CI can be started without inventing a commit.
+  # Earned its place on 2026-08-06: an Actions outage throttled webhooks
+  # to ~15% of events and silently dropped a push, and with only event
+  # triggers there was no way to ask for the run that never happened.
+  #
+  # GitHub only shows the "Run workflow" button once this file is on the
+  # default branch, so it does nothing for branch work until it reaches
+  # main.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -110,6 +129,141 @@ jobs:
       - name: Run clippy
         run: cargo clippy --lib --release -- -D warnings
 
+  # The job above lints src/lib.rs on the host, where main.rs and
+  # src/drivers/* are cfg'd out entirely. This one lints the binary
+  # against the real target so warnings in those modules are caught.
+  clippy-embedded:
+    name: Clippy (Embedded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7m-none-eabi
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-clippy-embedded-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-clippy-embedded-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-clippy-embedded-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: cargo clippy --release --bin uflowmeter -- -D warnings
+
+  bootloader:
+    name: Bootloader (Embedded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7m-none-eabi
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-bootloader-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-bootloader-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-bootloader-${{ hashFiles('**/Cargo.lock') }}
+
+      # dev-key, because CI has no production key and must not have one.
+      # This checks the bootloader compiles, links inside its 16 KiB
+      # region and lints clean; it says nothing about which key a release
+      # build would carry.
+      - name: Build bootloader
+        run: cargo build --release -p bootloader --features dev-key
+
+      - name: Clippy bootloader
+        run: cargo clippy --release -p bootloader --features dev-key -- -D warnings
+
+      # The linker enforces the 16 KiB budget, so a build that links is
+      # already within it. This surfaces how much room is left, so the
+      # margin shrinking is visible in the log before it becomes a
+      # failed build.
+      # `continue-on-error`, not `|| true`: a broken size report shows up
+      # red in the UI instead of vanishing, but does not gate the branch.
+      # The old `|| true` hid a real defect — llvm-tools was being added
+      # to the default toolchain while cargo ran the pinned one, so this
+      # step had silently stopped reporting anything.
+      - name: Report bootloader size
+        continue-on-error: true
+        run: |
+          cargo install cargo-binutils --locked
+          cargo size --release -p bootloader --features dev-key
+
+  fwimage:
+    name: Image format + AES-GCM (Host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-fwimage-${{ hashFiles('**/Cargo.lock') }}
+
+      # These crates are host-side, so the embedded target pinned in
+      # .cargo/config.toml has to be overridden explicitly.
+      - name: Test image format against reference vectors
+        run: cargo test -p fwimage --target x86_64-unknown-linux-gnu
+
+      - name: Build the packer
+        run: cargo build -p imgtool --target x86_64-unknown-linux-gnu
+
+      - name: Clippy
+        run: cargo clippy -p fwimage -p imgtool --target x86_64-unknown-linux-gnu -- -D warnings
+
+      # End-to-end: pack a file, confirm it authenticates, and confirm a
+      # single flipped byte does not. Cheap, and it covers the seam
+      # between the packer and the format that unit tests cannot.
+      - name: Round-trip an image
+        run: |
+          BIN=target/x86_64-unknown-linux-gnu/debug/imgtool
+          $BIN keygen --out ci.key
+          head -c 40000 /dev/urandom > ci.bin
+          $BIN pack --key ci.key --in ci.bin --out ci.ufw --version 7
+          $BIN verify --key ci.key ci.ufw
+          printf '\xff' | dd of=ci.ufw bs=1 seek=300 count=1 conv=notrunc
+          if $BIN verify --key ci.key ci.ufw; then
+            echo "FAIL: a modified image authenticated"; exit 1
+          fi
+          echo "OK: modified image rejected"
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
@@ -122,4 +276,4 @@ jobs:
           components: rustfmt
       
       - name: Check formatting
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check

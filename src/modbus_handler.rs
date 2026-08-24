@@ -14,9 +14,13 @@ use heapless::Vec;
 
 /// Register address ranges
 pub mod registers {
-    /// Options registers (0-31): 32 registers = 64 bytes
+    /// Options registers (0-57): 58 registers = 116 bytes — the whole
+    /// serialized Options bitfield (including const_val + padding
+    /// trailer). Increased from 0x001F so the per-installation
+    /// calibration table (zero1/v**/k** and const_val) is reachable
+    /// over Modbus, not just the first 64 bytes.
     pub const OPTIONS_START: u16 = 0x0000;
-    pub const OPTIONS_END: u16 = 0x001F;
+    pub const OPTIONS_END: u16 = 0x0039;
 
     /// Current flow data (100-103): 4 registers = 8 bytes  
     pub const FLOW_RATE: u16 = 0x0064; // f32
@@ -454,10 +458,12 @@ mod tests {
         }
     }
 
-    // Mock history for testing
+    // Mock history for testing. Pins the inner error type to `()` to
+    // match `MockStorage::Error = options::Error<()>` so the compiler
+    // can resolve `handle_request`'s E generic at call-sites below.
     struct MockHistory;
 
-    impl<S, E> HistoryAccess<S, E> for MockHistory {
+    impl<S> HistoryAccess<S, ()> for MockHistory {
         fn find(
             &mut self,
             _storage: &mut S,

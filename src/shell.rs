@@ -15,11 +15,37 @@
 //!   get_calibration    — dump calibration data
 //!   help               — list commands
 
+use crate::upload_lib::UploadKind;
 use heapless::String;
 use heapless::Vec;
 
 #[allow(dead_code)]
 const MAX_LINE: usize = 80;
+
+/// Side-effect a successfully-parsed shell command wants the
+/// dispatcher to perform. Returned alongside the text reply so
+/// `shell_task` can route the action without re-parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellAction {
+    /// `date set <unix_ts>` → push to RTC.
+    SetDateUnix(u32),
+    /// `set_serial <N>` → mutate Options.serial_number + save.
+    SetSerial(u32),
+    /// `set_verbose <0|1>` → tweak defmt verbosity (no persistence).
+    SetVerbose(bool),
+    /// `set_calibration` / `set_configuration` → hand the line over to
+    /// an XMODEM transfer, then write the blob into Options and save.
+    Upload(UploadKind),
+    /// A completed XMODEM transfer, raised by the UART session once the
+    /// blob is in hand. The array is sized for the larger of the two
+    /// payloads; `kind` says how much of it is meaningful.
+    ApplyUpload(UploadKind, [u8; crate::upload_lib::CALIBRATION_BLOCK]),
+    /// `firmware_update` → receive an encrypted image into flash slot B
+    /// over XMODEM, then reset so the bootloader installs it. Handled
+    /// entirely inside the UART session; it never reaches the main loop,
+    /// because the device does not come back from it.
+    FirmwareUpdate,
+}
 
 /// Shell command result
 #[allow(clippy::large_enum_variant)]
@@ -30,6 +56,47 @@ pub enum ShellResult {
     NotAShellCommand,
     /// Command parse error
     Error(&'static str),
+}
+
+/// Re-parse a shell line and extract any side-effect the dispatcher
+/// should perform. Mirrors `process_line` but only emits an action
+/// for the variants that have observable effects beyond the text
+/// reply. Returns `None` for read-only commands (`help`, `date get`,
+/// `get_settings`, `get_calibration`) and for non-shell input.
+pub fn parse_action(line: &[u8]) -> Option<ShellAction> {
+    let trimmed = trim_line(line);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let tokens: Vec<&[u8], 8> = split_tokens(trimmed).ok()?;
+    if tokens.is_empty() {
+        return None;
+    }
+    let cmd = tokens[0];
+    let args = &tokens[1..];
+    if eq(cmd, b"date") && args.len() >= 2 && eq(args[0], b"set") {
+        return parse_u32(args[1]).map(ShellAction::SetDateUnix);
+    }
+    if eq(cmd, b"set_serial") && !args.is_empty() {
+        return parse_u32(args[0]).map(ShellAction::SetSerial);
+    }
+    if eq(cmd, b"set_verbose") && !args.is_empty() {
+        return parse_u8(args[0]).and_then(|v| match v {
+            0 => Some(ShellAction::SetVerbose(false)),
+            1 => Some(ShellAction::SetVerbose(true)),
+            _ => None,
+        });
+    }
+    if eq(cmd, b"set_calibration") {
+        return Some(ShellAction::Upload(UploadKind::Calibration));
+    }
+    if eq(cmd, b"set_configuration") {
+        return Some(ShellAction::Upload(UploadKind::TdcRegs));
+    }
+    if eq(cmd, b"firmware_update") {
+        return Some(ShellAction::FirmwareUpdate);
+    }
+    None
 }
 
 /// Process a line of text input as a shell command.
@@ -75,6 +142,20 @@ pub fn process_line(line: &[u8]) -> ShellResult {
     if eq(cmd, b"get_settings") {
         return cmd_get_settings();
     }
+    if eq(cmd, b"set_calibration") {
+        return ShellResult::Ok(lit(
+            "Upload 56 bytes (14 f32) with XMODEM-CRC.\r\nWaiting for transfer...\r\n",
+        ));
+    }
+    if eq(cmd, b"set_configuration") {
+        return ShellResult::Ok(lit(
+            "Upload 20 bytes (10 TDC1000 + 10 TDC7200) with XMODEM-CRC.\r\nWaiting for transfer...\r\n",
+        ));
+    }
+    if eq(cmd, b"firmware_update") {
+        return ShellResult::Ok(lit("Upload an encrypted image (.ufw) with XMODEM-CRC.\r\n\
+             The meter resets when the transfer completes.\r\nWaiting for transfer...\r\n"));
+    }
     if eq(cmd, b"get_calibration") {
         return cmd_get_calibration();
     }
@@ -94,6 +175,9 @@ fn help_text() -> String<256> {
          set_verbose <0|1>\r\n\
          get_settings\r\n\
          get_calibration\r\n\
+         set_calibration\r\n\
+         set_configuration\r\n\
+         firmware_update\r\n\
          help\r\n")
 }
 
@@ -377,5 +461,138 @@ mod tests {
         assert!(eq(tokens[0], b"date"));
         assert!(eq(tokens[1], b"set"));
         assert!(eq(tokens[2], b"123"));
+    }
+
+    // ─── parse_action coverage ────────────────────────────────────────
+
+    #[test]
+    fn test_parse_action_date_set() {
+        assert_eq!(
+            parse_action(b"date set 1700000000\r\n"),
+            Some(ShellAction::SetDateUnix(1700000000))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_date_set_missing_ts() {
+        // "date set" with no timestamp → not an actionable command.
+        assert_eq!(parse_action(b"date set\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_date_set_bad_ts() {
+        assert_eq!(parse_action(b"date set abc\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_date_get_is_readonly() {
+        // `date get` is a textual query, no side-effect to dispatch.
+        assert_eq!(parse_action(b"date get\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_set_serial() {
+        assert_eq!(
+            parse_action(b"set_serial 12345\r\n"),
+            Some(ShellAction::SetSerial(12345))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_serial_missing() {
+        assert_eq!(parse_action(b"set_serial\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_set_serial_zero() {
+        assert_eq!(
+            parse_action(b"set_serial 0\r\n"),
+            Some(ShellAction::SetSerial(0))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_verbose_on() {
+        assert_eq!(
+            parse_action(b"set_verbose 1\r\n"),
+            Some(ShellAction::SetVerbose(true))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_verbose_off() {
+        assert_eq!(
+            parse_action(b"set_verbose 0\r\n"),
+            Some(ShellAction::SetVerbose(false))
+        );
+    }
+
+    #[test]
+    fn test_parse_action_set_verbose_bad_value() {
+        // Anything other than 0 or 1 is rejected.
+        assert_eq!(parse_action(b"set_verbose 2\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_help_is_readonly() {
+        // `help` prints text only.
+        assert_eq!(parse_action(b"help\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_empty() {
+        assert_eq!(parse_action(b""), None);
+        assert_eq!(parse_action(b"\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_unknown_command() {
+        assert_eq!(parse_action(b"frobnicate 42\r\n"), None);
+    }
+
+    #[test]
+    fn test_parse_action_binary_noise() {
+        // Random binary (e.g. mis-routed Modbus bytes) must not be
+        // mistaken for a shell action.
+        assert_eq!(parse_action(b"\x01\x03\x00\x00\x00\x0a"), None);
+    }
+}
+
+#[cfg(test)]
+mod upload_command_tests {
+    use super::*;
+
+    #[test]
+    fn set_calibration_requests_a_56_byte_upload() {
+        assert_eq!(
+            parse_action(b"set_calibration\r\n"),
+            Some(ShellAction::Upload(UploadKind::Calibration))
+        );
+    }
+
+    #[test]
+    fn set_configuration_requests_the_tdc_block() {
+        assert_eq!(
+            parse_action(b"set_configuration\r\n"),
+            Some(ShellAction::Upload(UploadKind::TdcRegs))
+        );
+    }
+
+    #[test]
+    fn both_upload_commands_are_recognised_by_process_line() {
+        // Must not fall through to NotAShellCommand, or the line would
+        // be handed to the Modbus framer instead.
+        for line in [b"set_calibration\r\n".as_slice(), b"set_configuration\r\n"] {
+            assert!(
+                matches!(process_line(line), ShellResult::Ok(_)),
+                "unrecognised: {:?}",
+                core::str::from_utf8(line)
+            );
+        }
+    }
+
+    #[test]
+    fn a_similar_but_different_command_is_not_an_upload() {
+        assert_eq!(parse_action(b"get_calibration\r\n"), None);
     }
 }
