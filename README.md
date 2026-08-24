@@ -20,7 +20,7 @@ authenticates them before touching the running application.
   [`docs/BOOTLOADER.md`](docs/BOOTLOADER.md).
 - **Low power** — the async runtime drops the part into STOP between
   measurement cycles.
-- **Host-testable core** — 338 tests run on the development machine,
+- **Host-testable core** — 345 tests run on the development machine,
   no hardware required.
 
 ## Hardware
@@ -147,8 +147,16 @@ Staged. Resetting...
 ```
 
 The meter reboots, and the bootloader authenticates the image before
-any of it reaches the running slot. An interrupted transfer or a power
-cut at any point leaves the old application bootable — see
+any of it reaches the running slot.
+
+Mind the line rate. An image is about 86 KiB, which is 880 000 bits on
+an 8N1 line, so the transfer costs roughly 8 s at 115200, 1.5 min at
+the 9600 Modbus uses, and 12 min at the 1200 of M-Bus. Protocol
+overhead adds little on top — XMODEM spends five bytes per 1 KiB
+packet. M-Bus is still a poor mode to be in when an update is due.
+
+An interrupted transfer or a power cut at any point leaves the old
+application bootable — see
 [`docs/BOOTLOADER.md`](docs/BOOTLOADER.md) for the ordering that
 guarantees it.
 
@@ -158,7 +166,7 @@ The pure logic is split out of the hardware-facing code specifically so
 it can be tested without a device.
 
 ```sh
-make test           # application library — 312 tests
+make test           # application library — 319 tests
 make test-fwimage   # image format and AES-GCM — 26 tests
 make clippy         # all four crates, both targets, -D warnings
 make ui-examples    # run the UI on the host
@@ -170,9 +178,25 @@ self-consistency.
 
 ## Interfaces
 
-**Modbus RTU** — 115200 baud, 8N1, configurable address. Functions
-0x03, 0x06 and 0x10. Register map in
-[`docs/MODBUS_MAP.md`](docs/MODBUS_MAP.md).
+One USART serves all of these, so **the configured communication type
+decides the line rate** and everything else on the wire follows it:
+
+| Communication type | Line rate |
+|---|---|
+| Modbus | 9600 baud |
+| M-Bus | 1200 baud |
+| off / analog | 115200 baud |
+
+The rate is read when a session starts, so a change made in the menu or
+over Modbus takes effect within a second without a reset. The practical
+consequence is that the shell is reachable at 9600 while Modbus is
+selected, not at its own rate — there is only one pair of wires. The
+Modbus inter-frame silence follows from the rate as the spec requires,
+which is why it is not a constant: at 9600 the boundary is about 4 ms,
+not the 1750 µs that applies above 19200 baud.
+
+**Modbus RTU** — 8N1, configurable address, functions 0x03, 0x06 and
+0x10. Register map in [`docs/MODBUS_MAP.md`](docs/MODBUS_MAP.md).
 
 **Shell** — shares USART1 with Modbus; a line is treated as a command
 if it starts with a known keyword, otherwise as a Modbus frame. `help`
