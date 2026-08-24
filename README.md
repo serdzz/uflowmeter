@@ -1,209 +1,229 @@
 # uFlowmeter
 
-Embedded ultrasonic flow measurement system based on STM32L151 microcontroller.
+Transit-time ultrasonic liquid flow meter, in Rust, on an STM32L151RC.
 
-> **Branch note** — `rework/embassy` ports the firmware from RTIC to
-> the [embassy](https://github.com/embassy-rs/embassy) async runtime.
-> Most of the device-feature documentation in this README still
-> applies; for what's different (task layout, power management,
-> EXTI-wake UART, Modbus map extensions, build changes), see
-> [`docs/EMBASSY_PORT.md`](docs/EMBASSY_PORT.md).
+Firmware updates are delivered over the meter's own serial line as
+AES-256-GCM encrypted images, installed by a bootloader that
+authenticates them before touching the running application.
 
-## Description
+## Features
 
-uFlowmeter is a transit-time-of-flight liquid flow measurement system implemented in Rust for the STM32 platform. The system uses TDC1000/TDC7200 chipsets for precise ultrasonic signal transit time measurement and flow velocity calculation.
+- **Transit-time measurement** with a TDC1000 analog front end and a
+  TDC7200 time-to-digital converter, two transducer pairs, both flow
+  directions.
+- **History** in external EEPROM — hourly, daily and monthly ring
+  buffers sized at compile time.
+- **Local UI** — 2x16 character LCD with a four-button keypad and a
+  Cyrillic menu.
+- **Outputs** — Modbus RTU, M-Bus datagrams, and a 4-20 mA loop frame.
+- **Encrypted field updates** over XMODEM; see
+  [`docs/BOOTLOADER.md`](docs/BOOTLOADER.md).
+- **Low power** — the async runtime drops the part into STOP between
+  measurement cycles.
+- **Host-testable core** — 338 tests run on the development machine,
+  no hardware required.
 
-### Key Features
+## Hardware
 
-- **Precise Measurement**: Using TDC7200 for high-precision time measurement
-- **Bidirectional Measurement**: Support for measurement in both flow directions
-- **Data Storage**: Measurement history (hourly, daily, monthly) in non-volatile memory
-- **Interface**: LCD 1602 display with keyboard for control
-- **Modbus RTU**: Protocol for remote monitoring and configuration
-- **Power Management**: Low power consumption with sleep mode support
-- **Testability**: Modular architecture with unit tests for core logic
+| | |
+|---|---|
+| MCU | STM32L151RC — Cortex-M3, 256 KiB flash, 32 KiB RAM |
+| AFE | TDC1000 — ultrasonic transducer drive and receive |
+| TDC | TDC7200 — precision time-to-digital converter |
+| Display | HD44780-compatible 2x16 character LCD |
+| Storage | Microchip 25LC1024 — 128 KiB SPI EEPROM |
+| Buses | SPI2 shared by both TDCs and the EEPROM; USART1 for Modbus, the shell and updates |
 
-## Hardware Platform
+The TDC pair is clocked from an 8 MHz reference the MCU drives out on
+MCO/PA8.
 
-- **MCU**: STM32L151C6 (Cortex-M3, 256KB Flash, 32KB RAM)
-- **AFE**: TDC1000 — analog front-end for ultrasonic transducer control
-- **TDC**: TDC7200 — precision time-to-digital converter
-- **Display**: LCD 1602 character display
-- **Memory**: Microchip 25LC1024 (128KB EEPROM) for history and configuration storage
-- **Interfaces**: 
-  - SPI for communication with TDC chipsets and EEPROM
-  - UART for Modbus RTU
-  - GPIO for keyboard and power management
+## Flash layout
 
-## Project Structure
+**The application does not boot on its own.** It links at `0x08004000`,
+not at the reset vector, so a unit flashed with only `uflowmeter` will
+sit dead until the bootloader is flashed alongside it.
+
+```
+0x08000000  ┌──────────────────┐
+            │ bootloader  16K  │  authenticate, install, jump
+0x08004000  ├──────────────────┤
+            │ slot A     120K  │  the application, runs from here
+0x08022000  ├──────────────────┤
+            │ slot B     120K  │  staged update image
+0x08040000  └──────────────────┘
+```
+
+These numbers live in `fwimage::layout`, which is shared by everything
+that depends on them, with a test that checks the regions tile the part
+exactly.
+
+## Repository layout
 
 ```
 uflowmeter/
-├── src/
-│   ├── main.rs              # Main application (RTIC)
-│   ├── lib.rs               # Library interface for testing
-│   ├── apps.rs              # Application logic (measurement, settings)
-│   ├── ui.rs                # UI framework
-│   ├── gui/                 # GUI widgets (Label, Edit, etc.)
-│   ├── hardware/            # Hardware drivers
-│   │   ├── tdc1000.rs       # TDC1000 driver
-│   │   ├── tdc7200.rs       # TDC7200 driver
-│   │   ├── hd44780.rs       # LCD driver
-│   │   └── pins.rs          # Pin configuration
-│   ├── history.rs           # History system (embedded)
-│   ├── history_lib.rs       # History system (testable)
-│   ├── modbus.rs            # Modbus RTU implementation
-│   ├── modbus_handler.rs    # Modbus request handler
-│   └── measurement/         # Flow measurement algorithms
-├── examples/                # Usage examples
-├── docs/                    # Documentation
-│   ├── ARCHITECTURE.md      # System architecture
-│   ├── MODBUS_MAP.md        # Modbus register map
-│   ├── TESTING.md           # Testing guide
-│   └── ...
-├── tests/                   # Integration tests
-├── Cargo.toml               # Dependency configuration
-├── memory.x                 # Linker memory map
-├── .embed.toml              # cargo-embed configuration
-└── Makefile                 # Build and test commands
+├── src/                     application firmware
+│   ├── main.rs              embassy tasks, wiring, measurement loop
+│   ├── lib.rs               host-testable surface
+│   ├── drivers/             hd44780, keypad, uart, eeprom, tdc1000,
+│   │                        tdc7200, sensor_mux, slot_b
+│   ├── ui.rs, gui/          screens, menus and widgets
+│   ├── *_lib.rs             pure logic, tested on the host:
+│   │                        history, tdc, average, xmodem, upload
+│   ├── modbus*.rs, mbus.rs  protocol implementations
+│   └── shell.rs             serial command interface
+├── bootloader/              separate crate, own linker script
+├── fwimage/                 update image format + streaming AES-256-GCM
+├── tools/imgtool/           host tool: pack, encrypt and inspect images
+├── examples/                standalone bring-up programs
+├── docs/                    architecture and hardware references
+├── memory-app.x             linker memory map for slot A
+├── rust-toolchain.toml      pinned compiler, components and targets
+└── Makefile                 build, flash, test and lint entry points
 ```
 
-## Building and Flashing
+`src/hardware/` and `src/measurement/` are **legacy** — they belong to
+the RTIC firmware this replaced, are not referenced by `lib.rs`, and do
+not compile against the current HAL. `src/main.rs.rtic-backup` is kept
+for the same archival reason. Do not treat any of them as live code.
 
-### Requirements
+## Building
 
-- Rust toolchain (rustup recommended)
-- `thumbv7m-none-eabi` target
-- cargo-embed or probe-rs for flashing
+The toolchain is pinned in `rust-toolchain.toml`, so rustup installs
+the right compiler, components and target automatically. Nothing needs
+to be set up by hand.
 
-```bash
-# Install target
-rustup target add thumbv7m-none-eabi
-
-# Install cargo-embed (optional)
-cargo install cargo-embed
+```sh
+make build        # application  → slot A
+make bootloader   # bootloader   → reset vector (needs UFW_AES_KEY)
 ```
 
-### Building
+Release builds of the bootloader require a signing key:
 
-```bash
-# Release build
-make build
-# or
-cargo build --release
-
-# Debug build
-cargo build
+```sh
+make imgtool
+target/<host>/release/imgtool keygen --out ufw.key
+UFW_AES_KEY=$(cat ufw.key) make bootloader
 ```
 
-### Flashing
+A build with no key **fails by design** — a default key that shipped by
+accident would be worse than a build error, since nothing about the
+resulting firmware would look wrong. `--features dev-key` compiles in a
+well-known key for bench work only.
 
-```bash
-# Using cargo-embed
-cargo embed --release
+## Flashing
 
-# Or using probe-rs directly
-probe-rs run --chip STM32L151C6 target/thumbv7m-none-eabi/release/uflowmeter
+Two binaries, two downloads:
+
+```sh
+make flash              # bootloader + application, from scratch
+make flash-bootloader   # bootloader only
+make flash-app          # application only
 ```
+
+**Always flash at `--speed 500`** — the Makefile targets do. At the
+default SWD rate this board fails to connect, reproducibly and in
+several different ways depending on what the firmware is doing at the
+time. `CLAUDE.md` documents the failure modes and the hold-RESET
+fallback.
+
+`cargo run --release` is no longer the way to flash: it would write
+only the application and leave the reset vector as it found it.
+
+## Field updates
+
+```sh
+UFW_AES_KEY=$(cat ufw.key) make image IMG_VERSION=7
+```
+
+builds the application, encrypts it and writes `app.ufw`. Send it to a
+meter over the serial line:
+
+```
+> firmware_update
+Erasing staging slot...
+Send the .ufw image with XMODEM-CRC now.
+<send app.ufw with any XMODEM-CRC sender>
+Staged. Resetting...
+```
+
+The meter reboots, and the bootloader authenticates the image before
+any of it reaches the running slot. An interrupted transfer or a power
+cut at any point leaves the old application bootable — see
+[`docs/BOOTLOADER.md`](docs/BOOTLOADER.md) for the ordering that
+guarantees it.
 
 ## Testing
 
-The project supports testing on host platform thanks to its modular architecture.
+The pure logic is split out of the hardware-facing code specifically so
+it can be tested without a device.
 
-```bash
-# Run all tests
-make test   
-
-# Run Modbus tests
-make test-modbus
-
-# Run tests with verbose output
-make test-modbus-verbose
-
-# Run clippy
-make clippy
+```sh
+make test           # application library — 312 tests
+make test-fwimage   # image format and AES-GCM — 26 tests
+make clippy         # all four crates, both targets, -D warnings
+make ui-examples    # run the UI on the host
 ```
 
-### UI Examples
+The AES-GCM vectors come from OpenSSL rather than from this
+implementation: checking our own output against itself would only prove
+self-consistency.
 
-```bash
-# Run UI examples on host platform
-make ui-examples
-```
+## Interfaces
 
-For more details on testing, see [docs/TESTING.md](docs/TESTING.md).
+**Modbus RTU** — 115200 baud, 8N1, configurable address. Functions
+0x03, 0x06 and 0x10. Register map in
+[`docs/MODBUS_MAP.md`](docs/MODBUS_MAP.md).
 
-## Architecture
+**Shell** — shares USART1 with Modbus; a line is treated as a command
+if it starts with a known keyword, otherwise as a Modbus frame. `help`
+lists the commands.
 
-The project uses RTIC (Real-Time Interrupt-driven Concurrency) for real-time task management:
+**M-Bus** — RSP_UD datagram broadcast every five minutes.
 
-- **Measurement Task**: Periodic flow measurement
-- **UI Task**: Keyboard handling and display updates
-- **Modbus Task**: UART request processing
-- **History**: Automatic data storage to EEPROM
-
-For detailed architecture documentation, see:
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md)
-- [docs/HISTORY_SYSTEM.md](docs/HISTORY_SYSTEM.md)
-
-## Modbus Interface
-
-The device supports Modbus RTU for remote monitoring:
-
-- **Baud Rate**: 9600 baud, 8N1
-- **Device Address**: Configurable (default 1)
-- **Functions**: 0x03 (Read Holding Registers), 0x06 (Write Single Register), 0x10 (Write Multiple Registers)
-
-See register map in [docs/MODBUS_MAP.md](docs/MODBUS_MAP.md).
-
-## Examples
-
-Available examples in the `examples/` directory:
-
-- `display_example.rs` — LCD display usage example
-- `ui_examples.rs` — UI widgets demonstration (for host platform)
-- `ui_examples_embedded.rs` — UI widgets for embedded system
-- `options_example.rs` — Working with system settings
-- `power_management_example.rs` — Power management
-- `ultrasonic_flow_example.rs` — Flow measurement example
-
-See also [examples/README.md](examples/README.md).
+**4-20 mA** — a serial frame carrying the scaled reading.
 
 ## Debugging
 
-The project uses defmt for logging via RTT (Real-Time Transfer):
+`defmt` over RTT:
 
-```bash
-# Run with RTT logging
-cargo embed --release
+```sh
+probe-rs run --chip STM32L151RC --speed 500 \
+  target/thumbv7m-none-eabi/release/uflowmeter
 ```
 
-Logs will be displayed in the terminal with timestamps.
-
-## Dependencies
-
-Main dependencies:
-
-- `stm32l1xx-hal` — HAL for STM32L1xx
-- `cortex-m-rtic` — RTIC framework
-- `microchip-eeprom-25lcxx` — EEPROM driver
-- `embedded-hal` — Embedded HAL abstractions
-- `time` — Date/time handling
-- `defmt` — Efficient logging for embedded systems
-
-See full list in [Cargo.toml](Cargo.toml).
+With a bootloader present, the application starts a few milliseconds
+after reset; RTT attaches to whichever program is running.
 
 ## Documentation
 
-Complete documentation is available in the `docs/` directory:
+| | |
+|---|---|
+| [BOOTLOADER.md](docs/BOOTLOADER.md) | flash layout, image format, keys, update procedure |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | system overview and dual-target rationale |
+| [UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | screens, widgets, menu controller |
+| [HISTORY_SYSTEM.md](docs/HISTORY_SYSTEM.md) | ring buffer layout and retention |
+| [MODBUS_MAP.md](docs/MODBUS_MAP.md) | register map |
+| [TDC1000_REGISTER_MAP.md](docs/TDC1000_REGISTER_MAP.md), [TDC7200_REGISTER_MAP.md](docs/TDC7200_REGISTER_MAP.md) | chip registers |
+| [DETAILED.md](docs/DETAILED.md) | detailed record of the measurement and UI work |
+| `CLAUDE.md` | build commands, flashing quirks, load-bearing bugs |
 
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture
-- [HARDWARE_INTEGRATION.md](docs/HARDWARE_INTEGRATION.md) — Hardware integration
-- [TESTING.md](docs/TESTING.md) — Testing guide
-- [MODBUS_MAP.md](docs/MODBUS_MAP.md) — Modbus register map
-- [TDC1000_REGISTER_MAP.md](docs/TDC1000_REGISTER_MAP.md) — TDC1000 registers
-- [TDC7200_REGISTER_MAP.md](docs/TDC7200_REGISTER_MAP.md) — TDC7200 registers
+## Status
+
+Verified on hardware: boot, LCD, keypad, menu and edit mode, EEPROM,
+RTC, the measurement cycle, both TDC chips configuring and reading
+back, Modbus, the shell, and the bootloader handing over to slot A.
+
+Not yet verified:
+
+- **The update path has never run end to end on a device.** Only the
+  bootloader's no-image boot path has executed; it has not
+  authenticated, decrypted or installed a real image on hardware.
+- **No XMODEM transfer has crossed the wire.** The protocol logic is
+  tested, but the bench has no RS-485 adapter.
+- **Time of flight is unproven.** With no transducers attached the
+  TDC1000 reports `ERR_NO_SIG`. The decode arithmetic is covered by
+  tests against the reference implementation; that it yields correct
+  physical readings is not established.
 
 ## License
 
