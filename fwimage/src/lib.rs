@@ -314,13 +314,14 @@ impl Verifier {
             self.residual_len = 0;
         }
 
-        let full = data.len() / 16;
-        for chunk in data[..full * 16].chunks_exact(16) {
+        // `as_chunks` hands back the whole blocks and the short tail in
+        // one go, so the block count never has to be recomputed by hand.
+        let (blocks, rest) = data.as_chunks::<16>();
+        for chunk in blocks {
             let block = GenericArray::clone_from_slice(chunk);
             self.ghash.update(&[block]);
         }
 
-        let rest = &data[full * 16..];
         self.residual[..rest.len()].copy_from_slice(rest);
         self.residual_len = rest.len();
     }
