@@ -10,9 +10,17 @@
 //! line buffer wins; otherwise the modbus buffer wins. Downstream
 //! consumers can pick whichever channel they care about.
 //!
-//! Modbus RTU spec: at baudrates above 19200 the inter-frame silence
-//! is fixed at 1.75 ms (3.5 char times at 19200). At 115200 the real
-//! 3.5 char time is ~305 µs but the spec floor wins, so we use 1.75 ms.
+//! The line rate is not fixed here. It follows the configured
+//! communication type — Modbus 9600, M-Bus 1200, otherwise 115200 —
+//! and is read once per session, since a USART's rate cannot be
+//! changed while it is running and the peripheral is torn down and
+//! rebuilt between sessions anyway. `CommType::baudrate` owns the
+//! mapping.
+//!
+//! The Modbus inter-frame silence follows from that rate rather than
+//! being a constant: the spec puts the boundary at 3.5 character times
+//! and fixes it at 1.75 ms only above 19200 baud, so at 9600 it is
+//! about 4 ms. See `options::modbus_frame_gap_micros`.
 
 use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_stm32::exti::ExtiInput;
@@ -28,6 +36,7 @@ use heapless::Vec;
 
 use crate::drivers::slot_b::SlotBWriter;
 use crate::Irqs;
+use uflowmeter::options::{modbus_frame_gap_micros, CommType};
 use uflowmeter::shell::ShellAction;
 use uflowmeter::upload_lib::{self, UploadKind};
 use uflowmeter::xmodem_lib::{self, Response, XModemReceiver};
@@ -35,7 +44,6 @@ use uflowmeter::xmodem_lib::{self, Response, XModemReceiver};
 /// Cancel byte, echoed twice when the sender cancels.
 const CAN: u8 = 0x18;
 
-const FRAME_GAP: Duration = Duration::from_micros(1750);
 const MAX_FRAME: usize = 256;
 
 /// How often to re-send 'C' while waiting for the sender to start.
@@ -104,6 +112,10 @@ pub async fn uart_session_task(
     mut exti10: Peri<'static, peripherals::EXTI10>,
     flash_peri: Peri<'static, peripherals::FLASH>,
 ) {
+    // Taken here rather than passed in: the subscription is this task's
+    // own business, and threading it through the spawn call would push
+    // the peripheral list past what is readable.
+    let mut opt_rx = defmt::unwrap!(crate::OPTIONS_WATCH.receiver());
     // Held for the life of the task rather than acquired per update:
     // the peripheral is a singleton, and the update path must not be
     // able to fail because something else took it first.
@@ -127,9 +139,22 @@ pub async fn uart_session_task(
             }
         }; // ExtiInput drops here → PA10 / EXTI10 free again
 
-        // PHASE 2 — init USART for a session.
+        // PHASE 2 — init USART for a session, at the rate the selected
+        // protocol runs at. Read per session rather than once: a change
+        // made in the menu or over Modbus takes effect on the next
+        // session, which is at most SESSION_IDLE_TIMEOUT away. The rate
+        // cannot be changed on a live USART anyway — the peripheral is
+        // torn down and rebuilt each time, so this is the natural place
+        // for it.
+        let comm = opt_rx
+            .try_get()
+            .map(|o| CommType::from_u8(o.comm_type()))
+            .unwrap_or(CommType::None);
+        let baud = comm.baudrate();
+        let frame_gap = Duration::from_micros(modbus_frame_gap_micros(baud));
+
         let mut cfg = UartConfig::default();
-        cfg.baudrate = 115200;
+        cfg.baudrate = baud;
         let mut uart = match Uart::new(
             usart_peri.reborrow(),
             rx_pin.reborrow(),
@@ -154,7 +179,7 @@ pub async fn uart_session_task(
         }
 
         // PHASE 3 — run the framer session until the line goes quiet.
-        run_session(&mut uart, &mut flash).await;
+        run_session(&mut uart, &mut flash, frame_gap).await;
 
         // PHASE 4 — uart dropped at end of loop, releasing USART /
         // pins / DMA. STOP refcount drops, executor sleeps.
@@ -163,7 +188,11 @@ pub async fn uart_session_task(
 
 /// Read/dispatch loop. Returns when the line has been quiet for
 /// SESSION_IDLE_TIMEOUT and there is no pending TX/frame work.
-async fn run_session(uart: &mut Uart<'_, Async>, flash: &mut Flash<'static, Blocking>) {
+async fn run_session(
+    uart: &mut Uart<'_, Async>,
+    flash: &mut Flash<'static, Blocking>,
+    frame_gap: Duration,
+) {
     let mut buf = [0u8; 1];
     let mut line: ShellLine = Vec::new();
     let mut frame: ModbusFrame = Vec::new();
@@ -194,10 +223,13 @@ async fn run_session(uart: &mut Uart<'_, Async>, flash: &mut Flash<'static, Bloc
                 Either3::Third(tx_data) => write_tx(&tx_data, uart).await,
             }
         } else {
-            // Mid-frame — race FRAME_GAP for modbus boundary detection.
+            // Mid-frame — race the inter-frame silence for the modbus
+            // boundary. It scales with the baud rate: at 9600 the
+            // boundary is ~4 ms, and the 1750 µs of the fast case would
+            // cut frames apart mid-transmission.
             match select3(
                 uart.read(&mut buf),
-                Timer::after(FRAME_GAP),
+                Timer::after(frame_gap),
                 UART_TX.receive(),
             )
             .await

@@ -322,7 +322,8 @@ async fn main(spawner: Spawner) {
         watchdog
     )));
 
-    // USART1: TX=PA9, RX=PA10. 115200 baud (legacy default).
+    // USART1: TX=PA9, RX=PA10. The line rate follows the configured
+    // communication type — see CommType::baudrate.
     // PC9 (RsPowerEn, active-LOW) powers the RS485 transceiver.
     let _rs_power = Output::new(p.PC9, Level::Low, Speed::Low);
     // USART1 stays uninitialised at boot. `uart_session_task` brings

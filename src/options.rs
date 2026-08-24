@@ -32,6 +32,47 @@ impl CommType {
     pub fn as_u8(self) -> u8 {
         self as u8
     }
+
+    /// Line rate USART1 runs at for this communication type.
+    ///
+    /// One UART serves all of them, so the selected protocol decides
+    /// the rate and everything else on the line follows — including the
+    /// shell, which is reachable at 9600 while Modbus is selected
+    /// rather than at its own 115200. There is only one pair of wires.
+    ///
+    /// `None` and `Analog` do not use the serial line for a protocol,
+    /// so they leave it at the fast rate where the shell is comfortable
+    /// and a firmware image does not take a quarter of an hour.
+    pub fn baudrate(self) -> u32 {
+        match self {
+            CommType::ModBus => 9_600,
+            CommType::MBus => 1_200,
+            CommType::None | CommType::Analog => 115_200,
+        }
+    }
+}
+
+/// Modbus RTU inter-frame silence for `baud`, in microseconds.
+///
+/// The spec puts the frame boundary at 3.5 character times, and a
+/// character is 11 bits — start, eight data, parity or its stand-in,
+/// stop. Above 19200 baud it stops scaling and fixes the value at
+/// 1750 µs instead, because the true figure gets short enough that
+/// timing it reliably costs more than it is worth.
+///
+/// This has to follow the baud rate rather than sit at a constant: at
+/// 9600 the real boundary is about 4 ms, and a framer using the 1750 µs
+/// of the fast case would cut frames apart in the middle.
+pub fn modbus_frame_gap_micros(baud: u32) -> u64 {
+    const FIXED_ABOVE: u32 = 19_200;
+    const FIXED_MICROS: u64 = 1_750;
+    if baud > FIXED_ABOVE || baud == 0 {
+        FIXED_MICROS
+    } else {
+        // 3.5 chars * 11 bits = 38.5 bit times; in microseconds that is
+        // 38_500_000 / baud.
+        38_500_000u64 / baud as u64
+    }
 }
 
 #[bitfield]

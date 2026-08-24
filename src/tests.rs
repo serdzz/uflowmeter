@@ -730,3 +730,77 @@ mod to_analog_tests {
         assert_eq!(calc(0.0).to_analog(1_000), 800);
     }
 }
+
+// ── Line rate follows the selected communication type ────────────────
+
+mod comm_baud {
+    use crate::options::{modbus_frame_gap_micros, CommType};
+
+    #[test]
+    fn each_protocol_gets_its_own_line_rate() {
+        assert_eq!(CommType::ModBus.baudrate(), 9_600);
+        assert_eq!(CommType::MBus.baudrate(), 1_200);
+    }
+
+    /// Neither of these drives a protocol on the serial line, so the
+    /// line is left fast — where the shell is comfortable and a
+    /// firmware image does not take a quarter of an hour.
+    #[test]
+    fn the_remaining_types_leave_the_line_fast() {
+        assert_eq!(CommType::None.baudrate(), 115_200);
+        assert_eq!(CommType::Analog.baudrate(), 115_200);
+    }
+
+    #[test]
+    fn the_stored_byte_maps_to_the_expected_rate() {
+        let rate = |v| CommType::from_u8(v).baudrate();
+        assert_eq!(rate(0), 115_200);
+        assert_eq!(rate(1), 1_200);
+        assert_eq!(rate(2), 9_600);
+        assert_eq!(rate(3), 115_200);
+        // Anything unrecognised is None, not a panic and not a silent
+        // wrong rate — a corrupt options blob must still leave a
+        // reachable shell.
+        assert_eq!(rate(0xFF), 115_200);
+    }
+
+    /// 3.5 character times of 11 bits each. The framer must widen with
+    /// the baud rate: at 9600 the boundary is about 4 ms, and using the
+    /// fast case's 1750 µs there would cut frames apart mid-message.
+    #[test]
+    fn the_frame_gap_scales_below_19200() {
+        assert_eq!(modbus_frame_gap_micros(9_600), 4_010);
+        assert_eq!(modbus_frame_gap_micros(1_200), 32_083);
+        assert_eq!(modbus_frame_gap_micros(19_200), 2_005);
+    }
+
+    /// Above 19200 the spec stops scaling and fixes the value, because
+    /// the true figure gets too short to time reliably.
+    #[test]
+    fn the_frame_gap_is_fixed_above_19200() {
+        assert_eq!(modbus_frame_gap_micros(38_400), 1_750);
+        assert_eq!(modbus_frame_gap_micros(115_200), 1_750);
+    }
+
+    /// A zero baud rate can only come from a corrupt configuration.
+    /// Dividing by it would panic, so it falls back rather than faulting.
+    #[test]
+    fn a_zero_baud_rate_does_not_divide_by_zero() {
+        assert_eq!(modbus_frame_gap_micros(0), 1_750);
+    }
+
+    /// The gap is what tells one Modbus frame from the next, so it must
+    /// never come out shorter as the line gets slower.
+    #[test]
+    fn a_slower_line_never_gets_a_shorter_gap() {
+        let rates = [1_200u32, 2_400, 4_800, 9_600, 19_200];
+        for pair in rates.windows(2) {
+            assert!(
+                modbus_frame_gap_micros(pair[0]) > modbus_frame_gap_micros(pair[1]),
+                "{} should get a longer gap than {}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+}
