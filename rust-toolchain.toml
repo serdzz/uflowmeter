@@ -1,0 +1,26 @@
+# Pin the toolchain so the build machine and CI agree.
+#
+# Added 2026-08-24 after a lint that exists in 1.98 but not in 1.94 passed
+# every local check and then failed four CI jobs at once. Nothing was
+# wrong with the code review or the local run — they were simply done
+# with a different compiler. A floating `stable` also means any Rust
+# release can break the build with no change on our side.
+#
+# `components` and `targets` are listed here rather than only in the CI
+# workflow so that rustup installs them automatically wherever this
+# repository is checked out: a fresh clone can build the firmware and
+# run every lint without being told which pieces to add first.
+#
+# Bumping this is a deliberate act. Change the channel, run `make clippy`
+# and `make test`, and expect new lints — that is the point of pinning:
+# the new compiler arrives when someone is looking, not on a Tuesday
+# when CI happens to run.
+[toolchain]
+channel = "1.98.0"
+# llvm-tools is what cargo-binutils needs for `cargo size` and the
+# `cargo objcopy` in `make image`. It belongs here rather than in a CI
+# `rustup component add`, which would attach it to the default
+# toolchain while cargo runs the pinned one — the component would be
+# missing exactly where it is used.
+components = ["clippy", "rustfmt", "llvm-tools"]
+targets = ["thumbv7m-none-eabi"]

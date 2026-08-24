@@ -14,8 +14,16 @@ This repo has a **dual-target setup**: the embedded binary builds for `thumbv7m-
 | Modbus tests only (single-threaded) | `make test-modbus` |
 | Clippy (host, `-D warnings`) | `make clippy` |
 | Run UI examples on host | `make ui-examples` |
-| Format check | `cargo fmt -- --check` |
+| Format check | `cargo fmt --all -- --check` |
 | Flash via probe-rs | `probe-rs run --chip STM32L151RC --speed 500 target/thumbv7m-none-eabi/release/uflowmeter` |
+
+**The toolchain is pinned** in `rust-toolchain.toml` (currently 1.98.0),
+along with the components and targets the build needs, so a fresh clone
+builds and lints without extra setup and CI compiles with the same rustc
+you do. That pin exists because it was learned the hard way: a lint
+present in 1.98 but not in 1.94 passed every local check and then failed
+four CI jobs at once. Bumping it is deliberate — change the channel, run
+`make clippy` and `make test`, and expect new lints.
 
 **Flash at `--speed 500`.** At the default SWD rate this board fails to
 connect, reproducibly and in several different ways depending on what the
