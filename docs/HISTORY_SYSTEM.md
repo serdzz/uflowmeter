@@ -4,6 +4,15 @@
 
 The history system stores and retrieves historical flow data over different time periods. Data is persisted in non-volatile memory (EEPROM) as ring buffers with fixed time intervals.
 
+> **Status: the read path is not implemented.** History is recorded —
+> `handle_history_tick` writes to all three ring buffers every minute —
+> but nothing reads it back. `AppRequest::SetHistory` is a no-op in the
+> current firmware, `RingStorage::find` is called from nowhere outside
+> the tests, and `app.history_state.flow` is never assigned. The UI
+> reads that field and so always shows no value. Everything below about
+> `find()` and the lookup flow describes a library API that works and is
+> tested, not a feature the meter currently offers.
+
 ## History Types
 
 ```rust
@@ -42,69 +51,45 @@ AppRequest::SetHistory(
 
 ### Processing Flow
 
+The first two steps happen; the third does not.
+
 ```
 1. UI Widget generates Actions::SetHistory
    └─> User changes date/time in the History widget
 
 2. App::handle_event converts to AppRequest::SetHistory
-   └─> Routes request to the app_request handler
+   └─> Pushed onto the AppRequest channel
 
-3. app_request task handles the request
-   ├─> Determines history type (Hour/Day/Month)
-   ├─> Acquires locks on resources (app, history, storage)
-   ├─> Calls history.find(storage, timestamp)
-   └─> Updates app.history_state.flow
+3. handle_app_request receives it
+   └─> no-op: logs "SetHistory (unimplemented)" and returns
 
-4. UI updates on the next cycle
-   └─> Widget::update() reads app.history_state
+4. UI reads app.history_state.flow, which nothing ever sets
+   └─> always renders as no value
 ```
+
+Wiring it up means doing in `handle_app_request` what the RTIC firmware
+did in its `app_request` task: pick the ring buffer for the requested
+`HistoryType`, call `find`, and store the result in
+`app.history_state.flow`. No locking is involved — the main loop owns
+all three buffers and the EEPROM directly.
 
 ## Implementation in main.rs
 
+The current handler, in `handle_app_request`:
+
 ```rust
-#[task(capacity = 8, priority = 1, 
-       shared = [power, lcd, rtc, app, 
-                 hour_history, day_history, month_history, storage])]
-fn app_request(ctx: app_request::Context, req: AppRequest) {
-    match req {
-        AppRequest::SetHistory(history_type, timestamp) => {
-        defmt::info!("SetHistory");
-            
-            match history_type {
-                HistoryType::Hour => {
-                    // Acquire locks for atomic resource access
-                    (app, hour_history, storage).lock(|app, hour_history, storage| {
-                        // Search for record by timestamp
-                        if let Ok(Some(flow)) = hour_history.find(storage, timestamp) {
-                            app.history_state.flow = Some(flow as f32);
-                        } else {
-                            app.history_state.flow = None;
-                        }
-                    });
-                }
-                HistoryType::Day => {
-                    (app, day_history, storage).lock(|app, day_history, storage| {
-                        if let Ok(Some(flow)) = day_history.find(storage, timestamp) {
-                            app.history_state.flow = Some(flow as f32);
-                        } else {
-                            app.history_state.flow = None;
-                        }
-                    });
-                }
-                HistoryType::Month => {
-                    (app, month_history, storage).lock(|app, month_history, storage| {
-                        if let Ok(Some(flow)) = month_history.find(storage, timestamp) {
-                            app.history_state.flow = Some(flow as f32);
-                        } else {
-                            app.history_state.flow = None;
-                        }
-                    });
-                }
-            }
-        }
-    }
+AppRequest::SetHistory(_, _) => {
+    defmt::trace!("AppRequest::SetHistory (unimplemented)");
 }
 ```
+
+The RTIC firmware implemented this with a `#[task]` holding `shared`
+resources and a `(app, hour_history, storage).lock(...)` around each
+lookup. Neither exists now: embassy's executor is single-threaded and
+the main loop owns the buffers, so an implementation would call `find`
+directly. The old version is in `src/main.rs.rtic-backup` if the shape
+is wanted for reference — it is kept as an archive and does not compile
+against the current HAL.
 
 ## RingStorage Structure
 
@@ -286,7 +271,8 @@ System:
 
 ## Writing Data
 
-Data is written automatically in `app_request(AppRequest::Process)`:
+Data is written by `handle_history_tick`, driven by `history_tick_task`,
+which fires once every 60 s:
 
 ```rust
 AppRequest::Process => {
@@ -477,13 +463,13 @@ mod tests {
                           │ AppRequest   │
                           │ SetHistory() │
                           └──────┬───────┘
-           │ app_request queue
+           │ AppRequest channel
                                  v
                           ┌──────────────┐
-                          │ app_request  │
-                          │    task      │
+                          │ handle_app_  │
+                          │ request      │
                           └──────────────┘
-                                 │ lock resources
+                                 │ (not implemented)
                                  v
             ┌────────────────────┼────────────────────┐
             │                    │                    │
@@ -517,6 +503,7 @@ mod tests {
 ## See Also
 
 - [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md) — overall UI architecture
-- `src/history.rs` — RingStorage implementation
+- `src/history_lib.rs` — RingStorage implementation, host-testable
+- `src/history.rs` — the EEPROM-bound wrapper
 - `src/apps.rs` — App state and Actions
-- `src/main.rs` — app_request handler
+- `src/main.rs` — `handle_app_request` and `handle_history_tick`
