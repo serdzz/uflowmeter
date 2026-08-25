@@ -43,7 +43,7 @@ The uFlowmeter is an embedded ultrasonic flow measurement system built on STM32L
 
 ---
 
-## Build Configuration
+## Dual-target design
 
 This project is an embedded STM32 application that needs to work both as:
 1. **Binary (no_std embedded)**: Runs on embedded hardware with `thumbv7m-none-eabi` target
@@ -134,68 +134,83 @@ The Makefile handles target switching automatically. When running tests, Cargo u
 
 ## Hardware Driver Architecture
 
+Both TDC drivers are generic over `embedded_hal::spi::SpiDevice`, and in
+`main.rs` that is `embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice`
+over SPI2 — the bus is shared with the EEPROM, and each device owns its
+own chip-select `Output`. `main.rs` defines `Tdc1000Dev` and `Tdc7200Dev`
+as aliases for the fully-specified types.
+
 ### TDC1000 Driver (`src/drivers/tdc1000.rs`)
 
-The TDC1000 is an analog front-end (AFE) that drives ultrasonic transducers and manages channel switching.
+Analog front end: drives the transducers and switches channels.
 
-**Key Features:**
-- SPI interface for configuration (8 registers: 0x00-0x07)
-- GPIO control for enable and trigger signals
-- Channel switching (CH1/CH2) for bidirectional measurement
-- Error flag monitoring
-- Hardware reset capability
-
-**Public API:**
 ```rust
-pub struct Tdc1000<SPI, ENABLE, TRIGGER> { ... }
+pub struct Tdc1000<'d, D> { ... }
 
-impl<SPI, ENABLE, TRIGGER, E> Tdc1000<SPI, ENABLE, TRIGGER>
-where
-    SPI: spi::Write<u8, Error = E> + spi::Transfer<u8, Error = E>,
-    ENABLE: OutputPin,
-    TRIGGER: OutputPin,
-{
-    pub fn new(spi: SPI, enable: ENABLE, trigger: TRIGGER) -> Result<Self, E>
-    pub fn reset(&mut self) -> Result<(), PinError>
-    pub fn set_channel(&mut self, ch2: bool) -> Result<(), E>
-    pub fn get_error_flags(&mut self) -> Result<u8, E>
-    pub fn set_config0(&mut self, value: u8) -> Result<(), E>
-    // ... other register setters
+impl<'d, D: SpiDevice> Tdc1000<'d, D> {
+    pub fn new(spi: D, en: Output<'d>, res: Output<'d>) -> Self
+    pub fn reset(&mut self)
+    pub fn power_on(&mut self)
+    pub fn power_off(&mut self)
+    pub fn read_register(&mut self, address: u8) -> Result<u8, D::Error>
+    pub fn write_register(&mut self, address: u8, value: u8) -> Result<(), D::Error>
+    pub fn load_config(&mut self, regs: &[u8; CONFIG_REG_COUNT]) -> Result<(), D::Error>
+    pub fn set_channel(&mut self, ch2: bool) -> Result<(), D::Error>
+    pub fn clear_error_flags(&mut self) -> Result<(), D::Error>
+    pub fn error_flags(&mut self) -> Result<u8, D::Error>
 }
 ```
 
-**Example Usage:**
-```rust
-let mut tdc1000 = Tdc1000::new(spi2_bus.acquire(), pb10, pb11)?;
-tdc1000.reset()?;
-tdc1000.set_channel(false)?;  // Select CH1 (downstream)
-let errors = tdc1000.get_error_flags()?;
-```
+`CONFIG_REG_COUNT` is 10 — registers `0x00..0x09`, loaded as one block
+from `Options::tdc1000_regs`.
+
+**`reset()` leaves the line LOW, and that is not a detail.** RESET is
+active high; low is the running level. Holding it high keeps the chip in
+reset for its whole life, and the only symptom is that every register
+read returns `0x00` while the TDC7200 — which has no reset line —
+answers normally. That asymmetry is the diagnostic.
+
+**Channel select is bit 2 (`0x04`) of CONFIG_2**, not bit 0. With the
+wrong bit both "channels" measure the same acoustic path and the flow
+comes out at zero without any error being reported.
 
 ### TDC7200 Driver (`src/drivers/tdc7200.rs`)
 
-The TDC7200 is a time-to-digital converter that measures precise time intervals for TOF calculation.
+Time-to-digital converter: measures the interval the flow calculation
+needs.
 
-**Key Features:**
-- SPI interface for configuration and data readout
-- Multiple measurement ranges (250ns to 8ms)
-- Interrupt-based measurement completion
-- Supports multi-cycle averaging
-
-**Public API:**
 ```rust
-pub struct Tdc7200<SPI, ENABLE, CS, INTB> { ... }
+pub struct Tdc7200<'d, D> { ... }
 
-impl<SPI, ENABLE, CS, INTB> Tdc7200<SPI, ENABLE, CS, INTB> {
-    // Simple constructor without trait bounds for use in SharedBus context
-    pub fn new_simple(spi: SPI, enable: ENABLE, cs: CS, intb: INTB) -> Self
+impl<'d, D: SpiDevice> Tdc7200<'d, D> {
+    pub fn new(...) -> Self
+    pub fn power_on(&mut self)
+    pub fn power_off(&mut self)
+    pub fn read_register(&mut self, address: u8) -> Result<u8, D::Error>
+    pub fn write_register(&mut self, address: u8, value: u8) -> Result<(), D::Error>
+    pub fn read_bulk(...) -> Result<(), D::Error>
+    pub fn load_config(&mut self, regs: &[u8; CONFIG_REG_COUNT]) -> Result<(), D::Error>
+    pub fn clear_int_flags(&mut self) -> Result<(), D::Error>
+    pub fn start_measurement(&mut self) -> Result<(), D::Error>
+    pub fn read_results(&mut self) -> Result<[u8; RESULT_BLOCK_LEN], D::Error>
+    pub fn stop_numbers(&self) -> usize
 }
 ```
 
-**Note on Trait Bounds:**
-The original `new()` constructor has complex trait bounds that conflict with SharedBus. The `new_simple()` constructor bypasses these for use in examples. See "SharedBus Patterns" section for details.
+`read_results` returns the whole 39-byte block from `0x10`; decoding it
+into picoseconds is `tdc_lib::decode_tof`, which is pure and tested on
+the host.
 
----
+### Command byte encoding (both chips)
+
+Bit 6 is write, bit 7 is auto-increment, and a read sends the bare
+address. Multi-byte reads need auto-increment or they return the same
+register repeatedly.
+
+The legacy driver in `src/hardware/tdc7200.rs` has read and write
+inverted relative to both the datasheet and the C++ firmware. It is
+archived, not a reference.
+
 
 ## Flow Measurement Algorithm
 
@@ -269,73 +284,22 @@ pub struct Options {
 
 ---
 
-## SharedBus Pattern and Limitations
+## Sharing SPI2
 
-### Problem
+Three devices sit on SPI2: TDC1000, TDC7200 and the 25LC1024 EEPROM.
+They share it through
+`embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice`, with a
+`NoopRawMutex` — the executor is single-threaded, so no real locking is
+needed — and one chip-select `Output` per device.
 
-Multiple SPI devices (TDC1000, TDC7200) need to share a single SPI peripheral. The `shared-bus` crate provides `BusManager` for this, but introduces trait bound challenges.
+The RTIC firmware used `shared_bus_rtic::SharedBus`, whose `BusProxy`
+did not satisfy the `E: From<PinError>` bound the old TDC drivers
+carried. That produced a rule about only calling concrete TDC methods
+from monomorphised code in `main.rs`, and a `new_simple` constructor to
+sidestep the bound. None of it applies now: the crate is gone, the
+drivers are generic over `SpiDevice` and carry no pin-error bound, and
+`new_simple` does not exist.
 
-### SharedBus Usage
-
-```rust
-use shared_bus::BusManagerSimple;
-
-type Spi2BusManager = BusManagerSimple<Spi<SPI2, ...>>;
-
-// Create bus manager
-let spi2_manager: Spi2BusManager = BusManagerSimple::new(spi2);
-
-// Acquire proxies for each device
-let tdc1000 = Tdc1000::new(spi2_manager.acquire(), enable_pin, trigger_pin)?;
-let tdc7200 = Tdc7200::new_simple(spi2_manager.acquire(), enable_pin, cs_pin, intb_pin);
-```
-
-### Trait Bound Limitations
-
-**Core Issue:**
-TDC driver methods have trait bounds like:
-```rust
-where
-    SPI: spi::Write<u8, Error = E>,
-    ENABLE: OutputPin<Error = PinError>,
-    E: From<PinError>  // ← This bound is NOT satisfied by SharedBus
-```
-
-SharedBus's `BusProxy` wraps the SPI error type, but doesn't implement `From<PinError>`, so the error conversion trait bound fails.
-
-**Workarounds:**
-
-1. **Call methods in `main()` where concrete types are known:**
-   ```rust
-   // This WORKS in main.rs:
-   let errors = tdc1000.get_error_flags()?;
-   tdc1000.set_channel(false)?;
-   ```
-
-2. **Use `new_simple()` for TDC7200:**
-   ```rust
-   // Instead of new() with trait bounds:
-   let tdc7200 = Tdc7200::new_simple(spi, enable, cs, intb);
-   ```
-
-3. **Avoid generic functions that call TDC methods:**
-   ```rust
-   // This FAILS:
-   fn measure<S, E, T>(tdc: &mut Tdc1000<S, E, T>) {
-       tdc.set_channel(false)?;  // ← Trait bound not satisfied
-   }
-   ```
-
-**Why It Works in main.rs:**
-- Concrete types known at compile time
-- Compiler can monomorphize the code
-- No generic type parameters
-- See `src/main.rs:242` for working example with `set_config0()`
-
-**Documentation:**
-See `examples/ultrasonic_flow_example.rs` header comments for detailed explanation and examples.
-
----
 
 ## Examples
 

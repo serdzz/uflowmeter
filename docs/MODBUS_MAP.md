@@ -5,7 +5,11 @@
 The flowmeter implements Modbus RTU slave protocol over RS-485/UART serial communication.
 
 **Default Settings:**
-- Baudrate: 9600 bps (configurable)
+- Baudrate: 9600 bps — not set independently. USART1 runs at whatever
+  the selected communication type needs (Modbus 9600, M-Bus 1200,
+  otherwise 115200), so choosing Modbus is what selects 9600. See
+  `CommType::baudrate`. The inter-frame silence follows the rate:
+  ~4 ms at 9600, not the 1750 µs that applies above 19200 baud.
 - Data bits: 8
 - Parity: None
 - Stop bits: 1
