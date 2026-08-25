@@ -1,7 +1,9 @@
-# Embassy port — `rework/embassy`
+# Embassy port
 
 This document covers the port from the original RTIC 1.1.4 build to
 the [embassy](https://github.com/embassy-rs/embassy) async runtime.
+The port is merged; this is kept as the record of what changed and
+why.
 Only the differences against the RTIC-era architecture documents
 (`ARCHITECTURE.md`, `HISTORY_SYSTEM.md`, etc.) are listed here — for
 everything that hasn't changed (Modbus register map, history ring
@@ -208,7 +210,7 @@ embassy-*) are now under
 (defmt, embedded-hal, heapless, time, modular-bitfield, crc16, …)
 remain in `[dependencies]` so `cargo test --lib` works on host
 without stripping the `.cargo/config.toml` target. `make test` runs
-264 tests across `calibration`, `modbus`, `modbus_handler`,
+The host suite has grown since; see the README for the current count. At the time of the port, 264 tests across `calibration`, `modbus`, `modbus_handler`,
 `options`, `shell`, `history`, `history_lib`, `ui_history`,
 `ui_logic`, and the `tests` module.
 

@@ -53,7 +53,7 @@ This project is an embedded STM32 application that needs to work both as:
 
 ### `src/main.rs`
 - Binary entry point
-- Uses embedded features (RTIC, HAL, etc.)
+- Uses embedded features (embassy executor, HAL, etc.)
 - Compiled only for `thumbv7m-none-eabi` target
 
 ### `src/lib.rs`
@@ -126,7 +126,7 @@ The Makefile handles target switching automatically. When running tests, Cargo u
 
 ## Limitations
 
-- Tests cannot directly test embedded-specific code (RTIC, HAL)
+- Tests cannot directly test embedded-specific code (embassy tasks, HAL)
 - Only core logic can be tested this way
 - For full integration tests, physical hardware or simulator needed
 
@@ -134,7 +134,7 @@ The Makefile handles target switching automatically. When running tests, Cargo u
 
 ## Hardware Driver Architecture
 
-### TDC1000 Driver (`src/hardware/tdc1000.rs`)
+### TDC1000 Driver (`src/drivers/tdc1000.rs`)
 
 The TDC1000 is an analog front-end (AFE) that drives ultrasonic transducers and manages channel switching.
 
@@ -172,7 +172,7 @@ tdc1000.set_channel(false)?;  // Select CH1 (downstream)
 let errors = tdc1000.get_error_flags()?;
 ```
 
-### TDC7200 Driver (`src/hardware/tdc7200.rs`)
+### TDC7200 Driver (`src/drivers/tdc7200.rs`)
 
 The TDC7200 is a time-to-digital converter that measures precise time intervals for TOF calculation.
 

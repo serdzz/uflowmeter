@@ -47,7 +47,7 @@ AppRequest::SetHistory(
    └─> User changes date/time in the History widget
 
 2. App::handle_event converts to AppRequest::SetHistory
-   └─> Routes request to the RTIC task
+   └─> Routes request to the app_request handler
 
 3. app_request task handles the request
    ├─> Determines history type (Hour/Day/Month)
@@ -252,7 +252,7 @@ User:
 System:
 1. Widget generates Actions::SetHistory(Hour, timestamp)
 2. App converts to AppRequest::SetHistory(Hour, timestamp)
-3. RTIC task calls hour_history.find(storage, timestamp)
+3. app_request handler calls hour_history.find(storage, timestamp)
 4. Result is stored in app.history_state.flow
 5. Widget displays the value on the LCD
 ```
@@ -477,7 +477,7 @@ mod tests {
                           │ AppRequest   │
                           │ SetHistory() │
                           └──────┬───────┘
-           │ RTIC task queue
+           │ app_request queue
                                  v
                           ┌──────────────┐
                           │ app_request  │
@@ -519,4 +519,4 @@ mod tests {
 - [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md) — overall UI architecture
 - `src/history.rs` — RingStorage implementation
 - `src/apps.rs` — App state and Actions
-- `src/main.rs` — RTIC task app_request
+- `src/main.rs` — app_request handler

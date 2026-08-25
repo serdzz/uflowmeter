@@ -507,7 +507,7 @@ src/
 │   └── history_widget.rs        # HistoryWidget<K>, HistoryKind, HourKind/DayKind/MonthKind, HistoryType
 ├── apps.rs                      # App state, Actions, AppRequest
 ├── ui.rs                        # Viewport (widget_mux), LabelScreen, LabelsWidget
-└── main.rs                      # RTIC integration
+└── main.rs                      # embassy task integration
 ```
 
 ### Type Locations
