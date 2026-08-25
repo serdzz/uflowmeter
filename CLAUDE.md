@@ -61,7 +61,7 @@ through to the probe, which is why that path returns
 ## Runtime architecture
 
 - **RTIC app** (`src/main.rs`, `#[app(device = hal::stm32, ...)]`): tasks include `rtc_timer`, `timer`, `ui_timer`, `app_request`, `usart1_irq`, `shell_cmd`, `modbus_poll`, `tdc7200_irq`, `tdc7200_result`, `idle`. `Shared` carries the LCD, three history ring buffers, EEPROM `storage`, `app`, `ui`, both TDC drivers, modbus state, and `options`.
-- **UI** (`src/ui.rs` + `src/gui/`): a `Screen` enum + `MenuController` holding 4 `MenuList` ring buffers. No `dyn` or heap dispatch — modeled after the C++ UsFlowMeter `UI::List`. Widgets implement `Widget<S, A>`; compose them with the `widget_group!` macro.
+- **UI** (`src/ui.rs` + `src/gui/`): a `Screen` enum + `MenuController` holding 4 `MenuList` ring buffers. No `dyn` or heap dispatch — modeled after the C++ UsFlowMeter `UI::List`. The widget framework in `src/gui/` is separate and **not used by the shipped UI**: `ui.rs` takes only `CharacterDisplay`, `HistoryType` and `UiEvent` from it, and `widget_group!` / `widget_mux!` are invoked nowhere.
 - **History** (`history_lib.rs`): three `RingStorage<OFFSET, COUNT, INTERVAL>` const-generic ring buffers (Hour / Day / Month) backed by 25LC1024 EEPROM. Layout offsets are chained at compile time via `HourHistory::SIZE_ON_FLASH` etc.
 - **SharedBus**: SPI2 is shared between TDC1000, TDC7200, and EEPROM via `shared_bus_rtic::SharedBus`.
 
@@ -81,7 +81,7 @@ TDC driver methods carry an `E: From<PinError>` bound that is **not** satisfied 
 ## Where to look for deeper context
 
 - `docs/ARCHITECTURE.md` — system overview, dual-target rationale, SharedBus pitfalls
-- `docs/UI_ARCHITECTURE.md` — `Widget` trait, `Screen`/`MenuController`, `widget_group!`
+- `docs/UI_ARCHITECTURE.md` — `Screen`/`MenuController` (shipped) vs the unused `Widget` framework in `src/gui/`
 - `docs/HISTORY_SYSTEM.md` — `RingStorage` layout and retention table
 - `docs/MODBUS_MAP.md` — Modbus register map
 - `docs/TDC1000_REGISTER_MAP.md`, `docs/TDC7200_REGISTER_MAP.md` — chip register details

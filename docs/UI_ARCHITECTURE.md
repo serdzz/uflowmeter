@@ -4,6 +4,41 @@
 
 The UI system is built on a unidirectional data flow pattern with separation of state and presentation. The architecture is optimized for embedded systems (`no_std`) and character displays (16x2 LCD).
 
+> **Status: two UI designs live in this repository, and the shipped one
+> is not the one described below.**
+>
+> What the firmware renders is in `src/ui.rs`: a `ScreenId` enum, a
+> `MenuController` holding four `MenuList` ring buffers, and a `render`
+> that matches on the current screen. No trait objects, no composition
+> macros — the module header calls this out as a deliberate port of the
+> C++ `UI::List` design without heap or `dyn`.
+>
+> The `Widget` trait and the widget types in `src/gui/` are a second,
+> parallel framework. `ui.rs` imports exactly three things from it —
+> `CharacterDisplay`, `HistoryType`, `UiEvent` — and none of the widget
+> types. Every widget module is used only by other widget modules and by
+> tests; `history_widget` only by a test. `widget_group!` and
+> `widget_mux!` are defined in `src/gui/macros.rs` and **invoked
+> nowhere**.
+>
+> The sections below are accurate as documentation of `src/gui/`. They
+> are not a description of how the meter's UI works today.
+
+## The shipped UI, in brief
+
+```
+ScreenId          one variant per screen (LiveMeter, DateTime, CommType, …)
+MenuList          ring buffer of ScreenIds, Up/Down wraps
+MenuController    4 MenuLists (main / user / calibration / configuration)
+                  + current menu + key dispatch
+render()          match on ScreenId, write through CharacterDisplay
+```
+
+Screen-specific key handling lives in `screen_key_event`; edit mode is a
+per-screen `editable` flag plus a blink counter advanced once per
+`render` call. See `src/ui.rs`, whose module header documents the
+correspondence with the C++ original.
+
 ## Core Components
 
 ### Widget Trait
@@ -57,7 +92,13 @@ pub enum UiEvent {
 }
 ```
 
-## Widget Composition Macros
+## Widget Composition Macros (defined, not used)
+
+Both macros exist in `src/gui/macros.rs` and neither is invoked anywhere
+in the firmware, the examples or the tests. They describe an intended
+composition model; `ui.rs` took the enum-and-match route instead. Kept
+here because the macros are still in the tree.
+
 
 ### widget_group!
 
@@ -502,11 +543,11 @@ src/
 │   ├── label.rs                 # Label widget
 │   ├── edit.rs                  # Edit widget
 │   ├── editbox.rs               # EditBox widget
-│   ├── macros.rs                # widget_group!, widget_mux!
+│   ├── macros.rs                # widget_group!, widget_mux! — never invoked
 │   ├── date_time_widget.rs      # DateTimeWidget + DateTimeItems
 │   └── history_widget.rs        # HistoryWidget<K>, HistoryKind, HourKind/DayKind/MonthKind, HistoryType
 ├── apps.rs                      # App state, Actions, AppRequest
-├── ui.rs                        # Viewport (widget_mux), LabelScreen, LabelsWidget
+├── ui.rs                        # ScreenId, MenuList, MenuController — the shipped UI
 └── main.rs                      # embassy task integration
 ```
 
